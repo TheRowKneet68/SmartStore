@@ -509,3 +509,36 @@ whose content `SU-12` already states in full, and `GAP-037` is a requirement-coh
 
 **No Phase 3 artifact exists. None has been created by this work, and none should be created until `CON-03` is
 decided.** The schema, the migrations, and the implementation remain out of scope.
+## 16. Addendum 2026-09-30 â€” CON-03 closed by D-14; standing constraint lifted
+
+**Append-only.** Earlier sections are unchanged.
+
+### 16.1 The blocker is gone, by decision
+
+`CON-03` is **closed**. The owner recorded **D-14** on 2026-09-30, resolving it in favour of `PY-54`:
+
+> A customer `Payment` in `Failed` is **terminal for that record**; a retry is a **new `Payment` against the same
+> sale**. `Declined` remains retryable by a new attempt (PY-14). `SM-30` and `SM-41` are unchanged.
+
+`SM-53` and `RT-420` were the two places in the whole `docs/` tree that disagreed with that, and both are now
+corrected, with every citation kept. `PY-54` was already correct and is now the single authority: no edge out of
+`Failed`, and every retry is a new row. The payment state graph has one reading.
+
+`RT-186` was re-cited from `SU-22` (which only says there is no supplier portal) to `SU-12`, which states the
+statement content in full. `SU-22` remains cited by `RT-184`, so the rule set is unchanged and the bijection holds.
+
+### 16.2 Standing constraint lifted; audit limits are not
+
+**No genuine Phase 3 blockers remain. PHASE 3 MAY START.** Nothing in this addendum starts it, and no Phase 3
+artifact was created.
+
+What does **not** change with the blocker:
+
+- The three standing C-06 limits. The original per-rule reasoning is still lost, the audit is still a mechanical
+  rebuild, and 49 rule identities remain unrecoverable. D-14 is a decision about the payment state graph; it says
+  nothing about recovering a destroyed artifact.
+- `GAP-044` and `GATE-Q2-LICENCE` remain **release** blockers, and `D-12` and `D-13` remain open owner input.
+- `GAP-036`..`GAP-043` remain registered and non-blocking.
+
+Meeting the entry gate means schema derivation may begin. It is not a statement that the product is ready to ship,
+nor that the documentation limits have been repaired.

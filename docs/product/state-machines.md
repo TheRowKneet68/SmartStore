@@ -529,8 +529,8 @@ SM-05). A `Refunded` state exists on the *refund* machine, not as an edge out of
 **Rule SM-52.** `Timeout` is **not** a state; a timeout leaves the payment `Pending` and it is reconciled
 (PY-11, PY-41). A payment that timed out and became `Failed` is a charge the customer disputes.
 
-**Rule SM-53.** `Declined` is retryable; `Failed` is retryable; `Voided` is terminal; `Captured` is terminal for
-the payment machine.
+**Rule SM-53.** `Declined` and `Failed` payments are retryable by writing a new `Payment`; the `Failed` record
+itself is terminal; `Voided` and `Captured` are terminal for the payment machine.
 
 **Rule SM-54.** Payment state is a **reconciliation of provider events and the local record** (PY-15). The local
 transition alone does not make a payment captured; a provider confirmation does, and the machine's projection is

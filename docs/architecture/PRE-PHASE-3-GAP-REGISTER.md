@@ -248,3 +248,61 @@ close. `GAP-047` remains open and is a documentation correction, not a build inp
   called correct while its cited source disagrees with it.
 
 **Phase 3 has not been started and must not be started while `CON-03` is open.**
+### 7.7 `CON-03` closed by owner decision D-14; Phase 3 blocker list is empty
+
+Recorded 2026-09-30. **Append-only.** This section supersedes 7.6.1 and 7.6.2; it does not edit them.
+
+**D-14 â€” `CON-03` resolved in favour of `PY-54`.** A customer `Payment` in `Failed` is **terminal for that
+record**; a retry is a **new `Payment` against the same sale**. `Declined` remains retryable by a new attempt
+(PY-14). `SM-30` (supplier invoice `Failed`) and `SM-41` (refund `Failed`) are **unchanged** - the decision is
+scoped to the customer `Payment` machine only. `CON-03` is **CLOSED**.
+
+#### 7.7.1 What the decision changed
+
+| Location | Before | After |
+|---|---|---|
+| `state-machines.md` `SM-53` | "`Declined` is retryable; `Failed` is retryable; ..." | "`Declined` and `Failed` payments are retryable by writing a new `Payment`; the `Failed` record itself is terminal; `Voided` and `Captured` are terminal" |
+| `requirements-traceability.md` `RT-420` | same wording, citing `SM-53, PY-14, PY-54` | same corrected wording; **all three citations kept** |
+| `requirements-traceability.md` `RT-186` | cited `SU-22` | re-cited `SU-12` |
+
+`SM-53` was the **only** contradiction. `PY-54`, the payment state table, the edge table, the machine table,
+`BI-25` and the `SM-53` summary line already stated that `Failed` is terminal and a retry is a new `Payment`;
+they were not changed. The state graph is now single-reading: no edge out of `Failed`, and every retry is a new row.
+
+`RT-186` is re-cited from `SU-22` ("no supplier portal in v1", which says nothing about statement content) to
+`SU-12`, which states the statement content in full. `SU-13` was considered and is **not** cited: it governs how a
+due date is computed and stored, not what a statement shows. `SU-22` stays cited by `RT-184`, so no rule is
+orphaned and the 1161-rule bijection is unaffected.
+
+#### 7.7.2 Whole-tree sweep for the same contradiction
+
+Every statement in `docs/` about a customer `Payment` in `Failed` was re-read. Two were genuine contradictions
+(`SM-53`, `RT-420`) and both are fixed above. The following were examined and are **already consistent** with
+D-14, so they were deliberately left alone:
+
+| Location | Statement | Verdict |
+|---|---|---|
+| `payment-domain.md` L109, L125 | graph `Failed (terminal)`; "**No.** Terminal for this `Payment` (PY-54)" | already correct |
+| `payment-domain.md` L128-131 | `PY-54` "a retry is a new `Payment`, never a reopened one" | already correct - now the single authority |
+| `payment-domain.md` L257 | `PY-41` an unreachable provider stays `Pending`, never auto-failed | consistent; a timeout is not a `Failed` state |
+| `state-machines.md` L517-523 | payment graph: `Declined (retryable)`, `Failed` with no retry annotation | already correct |
+| `state-machines.md` L1185, L887, L1419 | edge table "**None.** Terminal for this `Payment` (PY-54)"; machine table; `SM-53` summary | already correct |
+| `business-invariants.md` L206 | "`Failed` terminal. `Captured` has no outgoing transition except a linked `Refund`" | already correct |
+| `requirements-traceability.md` `RT-255` | a timeout stays pending, never auto-failed | already correct |
+| `RT-113`, `RT-154`, `RT-417`; `SM-30`, `SM-41`; `edge-cases.md` `EC-15`; `notification-domain.md` `RefundFailed` | supplier-invoice and refund `Failed` retryable | **out of scope by owner instruction** (D-14) |
+
+No notification or edge-case rule asserts that a customer `Payment` `Failed` can move back to another state.
+`RT-289` (an approval-notification failure never un-does a completed action) is compatible with a terminal
+`Failed`.
+
+#### 7.7.3 Net blocker state
+
+- **Genuine Phase 3 blockers: none.** `CON-03` was the last one.
+- **Open but not Phase 3 blockers** (unchanged from 5): `GAP-036`, `GAP-037`, `GAP-038`, `GAP-039`, `GAP-040`,
+  `GAP-041`, `GAP-042`, `GAP-043`. `GAP-038`/`GAP-039` are owner input (RPO/RTO, fleet and budget) and are
+  "not schema" by section 5.
+- **Release blockers, unchanged:** `GAP-044` (jurisdictional tax facts) and `GATE-Q2-LICENCE` (D-10 leaves
+  licence naming and OSS-terms clearance to owner and legal). `D-12` tracks `GAP-044`; `D-13` tracks `GAP-038`.
+  Neither gates schema derivation.
+
+**No Phase 3 artifact has been created. The gate condition is met; Phase 3 has still not been started.**

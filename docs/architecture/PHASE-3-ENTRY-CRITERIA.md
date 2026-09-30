@@ -247,3 +247,41 @@ this is schema-determining. Full evidence and the classification of the other tw
 and `GAP-037`, both non-blocking) are in `PRE-PHASE-3-GAP-REGISTER.md` section 7.6.
 
 **No Phase 3 artifact has been created, and none should be created until `CON-03` is decided.**
+## 6. Addendum 2026-09-30 â€” D-14 recorded, CON-03 closed, no Phase 3 blockers remain
+
+**Append-only.** Sections 3, 4 and 5 are unchanged. This addendum supersedes the blocker note in section 5.2.
+
+**D-14 â€” `CON-03` resolved in favour of `PY-54`.** A customer `Payment` in `Failed` is terminal for that record; a
+retry is a new `Payment` against the same sale. `Declined` remains retryable (PY-14). `SM-30` and `SM-41` are
+unchanged. `SM-53` and `RT-420` were reworded to match, with every citation kept, and `RT-186` was re-cited from
+`SU-22` to `SU-12`. Full evidence in `PRE-PHASE-3-GAP-REGISTER.md` section 7.7.
+
+### 6.1 C-01..C-13 status
+
+| Criterion | Status |
+|---|---|
+| C-01 permission keys | decided |
+| C-02 payable timing | decided |
+| C-03 warehouse attribution | decided |
+| C-04 offline stock | decided |
+| C-05 credit due date | decided |
+| C-06 traceability backlog | MET - closed |
+| C-07 audit vocabulary | decided |
+| C-08 dead-letter | decided |
+| C-09 Notification/StockCount states | decided |
+| C-10 licence | decided |
+| C-11 test strategy | met |
+| C-12 consistency sweep | met |
+| C-13 gap register current | met |
+
+All thirteen entry criteria are met or decided, and all thirteen design questions (D-01..D-14) that Phase 2 was
+waiting on are now decided except `D-12` and `D-13`, which are **release and configuration inputs, not schema
+gates** (`GAP-044`, `GAP-038`).
+
+### 6.2 Phase 3 entry gate
+
+**Genuine Phase 3 blockers: none.** `CON-03` was the last; it is closed by D-14. The remaining open items -
+`GAP-036`, `GAP-037`, `GAP-038`, `GAP-039`, `GAP-040`, `GAP-041`, `GAP-042`, `GAP-043` - are each non-schema or have a
+specified fallback, and `GAP-044` with `GATE-Q2-LICENCE` block **release, not engineering**.
+
+**PHASE 3 MAY START.** No Phase 3 artifact has been created by this work, and none was started here.

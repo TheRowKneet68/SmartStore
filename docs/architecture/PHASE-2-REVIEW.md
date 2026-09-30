@@ -160,3 +160,18 @@ acceptance of the rebuilt audit`, is now **satisfied in full and C-06 is closed.
 
 `CON-03` remains a genuine Phase 3 blocker and is recorded in `PRE-PHASE-3-GAP-REGISTER.md` section 7.6. Phase 3
 has not been started.
+## 8. Addendum 2026-09-30 â€” D-14 recorded, CON-03 closed
+
+**Append-only.** Earlier sections are unchanged.
+
+The Phase 3 blocker this review left open, `CON-03`, is **closed**. The owner recorded **D-14** on 2026-09-30: a
+customer `Payment` in `Failed` is terminal for that record, and a retry is a new `Payment` against the same sale;
+`Declined` remains retryable (PY-14); `SM-30` and `SM-41` are unchanged.
+
+Applied: `SM-53` and `RT-420` reworded to agree with `PY-54`, all citations kept; `RT-186` re-cited from `SU-22` to
+`SU-12`; a whole-tree sweep found no other statement that a customer `Payment` `Failed` can move back to another
+state. `SM-53` was the only contradiction.
+
+`RT-420`'s agent-review withdrawal is lifted: the owner decided the row by D-14 after the wording was corrected to
+agree with its own cited source. **No genuine Phase 3 blockers remain.** Nothing in this section authorises starting
+Phase 3.

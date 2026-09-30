@@ -60,15 +60,15 @@ Only you can decide. `GAP-046` in section 5 is the part where a human read has a
 | Procurement | 5 | 0 |
 | Product | 8 | 1 |
 | Reporting | 7 | 0 |
-| Returns | 3 | 1 |
+| Returns | 3 | 0 |
 | RFID | 3 | 1 |
 | Sales | 5 | 1 |
 | State | 31 | 0 |
 | Tax | 2 | 0 |
 | UX | 21 | 0 |
-| **Total** | **175** | **16** |
+| **Total** | **175** | **15** |
 
-Rows: **175**. Owner decisions recorded: **11**. Agent-reviewed under owner delegation: **164**. Flagged for reading against the source: **16**.
+Rows: **175**. Owner decisions recorded: **11**. Agent-reviewed under owner delegation: **164**. Flagged for reading against the source: **15**.
 
 Citation extraction: **291** rule citations across **282** distinct rules, all resolved to a source, plus 3
 document-section references (`overview 3`, `overview 3.1`, `overview 3.3`).
@@ -88,8 +88,7 @@ Read these against the source before approving. This is a reading list, not a ve
 | RT-508 | Organization | cites a document section, not a rule |
 | RT-490 | Product | number or unit '13' is not in the cited source; number or unit '0' is not in the cited source |
 | RT-459 | Batch | threshold phrase 'exactly one' is not in the cited source |
-| RT-435 | Sales | wording is 22 words against 10 in the source; check for added behaviour |
-| RT-476 | Returns | wording is 26 words against 10 in the source; check for added behaviour |
+| RT-435 | Sales | wording is 23 words against 10 in the source; check for added behaviour |
 | RT-450 | Customer | number or unit '06' is not in the cited source; number or unit '05' is not in the cited source |
 | RT-521 | RFID | cites a document section, not a rule |
 | RT-470 | Offline | threshold phrase 'within' is not in the cited source |
@@ -120,7 +119,7 @@ correction column below is the text as applied.
 | `RT-218` | WEAK MATCH | (row not in this batch) | "Device.Disable is a high-impact operation and is a SHOULD with approval for a device attached to an active till" (`HD-31`) | Device administration is a technician concern, separated from store operations; Device.Disable is a high-impact operation and is a SHOULD with approval for a device attached to an active till | APPROVE (owner) |
 | `RT-223` | WEAK MATCH | (row not in this batch) | "SyncSession records a sync run; SyncConflict records an individual item's disagreement" (`OF-20`) | The offline queue is durable across a restart; a SyncSession records a sync run and a SyncConflict records an individual item's disagreement | APPROVE (owner) |
 | `RT-231` | WEAK MATCH | (row not in this batch) | "Offline retries are bounded; a dead-lettered item needs a person" (`SM-64`) | Queue depth and a dead-lettered item are reported; offline retries are bounded and a dead-lettered item needs a person | APPROVE (owner) |
-| `RT-475` | ADDS BEHAVIOUR NOT IN SOURCE | A quantity supplied as input is never negative, and a reduction is expressed by movement type and direction rather than a signed quantity; a negative stock balance is a store policy decision and is separate from the input rule | "Adjustments are one-directional per line: a line is an increase or a decrease, with a non-negative quantity" (`IV-34`) | A quantity supplied as input is never negative, and a reduction is expressed by movement type and direction rather than a signed quantity | APPROVE (owner) |
+| `RT-475` | ADDS BEHAVIOUR NOT IN SOURCE | A quantity supplied as input is never negative, and a reduction is expressed by movement type and direction rather than a signed quantity | "Adjustments are one-directional per line: a line is an increase or a decrease, with a non-negative quantity" (`IV-34`) | A quantity supplied as input is never negative, and a reduction is expressed by movement type and direction rather than a signed quantity | APPROVE (owner) |
 
 ### 5.1 `RT-475` in particular
 
@@ -242,7 +241,7 @@ the `file:line` to read it in full. Every row now carries a decision; none is le
 | RT id | Wording | Source | Adds anything beyond the source? | Owner decision |
 |---|---|---|---|---|
 | `RT-436` | A stock movement is refused while a count is in progress, and a count is never silently merged with one | **EC-04** - A stock adjustment runs while a count is in progress _(docs/product/edge-cases.md:30)_<br>**EC-09** - A return is being dispositioned while stock is being counted _(docs/product/edge-cases.md:35)_ | N - no token or number found that is absent from the source | APPROVE (agent review, owner delegation) |
-| `RT-475` | A quantity supplied as input is never negative, and a reduction is expressed by movement type and direction rather than a signed quantity; a negative stock balance is a store policy decision and is separate from the input rule | **BI-05** - Entry quantities are never negative _(docs/domain/business-invariants.md:111)_<br>**IV-34** - Adjustments are one-directional per line: a line is an increase or a decrease, with a non-negative quantity (BI-05). A combined "set to 42" line ... _(docs/product/inventory-domain.md:311)_ | N - no token or number found that is absent from the source | APPROVE (owner) |
+| `RT-475` | A quantity supplied as input is never negative, and a reduction is expressed by movement type and direction rather than a signed quantity | **BI-05** - Entry quantities are never negative _(docs/domain/business-invariants.md:111)_<br>**IV-34** - Adjustments are one-directional per line: a line is an increase or a decrease, with a non-negative quantity (BI-05). A combined "set to 42" line ... _(docs/product/inventory-domain.md:311)_ | N - no token or number found that is absent from the source | APPROVE (owner) |
 | `RT-483` | The negative-stock policy is evaluated inside the movement transaction, against the resulting balance | **IV-16** - The store's `AllowNegative` / `BlockNegative` policy is evaluated inside the same transaction that applies the movement, against the resulting balance. It is not checked ... _(docs/product/inventory-domain.md:174)_<br>**BI-36** - Concurrent sales of the last unit resolve deterministically _(docs/domain/business-invariants.md:726)_<br>**OF-04** - offline is per terminal and explicit. set at registration and auditable. A terminal is not offline-capable by default, because the capability has consequences and ... _(docs/product/offline-pos-domain.md:29)_ | N - no token or number found that is absent from the source | APPROVE (agent review, owner delegation) |
 | `RT-484` | A negative balance is written to the ledger in full, alarmed, and never clamped or hidden | **IV-17** - Under `AllowNegative`, a negative balance is: - Written to the ledger, in full, like any other movement - Reported by the `NEGATIVE_STOCK` notification at ... _(docs/product/inventory-domain.md:185)_<br>**BI-36** - Concurrent sales of the last unit resolve deterministically _(docs/domain/business-invariants.md:726)_ | N - no token or number found that is absent from the source | APPROVE (agent review, owner delegation) |
 | `RT-485` | A negative balance must be resolved, and resolution is one of a named set of routes with a reason | **IV-18** - A negative balance must be resolved. Resolution is one of: receive stock, transfer in, a found-stock adjustment, or a write-off. Resolution requires a reason ... _(docs/product/inventory-domain.md:191)_<br>**BI-25** - A destructive or value-changing operation records a reason _(docs/domain/business-invariants.md:520)_ | N - no token or number found that is absent from the source | APPROVE (agent review, owner delegation) |
@@ -345,7 +344,7 @@ the `file:line` to read it in full. Every row now carries a decision; none is le
 
 | RT id | Wording | Source | Adds anything beyond the source? | Owner decision |
 |---|---|---|---|---|
-| `RT-476` (see section 4) | A return with no sale-line reference is permitted only as a manager-approved goodwill return, requires `Return.Approve` and a reason, creates no stock movement, and is cash-only | **BI-16** - A return cannot exceed the eligible sold quantity, per line _(docs/domain/business-invariants.md:357)_ | **Y** - wording is 26 words against 10 in the source; check for added behaviour | APPROVE (owner) - RR-09 added to citation |
+| `RT-476` | A return with no sale-line reference is permitted only as a manager-approved goodwill return, requires `Return.Approve` and a reason, creates no stock movement, and is cash-only | **BI-16** - A return cannot exceed the eligible sold quantity, per line _(docs/domain/business-invariants.md:357)_<br>**RR-09** - a return without a sale reference is a goodwill return a reason code (BI-16), creates no stock movement, and refunds cash only. This is ... _(docs/product/returns-refunds-domain.md:84)_ | N - no token or number found that is absent from the source | APPROVE (owner) - RR-09 added to citation |
 | `RT-522` | Store credit expiry is per store, and expiry is a documented, reported event rather than a silent deletion | **RR-29** - store credit may be set to expire than a silent deletion. The customer's balance history remains. _(docs/product/returns-refunds-domain.md:192)_<br>**PY-31** - redemption is bounded atomically concurrently cannot both succeed. _(docs/product/payment-domain.md:212)_ | N - no token or number found that is absent from the source | APPROVE (agent review, owner delegation) |
 | `RT-523` | Goodwill movements are reported by actor, value, and reason, with concentration analysis | **RR-37** - goodwill movements are reported by actor, value, and reason, with concentration analysis IV-36). Goodwill is a legitimate tool. Goodwill at unusual volume from a ... _(docs/product/returns-refunds-domain.md:231)_<br>**SP-56** - a void is reported adjustments have one (IV-36). A void pattern is either a training problem or a theft problem, and the data to ... _(docs/product/sales-pos-domain.md:319)_<br>**IV-36** - Adjustments are reported by reason, by actor, by location, and by value, with a concentration report: a single actor or a single reason carrying ... _(docs/product/inventory-domain.md:319)_<br>**BI-25** - A destructive or value-changing operation records a reason _(docs/domain/business-invariants.md:520)_ | N - no token or number found that is absent from the source | APPROVE (agent review, owner delegation) |
 
@@ -361,7 +360,7 @@ the `file:line` to read it in full. Every row now carries a decision; none is le
 
 | RT id | Wording | Source | Adds anything beyond the source? | Owner decision |
 |---|---|---|---|---|
-| `RT-435` (see section 4) | A capture and a void of the same sale are mutually exclusive; one wins and the other is refused naming the winner | **EC-03** - A payment is captured while the sale is being voided _(docs/product/edge-cases.md:29)_ | **Y** - wording is 22 words against 10 in the source; check for added behaviour | EDIT APPLIED (owner) - reworded to "refused with a named reason" |
+| `RT-435` (see section 4) | A capture and a void of the same sale are mutually exclusive; one wins and the other is refused with a named reason | **EC-03** - A payment is captured while the sale is being voided _(docs/product/edge-cases.md:29)_ | **Y** - wording is 23 words against 10 in the source; check for added behaviour | EDIT APPLIED (owner) - reworded to "refused with a named reason" |
 | `RT-452` | A cart survives an interruption in memory and on disk for a configured TTL, and is never silently lost | **EC-78** - The cashier is interrupted mid-sale _(docs/product/edge-cases.md:178)_<br>**SP-43** - payment failure is a sale failure, not a payment failure. not complete. The cart survives so the cashier can retry. This is why the ... _(docs/product/sales-pos-domain.md:259)_ | N - no token or number found that is absent from the source | APPROVE (agent review, owner delegation) |
 | `RT-453` | A session change at a shared terminal preserves the cart, and the sale is attributed to whoever completes it | **EC-79** - Two cashiers share a terminal _(docs/product/edge-cases.md:179)_<br>**SP-11** - repricing on a second scan does not happen. the line's price. If a promotional price takes effect mid-cart, the cart does not silently change ... _(docs/product/sales-pos-domain.md:121)_ | N - no token or number found that is absent from the source | APPROVE (agent review, owner delegation) |
 | `RT-455` | A new cashier's first sale is an ordinary sale gated only by their roles and permissions; there is no production onboarding mode | **EC-83** - A new cashier's first sale _(docs/product/edge-cases.md:183)_<br>**EM-14** - granting store access is a high-value permission *requests*; the Organization Owner *approves* and grants `Employee.StoreAccess.Grant`. It is the highest-value access grant in the product, ... _(docs/product/employee-domain.md:94)_ | N - no token or number found that is absent from the source | APPROVE (agent review, owner delegation) |
@@ -387,7 +386,7 @@ the `file:line` to read it in full. Every row now carries a decision; none is le
 | `RT-417` | A `Failed` refund is retryable and holds the amount | **SM-41** - `Failed` is retryable and holds the amount, exactly as `Failed` is in procurement (SM-30). A refund that cannot be retried is a customer who ... _(docs/product/state-machines.md:398)_ | N - no token or number found that is absent from the source | APPROVE (agent review, owner delegation) |
 | `RT-418` | A customer balance is never state; only the status is, and every status edge is a permissioned human decision with a reason | **SM-45** - What *is* stateful is the customer status, and its values are the four the domain defines (customer-domain §3): `Active`, `OnHold`, `CreditBlocked`, `Closed`. A status ... _(docs/product/state-machines.md:427)_<br>**SM-45b** - No edge is taken by a payment, a job, or a client. Every transition is a permissioned human decision with a reason (BI-25), and ... _(docs/product/state-machines.md:444)_<br>**SM-46** - A `CreditLimitCheck` result is not a state change. It is a projection of the balance and the limit (CU-14). Recording "the limit was checked" ... _(docs/product/state-machines.md:458)_ | N - no token or number found that is absent from the source | APPROVE (agent review, owner delegation) |
 | `RT-419` | `OnHold` is not a credit control; `CreditBlocked` is the credit control, and it is liftable | **SM-45a** - `OnHold` is not a credit control. It warns, notifies, and requires a note, and the customer may still buy (CU-09). `CreditBlocked` is the credit ... _(docs/product/state-machines.md:440)_<br>**SM-45c** - `CreditBlocked` is a credit control, not a terminal state. `CreditBlocked` as terminal. That is wrong twice over. It contradicts the owner, which treats `CreditBlocked` ... _(docs/product/state-machines.md:447)_ | N - no token or number found that is absent from the source | APPROVE (agent review, owner delegation) |
-| `RT-420` | `Declined` and `Failed` payments are retryable; `Voided` and `Captured` are terminal | **SM-53** - `Declined` is retryable; `Failed` is retryable; `Voided` is terminal; `Captured` is terminal for the payment machine. _(docs/product/state-machines.md:532)_<br>**PY-14** - a decline is retryable; a capture is not. refunded if it must be reversed. Conflating them is how a "retry" becomes a double charge. _(docs/product/payment-domain.md:141)_<br>**PY-54** - a retry is a new `Payment`, never a reopened one. retried by writing another `Payment` against the same sale, and every attempt is recorded ... _(docs/product/payment-domain.md:128)_ | N - no token or number found that is absent from the source | **APPROVAL WITHDRAWN (agent review)** - not a defect in this row, but it cites PY-54, which says the opposite of the row. Blocked by `CON-03`; see gap register 7.6 |
+| `RT-420` | `Declined` and `Failed` payments are retryable by writing a new `Payment`; the `Failed` record itself is terminal; `Voided` and `Captured` are terminal | **SM-53** - `Declined` and `Failed` payments are retryable by writing a new `Payment`; the `Failed` record itself is terminal; `Voided` and `Captured` are terminal for the ... _(docs/product/state-machines.md:532)_<br>**PY-14** - a decline is retryable; a capture is not. refunded if it must be reversed. Conflating them is how a "retry" becomes a double charge. _(docs/product/payment-domain.md:141)_<br>**PY-54** - a retry is a new `Payment`, never a reopened one. retried by writing another `Payment` against the same sale, and every attempt is recorded ... _(docs/product/payment-domain.md:128)_ | N - no token or number found that is absent from the source | **APPROVED (owner, D-14)** - wording corrected to agree with `PY-54`: the `Failed` record is terminal and a retry is a new `Payment`. `CON-03` closed |
 | `RT-421` | A payment's state is a reconciliation of provider events and the local record | **SM-54** - Payment state is a reconciliation of provider events and the local record (PY-15). The local transition alone does not make a payment captured; a ... _(docs/product/state-machines.md:535)_<br>**EC-14** - The acquirer confirms a capture the cashier never saw _(docs/product/edge-cases.md:50)_ | N - no token or number found that is absent from the source | APPROVE (agent review, owner delegation) |
 | `RT-422` | A shift's only forward path is `Open` → `Reconciling` → `Closed`; there is no `Void` state, and a closed shift is immutable except for `Reopened` | **SM-55** - The only forward path is `Open` → `Reconciling` → `Closed`, and the count happens in `Reconciling` with the expected amount hidden (CD-21, CD-31). _(docs/product/state-machines.md:558)_<br>**SM-57** - A `Closed` shift is immutable except for the `Reopened` edge (CD-26, BI-08). The counted amount, the variance, and the reason are never edited — ... _(docs/product/state-machines.md:570)_<br>**SM-58** - There is no `Void` state for a shift. A shift is money that was present; it does not get voided, it gets reconciled. (CD-19's ... _(docs/product/state-machines.md:574)_<br>**SM-56a** - `Reopened` is a state on the machine, not a synonym for "closed". `Reopened` among the shift's four statuses, so it is a state this ... _(docs/product/state-machines.md:564)_ | N - no token or number found that is absent from the source | APPROVE (agent review, owner delegation) |
 | `RT-423` | A `PosTerminal`'s mode is configuration, not a lifecycle step, and is separate from its service state | **SM-59** - A `PosTerminal` carries two distinct things that an earlier revision of this section collapsed into one graph. First a mode — `Standard`, `Training`, or ... _(docs/product/state-machines.md:595)_ | N - no token or number found that is absent from the source | APPROVE (agent review, owner delegation) |
@@ -441,7 +440,7 @@ the `file:line` to read it in full. Every row now carries a decision; none is le
 | Item | State |
 |---|---|
 | Rows presented | 175 (`RT-355`..`RT-529`) |
-| Flagged for reading against the source | 16 (all dispositioned in section 4) |
+| Flagged for reading against the source | 15 (all dispositioned in section 4) |
 | GAP-046 proposals | 13 raised, **13 owner-approved, all 13 applied to the trace** (12 of them are pre-existing rows `RT-002`..`RT-231`, outside the 175 drafted rows) |
 | Owner decisions recorded | 11 |
 | Agent-reviewed under delegation | 164 |
@@ -469,21 +468,21 @@ The three acceptance limits are carried forward as permanent disclosure, not as 
    1 `ADDS BEHAVIOUR NOT IN SOURCE`, 0 `WRONG HOME`. The 13 weak/adds findings became GAP-046 and are now
    fixed and applied.
 
-### 7.2 What C-06 closure does not close
+### 7.2 What C-06 closure did not clear, and what has since been decided
 
-Closing C-06 does not clear Phase 3. One genuine blocker remains, found by this review and classified in gap
-register 7.6:
+C-06 closure did not by itself clear Phase 3. Three items were classified in gap register 7.6; the owner then
+decided `CON-03` as **D-14** on 2026-09-30, which closed the last genuine blocker:
 
-| Item | Classification | One-line reason |
+| Item | Classification | Disposition |
 |---|---|---|
-| `CON-03` / `PY-54` / `RT-420` | **PHASE-3 BLOCKER** | `PY-54` says the state graph must have no edge out of `Failed`; `SM-53` and `RT-420` say `Failed` is retryable, and the edge set is exactly what Phase 3 derives |
-| `RT-186` / `SU-22` | NON-BLOCKING | mis-citation only - `SU-12` already states the statement content in full, so the behaviour and the schema are determinate |
-| `GAP-037` | NON-BLOCKING | `BI-36` determines the build, so schema is unaffected; it is a requirement-coherence and release defect |
+| `CON-03` / `PY-54` / `RT-420` | was a **PHASE-3 BLOCKER** | **CLOSED by D-14** in favour of `PY-54`. `SM-53` and `RT-420` reworded, every citation kept |
+| `RT-186` / `SU-22` | NON-BLOCKING | re-cited `SU-22` -> `SU-12`, which states the statement content in full |
+| `GAP-037` | NON-BLOCKING | unchanged; `BI-36` determines the build, so schema is unaffected |
 
-Because `CON-03` is genuine, `RT-420`'s agent-review approval is **withdrawn** in section 6 rather than left
-standing. That was my error last pass: I approved the row without noticing that its own cited source (`PY-54`)
-says the opposite of its wording. Also still open and unrelated to C-06: `GAP-040`, `GAP-041`, `GAP-042`,
-`GAP-043`, `GAP-038`, `GAP-039`.
+`RT-420`'s approval is no longer withdrawn. My withdrawal last pass was right that the row contradicted its own
+cited source (`PY-54`), but the resolution belonged to the owner, and the fix was to reword the row - not to
+leave it standing against its source. Still open, all non-blocking: `GAP-040`, `GAP-041`, `GAP-042`, `GAP-043`,
+`GAP-038`, `GAP-039`. Release-only: `GAP-044`, `GATE-Q2-LICENCE`.
 
 ## 8. Known limits of this worksheet
 

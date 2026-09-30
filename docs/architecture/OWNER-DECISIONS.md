@@ -432,6 +432,22 @@ offline queue is included in backup and local integrity (OF-45).
 
 ---
 
+## D-14 â€” `Payment` `Failed` is terminal; a retry is a new `Payment` (CON-03)
+
+**Status:** DECIDED (2026-09-30)
+
+**Decision:** `CON-03` is resolved **in favour of `PY-54`**. A customer `Payment` in `Failed` is **terminal for
+that record**; a retry is a **new `Payment` against the same sale**. `Declined` remains retryable by a new attempt
+(PY-14). `SM-30` (supplier invoice `Failed`) and `SM-41` (refund `Failed`) are **unchanged** â€” this decision is
+scoped to the customer `Payment` machine only.
+
+Applied: `SM-53` and `RT-420` reworded to "retryable by writing a new `Payment`; the `Failed` record itself is
+terminal", keeping every existing citation (`SM-53, PY-14, PY-54`). This makes the state graph single-reading:
+no edge out of `Failed`, and every retry is a new row. `PY-54`, the payment state table, the edge table, the
+machine table and `BI-25` already stated this and were **not** changed â€” `SM-53` was the sole contradiction.
+
+---
+
 ## Decision log
 
 | ID | Question | Answer | Date |
@@ -449,3 +465,4 @@ offline queue is included in backup and local integrity (OF-45).
 | D-11 | Loyalty accrual | (a) **net of discount, excluding tax** (net item subtotal after discount) — the documented v1 default in `CU-25`/`RR-41`, adopted by the owner. Value only: a store/org configuration item (configuration-model.md §2); `CU-25`/`RR-41` still support all three bases as configured values, `RP-08` basis vocabulary and `RT-170` (basis stated on every report) unchanged; no new loyalty behavior; no schema change | 2026-09-29 |
 | D-12 | Tax config vs legal | | |
 | D-13 | RPO/RTO | | |
+| D-14 | `Payment` `Failed` terminal (CON-03) | (PY-54) A customer `Payment` in `Failed` is terminal for that record; a retry is a new `Payment` against the same sale. `Declined` still retryable (PY-14). `SM-30` and `SM-41` unchanged. `SM-53` and `RT-420` reworded, all citations kept. Closes the last Phase 3 blocker | 2026-09-30 |
