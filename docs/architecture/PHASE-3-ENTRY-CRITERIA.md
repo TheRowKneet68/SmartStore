@@ -1,6 +1,11 @@
 # Phase 3 Entry Criteria
 
-**The conditions that must hold before SmartStore Phase 3 (implementation) begins.**
+> **Current status: see §6. PHASE 3 MAY START. Earlier sections are historical.**
+
+**The conditions that must hold before SmartStore Phase 3 (database design) begins.**
+
+Phase 3 scope is **database design only** — the schema and the data model it derives. Application code comes in a
+later phase and is not gated by this document.
 
 This is a branch-gate document: each criterion is checkable from the documentation or the decisions that exist
 at the gate. It is not a wishlist. A criterion is either **met** (with evidence) or **not met** (naming the
