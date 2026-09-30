@@ -50,6 +50,14 @@ schema; details in the domain documents:
 | Customer-group prices | `PR-30` tier 1 | D2 — customers are outside the slice |
 | Supplier products, imports, attributes, images | `PR-07`, `PR-49`..`PR-55` | D2 |
 | Approval workflow | `PR-32` backdated price, `PR-33`/`RT-043` below-cost price | D2 — without approvals these are **refused** (architecture §8.4 fallback) |
+| Batches, expiry, FEFO | `BE-*`, `IV-10`, `IV-19`, `IV-19a`, `RT-065`, `RT-066`, `RT-086`..`RT-089` | D3 — created by goods receipts, keyed per supplier; the additive extension is designed in D3 §7 |
+| Stock counts | `IV-25`..`IV-31`, `D-09`, `RT-071`..`RT-073` | D3 — v1 corrects stock with counted-quantity adjustment lines (`UX-36`, `UX-37`) |
+| Transfers and Transit | `IV-39`..`IV-45`, `RT-078`..`RT-080` | D3 |
+| Reservations | `IV-46`..`IV-50`, `RT-082`, `RT-084` | D3 — the till reserves nothing by rule (`IV-49`) |
+| Generic stock receipt and issue | `IV-51`..`IV-53`, `RT-063` | D3 |
+| Import jobs | `PR-51`..`PR-55`, data-import | D3 — v1 loads opening stock with an `OpeningBalance` adjustment (same movement type, reason and approval) |
+| Notifications | `IV-17` `NEGATIVE_STOCK`, `IV-59` `OUT_OF_STOCK`, `BE-30` | D3 — the conditions are queryable now; the outbox is not in the slice. `BI-36`(b) waits for it |
+| Resolve negatives by receiving | `IV-38`, `RT-069` | D3 — needs goods receipts |
 
 Design these so the schema can carry them without a rewrite. Do not build them.
 
@@ -107,9 +115,23 @@ Owner-approved with ADR-31 on 2026-09-30 (ADR-31 §13 has the full text):
     spellings of one code are one barcode; check digits validated in the database.
   - Mutation-checked: four guards removed one at a time, each test went red.
 
+- 2026-09-30 — **Domain 3 — Inventory ledger.** DESIGNED + IMPLEMENTED (migration) + **TESTED** (146 tests
+  passing on 6 consecutive runs). No application code. [D3 design](docs/database/D3-INVENTORY-LEDGER.md).
+  - The only way stock changes is inserting a movement: a `SECURITY DEFINER` trigger validates it, applies the delta
+    in one atomic statement, judges the negative-stock policy on the result in the same transaction, and stamps the
+    resulting balance. The application cannot write `stock_balance` at all.
+  - Tables: `reason_code`, `inventory_movement_type` (closed, 17 rows), `stock_adjustment` + lines (machine from
+    §22.17 as data, approver ≠ submitter, posting all-or-nothing), `inventory_transaction`, `inventory_movement`
+    (append-only at every privilege), `stock_balance`. `inventory_ledger_drift()` rebuilds and alerts, never repairs.
+  - Proven concurrently: last unit under `BlockNegative` resolves to exactly one success on 15 of 15 runs; 6 workers
+    posting multi-line adjustments in random order produce no deadlock and zero drift.
+  - Closed pending guards from D1/D2: store deactivation with stock, central never negative, movement store
+    attribution (D-03), unit quantity kind frozen once used, service never stocked.
+  - Batches deferred with procurement; the additive extension is designed (D3 §7). Six guards mutation-checked.
+
 ## In progress
 
-- Domain 3 (Inventory ledger / Batch): design document and migration.
+- Domain 4 (Sale / Payment, with the minimal Shift/Drawer and PosTerminal): design document and migration.
 
 ## Owner actions pending
 
@@ -123,10 +145,12 @@ Until then, tests run on a scratch PostgreSQL 17.11 cluster and a portable Node 
 
 ## Next
 
-1. **Domain 3 — Inventory ledger / Batch.** Balance plus append-only movements (`ADR-05`), lock the balance row,
-   movement and balance in one transaction (§9.2), reconciliation that alerts and never repairs (`ADR-22`).
-2. Then continue domain by domain — one at a time, with tests, committing after each passing step: 4 Sale / Payment,
-   5 Returns / Refunds, 6 Audit, 7 Employee / Role / Permission.
+1. **Domain 4 — Sale / Payment.** Sale and lines (price, cost and tax snapshots, `ADR-08`), one-to-many payments
+   where each attempt is its own record and `Failed` is terminal (`D-14`), `ClientOperationId` idempotency (`SM-04`),
+   the minimal PosTerminal, CashDrawer and Shift a sale needs (`PT-01`, `BI-39`), and the sale's `SALE` movements
+   through the D3 write path.
+2. Then continue domain by domain — one at a time, with tests, committing after each passing step: 5 Returns /
+   Refunds, 6 Audit, 7 Employee / Role / Permission.
 3. Then Step 3, implementation, in the order in the working agreements.
 
 Update this file after every step, including steps that failed and were abandoned.
@@ -169,3 +193,14 @@ Append-only. One dated line per step, including failed and abandoned attempts.
   consecutive clean runs.
   (3) Twice wrote SQL-style `''` escapes into TypeScript strings (a syntax error), and once patched it with a
   `.replace` hack before replacing that with proper double-quoted strings.
+- 2026-09-30 — Domain 3. Failed attempts, each fixed:
+  (1) A heredoc append of the inventory fixtures failed in the shell; nothing was written, which was checked before
+  the fixtures were added with the Edit tool.
+  (2) Two test expectations were wrong, not the schema: an unlisted movement type is refused by the line's closed type
+  list (`23514`) before its foreign key runs; and a line's `store_id` is proven through its document's composite key,
+  which the schema-wide store test now accepts (a key into `store` or into another store-scoped table).
+  (3) Wrote SQL-style `''` quotes into four TypeScript test names again, and an `await` inside a non-async arrow;
+  caught by the typecheck before any run and fixed.
+  Decided in design, stated for the owner: batches are deferred with procurement (they are created by goods receipts
+  and keyed per supplier), with the extension designed in D3 §7; opening stock loads through an `OpeningBalance`
+  adjustment until import jobs exist.

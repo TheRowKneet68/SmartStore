@@ -173,6 +173,21 @@ fallback is a design that holds either answer, not a guess at the answer.
 - **Meanwhile:** one rate is in force per tax category at a time (the latest version whose effective time has passed),
   and the jurisdiction is a label. Compound taxes would need a rate-to-store mapping, which is additive.
 
+### OQ-013 — Stock adjustment approval: always, or beyond a threshold; and how to withdraw one
+
+- **Unknown:** `state-machines.md` §22.17 gives one path to `Posted`: `Draft → PendingApproval → Approved → Posted`.
+  Approval is by `Inventory.Adjust.Large.Approve`, from a different employee. But inventory-domain §5 says an
+  adjustment needs approval only "beyond threshold" (`IV-35`: on quantity or value), and no threshold values are
+  configured anywhere. Nor does the contract give any way out of `PendingApproval` or `Approved` except forward: no
+  reject, no withdraw, no cancel.
+- **Why not answerable from `/docs`:** the contract and the domain table disagree, and the threshold values are not
+  specified.
+- **Blocked:** nothing in the schema. Operationally, every adjustment, and every opening balance, needs two people in
+  v1.
+- **Meanwhile:** the contract's edges are enforced exactly as written: approval always, and no exit except forward. A
+  below-threshold skip edge (`Draft → Approved` or an automatic approve) and a reject edge are each one row in
+  `state_machine_edge`, plus a threshold setting.
+
 ## How to use this file
 
 - Add an entry the moment you hit something the specification does not answer. Then continue with a different task.

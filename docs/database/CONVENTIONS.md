@@ -149,6 +149,9 @@ constraint, and a test then asserts that no column named `*_by` lacks one.
 | `variant_price` | `created_by` | Domain 2 |
 | `store_variant_price` | `created_by` | Domain 2 |
 | `variant_standard_cost` | `created_by` | Domain 2 |
+| `reason_code` | `archived_by` | Domain 3 |
+| `stock_adjustment` | `created_by`, `submitted_by`, `approved_by`, `status_changed_by` | Domain 3 |
+| `inventory_transaction` | `created_by` | Domain 3 |
 
 Creation of master data (organization, store, warehouse, location) is attributed by its audit event (domain 6), not
 by a `created_by` column. An organization is necessarily created before any of its employees exists, so a
@@ -228,6 +231,21 @@ standard leaves to implementations and PostgreSQL does not use:
 | `SS007` | A variant with live barcodes must have exactly one primary | `assert_variant_has_primary_barcode()` |
 | `SS008` | An active variant of a released product needs a price in force | `product_before_status_change()`, `assert_new_variant_usable()` |
 | `SS009` | Nothing new may reference an archived product | `assert_new_variant_usable()` |
+| `SS010` | An append-only ledger refuses UPDATE, DELETE and TRUNCATE, for every role | `forbid_ledger_rewrite()` |
+| `SS011` | Not enough stock under `BlockNegative` (the message names what is available) | `apply_inventory_movement()` |
+| `SS012` | A service variant cannot be stocked | `apply_inventory_movement()` |
+| `SS013` | A quantity has more decimals than its unit allows | `apply_inventory_movement()` |
+| `SS014` | The movement's store may not move stock at that location | `apply_inventory_movement()` |
+| `SS015` | A reversal must mirror the movement it reverses | `apply_inventory_movement()` |
+| `SS016` | The causing document is not in a state that moves stock that way | `assert_movement_adjustment_state()` |
+| `SS017` | The store has no settings in force | `apply_inventory_movement()` |
+| `SS018` | Adjustment lines change only while the adjustment is a draft | `stock_adjustment_line_draft_only()` |
+| `SS019` | A store holding stock cannot be deactivated | `forbid_store_deactivation_with_stock()` |
+| `SS020` | A deactivated store moves no stock | `apply_inventory_movement()` |
+| `SS021` | A used unit's quantity kind cannot change | `freeze_used_quantity_kind()` |
+| `SS022` | Posting or reversal did not write exactly its movements | `assert_adjustment_posting_complete()` |
+| `SS023` | A Transit location is reached only by transfer movements | `apply_inventory_movement()` |
+| `SS024` | An archived reason code takes no new documents | `stock_adjustment_before_write()` |
 
 ## 16. What every domain delivers
 

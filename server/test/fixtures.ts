@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type pg from 'pg';
+import { inTransaction } from './db.ts';
 
 /**
  * Test data builders. Everything here is TEST-ONLY.
@@ -191,4 +192,203 @@ export async function insertLocation(
     [organizationId, warehouseId, kind, `L-${randomUUID()}`, locationType, locationType, isSellable],
   );
   return rows[0]!.id;
+}
+
+// ---------------------------------------------------------------- inventory (domain 3)
+
+export type Policy = 'AllowNegative' | 'BlockNegative';
+
+/** A settings version taking effect now (or at `effectiveFrom`). */
+export async function insertSettings(db: Db, storeId: string, policy: Policy, effectiveFrom?: string): Promise<void> {
+  await db.query(
+    `INSERT INTO store_setting_version (store_id, effective_from, tax_mode, negative_stock_policy, created_by)
+     VALUES ($1, COALESCE($2::timestamptz, now()), 'Inclusive', $3, $4)`,
+    [storeId, effectiveFrom ?? null, policy, actor()],
+  );
+}
+
+export async function insertReasonCode(db: Db, organizationId: string): Promise<string> {
+  const { rows } = await db.query<{ id: string }>(
+    `INSERT INTO reason_code (organization_id, code, name) VALUES ($1, $2, 'TEST-ONLY reason') RETURNING id`,
+    [organizationId, `R-${randomUUID()}`],
+  );
+  return rows[0]!.id;
+}
+
+/** An organization with one store (settings in force), its warehouse and Default location, a variant and a reason. */
+export interface StockWorld {
+  org: string;
+  store: string;
+  warehouse: string;
+  location: string;
+  variant: string;
+  unit: string;
+  reason: string;
+}
+
+export async function stockWorld(pool: pg.Pool, policy: Policy = 'AllowNegative'): Promise<StockWorld> {
+  const org = await insertOrganization(pool);
+  const store = await insertStore(pool, org);
+  await insertSettings(pool, store, policy);
+  const { warehouseId, defaultLocationId } = await insertWarehouse(pool, org, store);
+  const { variantId, unitId } = await insertSellableVariant(pool, org);
+  const reason = await insertReasonCode(pool, org);
+  return { org, store, warehouse: warehouseId, location: defaultLocationId, variant: variantId, unit: unitId, reason };
+}
+
+const DIRECTION: Record<string, 'In' | 'Out'> = {
+  ADJUSTMENT_IN: 'In',
+  ADJUSTMENT_OUT: 'Out',
+  DAMAGE: 'Out',
+  EXPIRY: 'Out',
+  LOSS: 'Out',
+  FOUND: 'In',
+  OPENING_BALANCE: 'In',
+};
+
+export interface LineInput {
+  variant: string;
+  location: string;
+  type: string;
+  quantity: string | number;
+}
+
+export interface Adjustment {
+  id: string;
+  store: string;
+  org: string;
+  lineIds: string[];
+}
+
+export async function draftAdjustment(
+  db: Db,
+  w: Pick<StockWorld, 'org' | 'store' | 'reason'>,
+  lines: LineInput[],
+  kind: 'Adjustment' | 'OpeningBalance' = 'Adjustment',
+): Promise<Adjustment> {
+  const { rows } = await db.query<{ id: string }>(
+    `INSERT INTO stock_adjustment (store_id, organization_id, kind, reason_code_id, created_by, status_changed_by)
+     VALUES ($1, $2, $3, $4, $5, $5) RETURNING id`,
+    [w.store, w.org, kind, w.reason, actor()],
+  );
+  const id = rows[0]!.id;
+  const lineIds: string[] = [];
+  for (const line of lines) {
+    const r = await db.query<{ id: string }>(
+      `INSERT INTO stock_adjustment_line
+         (stock_adjustment_id, adjustment_kind, store_id, organization_id, variant_id, storage_location_id,
+          movement_type, direction, quantity)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+      [id, kind, w.store, w.org, line.variant, line.location, line.type, DIRECTION[line.type], line.quantity],
+    );
+    lineIds.push(r.rows[0]!.id);
+  }
+  return { id, store: w.store, org: w.org, lineIds };
+}
+
+/** Submit by one employee and approve by another (BI-26), as state-machines s22.17 requires. */
+export async function approveAdjustment(db: Db, id: string): Promise<void> {
+  const submitter = actor();
+  await db.query(
+    `UPDATE stock_adjustment SET status = 'PendingApproval', submitted_by = $2, status_changed_by = $2 WHERE id = $1`,
+    [id, submitter],
+  );
+  const approver = actor();
+  await db.query(
+    `UPDATE stock_adjustment SET status = 'Approved', approved_by = $2, status_changed_by = $2 WHERE id = $1`,
+    [id, approver],
+  );
+}
+
+interface LineRow {
+  id: string;
+  variant_id: string;
+  storage_location_id: string;
+  movement_type: string;
+  direction: string;
+  quantity: string;
+}
+
+/** The posting transaction: status Posted, one inventory transaction, one movement per line in sorted order (IV-24). */
+export async function postAdjustment(pool: pg.Pool, a: Adjustment): Promise<string[]> {
+  return inTransaction(pool, async (c) => {
+    await c.query(`UPDATE stock_adjustment SET status = 'Posted', status_changed_by = $2 WHERE id = $1`, [a.id, actor()]);
+    const tx = await c.query<{ id: string }>(
+      `INSERT INTO inventory_transaction (store_id, created_by) VALUES ($1, $2) RETURNING id`,
+      [a.store, actor()],
+    );
+    const lines = await c.query<LineRow>(
+      `SELECT id, variant_id, storage_location_id, movement_type, direction, quantity FROM stock_adjustment_line
+       WHERE stock_adjustment_id = $1 ORDER BY variant_id, storage_location_id, id`,
+      [a.id],
+    );
+    const ids: string[] = [];
+    for (const l of lines.rows) {
+      const m = await c.query<{ id: string }>(
+        `INSERT INTO inventory_movement (inventory_transaction_id, store_id, organization_id, variant_id,
+           storage_location_id, movement_type, direction, quantity, stock_adjustment_id, stock_adjustment_line_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
+        [tx.rows[0]!.id, a.store, a.org, l.variant_id, l.storage_location_id, l.movement_type, l.direction, l.quantity,
+          a.id, l.id],
+      );
+      ids.push(m.rows[0]!.id);
+    }
+    return ids;
+  });
+}
+
+interface MovementRow {
+  id: string;
+  variant_id: string;
+  storage_location_id: string;
+  direction: string;
+  quantity: string;
+  stock_adjustment_line_id: string;
+}
+
+/** The reversal transaction: status Reversed and one opposite REVERSAL per movement, in sorted order. */
+export async function reverseAdjustment(pool: pg.Pool, a: Adjustment): Promise<void> {
+  await inTransaction(pool, async (c) => {
+    await c.query(`UPDATE stock_adjustment SET status = 'Reversed', status_changed_by = $2 WHERE id = $1`, [a.id, actor()]);
+    const tx = await c.query<{ id: string }>(
+      `INSERT INTO inventory_transaction (store_id, created_by) VALUES ($1, $2) RETURNING id`,
+      [a.store, actor()],
+    );
+    const moves = await c.query<MovementRow>(
+      `SELECT id, variant_id, storage_location_id, direction, quantity, stock_adjustment_line_id FROM inventory_movement
+       WHERE stock_adjustment_id = $1 AND movement_type <> 'REVERSAL' ORDER BY variant_id, storage_location_id, id`,
+      [a.id],
+    );
+    for (const m of moves.rows) {
+      await c.query(
+        `INSERT INTO inventory_movement (inventory_transaction_id, store_id, organization_id, variant_id,
+           storage_location_id, movement_type, direction, quantity, reverses_movement_id, stock_adjustment_id,
+           stock_adjustment_line_id)
+         VALUES ($1, $2, $3, $4, $5, 'REVERSAL', $6, $7, $8, $9, $10)`,
+        [tx.rows[0]!.id, a.store, a.org, m.variant_id, m.storage_location_id, m.direction === 'In' ? 'Out' : 'In',
+          m.quantity, m.id, a.id, m.stock_adjustment_line_id],
+      );
+    }
+  });
+}
+
+/** Draft, approve and post an adjustment in one call: the whole legitimate path. */
+export async function adjust(
+  pool: pg.Pool,
+  w: Pick<StockWorld, 'org' | 'store' | 'reason'>,
+  lines: LineInput[],
+  kind: 'Adjustment' | 'OpeningBalance' = 'Adjustment',
+): Promise<Adjustment> {
+  const a = await draftAdjustment(pool, w, lines, kind);
+  await approveAdjustment(pool, a.id);
+  await postAdjustment(pool, a);
+  return a;
+}
+
+export async function onHand(db: Db, variant: string, location: string): Promise<number | undefined> {
+  const { rows } = await db.query<{ on_hand: string }>(
+    'SELECT on_hand FROM stock_balance WHERE variant_id = $1 AND storage_location_id = $2',
+    [variant, location],
+  );
+  return rows[0] ? Number(rows[0].on_hand) : undefined;
 }

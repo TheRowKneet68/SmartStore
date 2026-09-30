@@ -43,6 +43,20 @@ const SCOPE: Record<string, 'tenant' | 'organization' | 'store' | 'reference' | 
   variant_price: 'organization',
   variant_standard_cost: 'organization',
   store_variant_price: 'store', // organization-model s8.2: a store-level price is store-scoped
+  // Domain 3.
+  reason_code: 'organization',
+  inventory_movement_type: 'reference',
+  stock_adjustment: 'store',
+  stock_adjustment_line: 'store',
+  inventory_transaction: 'store',
+  inventory_movement: 'store', // MS-16: every movement is attributed to the store that is its reason
+  // MS-17, D-03: a stock item is a variant at a location and never a store's; its store is its location's.
+  stock_balance: 'organization',
+};
+
+/** Tables the runtime role may DELETE from, each with its authority. Nothing else may be deleted. */
+const DELETE_ALLOWED: Record<string, string> = {
+  stock_adjustment_line: 'overview s3.6: draft document lines never submitted; the trigger allows Draft only',
 };
 
 /** Tables whose rows are history: the application role may read and insert, never update or delete. */
@@ -53,6 +67,8 @@ const APPEND_ONLY = [
   'variant_price',
   'store_variant_price',
   'variant_standard_cost',
+  'inventory_transaction',
+  'inventory_movement',
 ];
 
 let db: TestDb;
@@ -109,16 +125,26 @@ describe('RT-001, MS-01: every table declares its scope, and store scope is a no
     expect(Object.keys(SCOPE).filter((t) => !tables.includes(t))).toEqual([]);
   });
 
-  it('store-scoped tables carry store_id NOT NULL with a foreign key to store', async () => {
+  it('store-scoped tables carry store_id NOT NULL, proven by a foreign key into store or a store-scoped parent', async () => {
     const cols = await columns();
-    const fk = await tablesWithForeignKey('store_id', 'store');
+    // A line's (document_id, store_id) -> document(id, store_id) proves the store as surely as a key to store itself,
+    // because the parent's store_id is proven the same way; the chain must end at store.
+    const { rows: keys } = await db.owner.query<{ child: string; parent: string }>(`
+      SELECT DISTINCT cl.relname AS child, pa.relname AS parent
+      FROM pg_constraint con
+        JOIN pg_class cl ON cl.oid = con.conrelid
+        JOIN pg_class pa ON pa.oid = con.confrelid
+        JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = ANY (con.conkey)
+      WHERE con.contype = 'f' AND a.attname = 'store_id'`);
+    const provenBy = (table: string) =>
+      keys.filter((k) => k.child === table).some((k) => k.parent === 'store' || SCOPE[k.parent] === 'store');
     const problems = Object.entries(SCOPE)
       .filter(([, scope]) => scope === 'store')
       .flatMap(([table]) => {
         const c = cols.find((x) => x.table_name === table && x.column_name === 'store_id');
         if (!c) return [`${table}: no store_id`];
         if (c.is_nullable === 'YES') return [`${table}: store_id is nullable`];
-        if (!fk.has(table)) return [`${table}: store_id has no foreign key to store`];
+        if (!provenBy(table)) return [`${table}: store_id is not proven by a foreign key`];
         return [];
       });
     expect(problems).toEqual([]);
@@ -170,12 +196,13 @@ describe('BI-01: no money, or anything else, is stored as a binary float', () =>
 });
 
 describe('ADR-11, BI-40, CONVENTIONS s10: what the runtime role may do', () => {
-  it('BI-40, RT-346: the runtime role may DELETE or TRUNCATE nothing', async () => {
+  it('BI-40, RT-346: the runtime role may TRUNCATE nothing, and DELETE only where an authority allows it', async () => {
     const { rows } = await db.owner.query<{ t: string; p: string }>(`
       SELECT c.relname AS t, p AS p
       FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace, unnest(ARRAY['DELETE', 'TRUNCATE']) AS p
       WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p') AND has_table_privilege('smartstore_app', c.oid, p)`);
-    expect(rows).toEqual([]);
+    const unjustified = rows.filter((r) => !(r.p === 'DELETE' && r.t in DELETE_ALLOWED));
+    expect(unjustified).toEqual([]);
   });
 
   it('BI-24, REQ-AU-06: append-only tables grant the runtime role no UPDATE on any column', async () => {
