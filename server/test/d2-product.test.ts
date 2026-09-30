@@ -9,12 +9,14 @@ import {
   insertOrganization,
   insertPrice,
   insertProduct,
+  insertReasonCode,
   insertSellableVariant,
   insertStore,
   insertTaxCategory,
   insertUnit,
   insertVariant,
   TEST_CURRENCY,
+  withReason,
 } from './fixtures.ts';
 
 /** Domain 2 — Product / Barcode / Unit. Design: docs/database/D2-PRODUCT-BARCODE-UNIT.md */
@@ -22,19 +24,22 @@ import {
 let db: TestDb;
 let org: string;
 let otherOrg: string;
+let reason: string;
 
 beforeAll(async () => {
   db = await createTestDb();
   await ensureTestCurrency(db.owner);
   org = await insertOrganization(db.app);
   otherOrg = await insertOrganization(db.app);
+  reason = await insertReasonCode(db.app, org);
 });
 afterAll(async () => {
   await db.drop();
 });
 
+/** s22.1: every product edge but activation needs a reason; the application supplies it in the audit context (D6). */
 const setStatus = (product: string, status: string) =>
-  db.app.query('UPDATE product SET status = $2, status_changed_by = $3 WHERE id = $1', [product, status, actor()]);
+  withReason(db.app, reason, 'UPDATE product SET status = $2, status_changed_by = $3 WHERE id = $1', [product, status, actor()]);
 
 /** A draft product with one variant; the variant is priced unless `priced` is false. */
 async function draftWithVariant(priced = true) {

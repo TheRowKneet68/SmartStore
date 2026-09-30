@@ -21,6 +21,7 @@ import {
   TEST_CURRENCY,
   tillWorld,
   type TillWorld,
+  withReason,
 } from './fixtures.ts';
 
 /** Domain 4 — Sale / Payment. Design: docs/database/D4-SALE-PAYMENT.md */
@@ -377,7 +378,7 @@ describe('sale completion (SP-01, SP-02, RT-118..RT-124, RT-132, RT-133, RT-146,
   it('SP-09, PR-48: draft, hidden and archived goods are not sellable; discontinued sells only from stock', async () => {
     const t = await tillWorld(db.app, { stock: 1 });
     const status = (s: string) =>
-      db.app.query('UPDATE product SET status = $2, status_changed_by = $3 WHERE id = $1', [t.product, s, actor()]);
+      withReason(db.app, t.reason, 'UPDATE product SET status = $2, status_changed_by = $3 WHERE id = $1', [t.product, s, actor()]);
     await status('Hidden');
     expect(await sqlState(sell(db.app, t, [{ variant: t.variant, quantity: 1 }])), 'Hidden').toBe('SS028');
     await status('Active');

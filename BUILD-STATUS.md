@@ -79,6 +79,10 @@ schema; details in the domain documents:
 | Refund notifications, cash-out threshold, goodwill concentration report | `SM-41`, `CD-15`, `RR-37`, `RT-523` | D5 — with notifications, approval thresholds and reporting |
 | Customer-facing refusal text | `RT-524`, `UX-31` | D5 — UX phase; the internal reason code is stored |
 | Cross-store returns | multi-store-domain | D5 — a return is at its sale's store; comes with multi-store |
+| Audit retention, expiry, archival | `AU-17`..`AU-22`, `RT-297`, `RT-298`, `RT-466` | D6 — no deletion path exists; needs configured financial periods (a legal floor) and `AU-02`/`AU-20` reconciled (OQ-024) |
+| Audit read path, its permissions, and auditing reads of the log | `AU-23`..`AU-26`, `RT-299`, `RT-300` | D6 — domain 7 and the application; reading the log has no event type (OQ-024) |
+| Standing audit reports; the chain check's schedule; an external log shipper | `AU-27`, `AU-28`, `AU-30`, `AU-31`, `RT-301` | D6 — projections and jobs (P5); the check itself, `audit_chain_breaks()`, is built |
+| Audit of master data and configuration changes | OQ-024 | D6 — the closed vocabulary has no type for them |
 
 Design these so the schema can carry them without a rewrite. Do not build them.
 
@@ -179,9 +183,24 @@ Owner-approved with ADR-31 on 2026-09-30 (ADR-31 §13 has the full text):
   - **Owner decision needed before Step 3 pays any refund: OQ-023** (the `submit to provider` and `cancel` keys are
     `OPEN DECISION`).
 
+- 2026-10-01 — **Domain 6 — Audit.** DESIGNED + IMPLEMENTED (migration) + **TESTED** (252 tests passing on 3
+  consecutive runs). No application code. [D6 design](docs/database/D6-AUDIT.md).
+  - The database writes every audit event itself, from triggers, in the transaction of the change. The §22 Audit
+    column is data on the state-machine edges. Every stock movement, cash transaction and price records its floor
+    event, and the eight built machines record their contracted events.
+  - An audited change without the authenticated actor, source and correlation id is refused (`SS054`). An edge whose
+    contract needs a reason is refused without one (`SS055`); this closes the product and device reason gap of
+    domains 2 and 4.
+  - Events and the per-organization hash chain are append-only at every privilege. The chain is linked at commit, so
+    it cannot deadlock with business locks. `audit_chain_breaks()` finds an altered, removed, tail-removed or
+    unlinked event.
+  - The application writes events only through `record_audit_event()`, and only its own types (`SS056`).
+  - Mutation-checked: 49 of 51 detected. The two truncate guards shadow each other by design; removing both is
+    detected.
+
 ## In progress
 
-- Domain 6 (Audit): design document and migration.
+- Domain 7 (Employee / Role / Permission): design document and migration.
 
 ## Owner actions pending
 
@@ -195,10 +214,12 @@ Until then, tests run on a scratch PostgreSQL 17.11 cluster and a portable Node 
 
 ## Next
 
-1. **Domain 6 — Audit.** The append-only audit trail (architecture §14), the event types of D-06, and the audit rows
-   the transition contracts of domains 1–5 require.
-2. Then domain 7, Employee / Role / Permission, with the actor foreign keys of CONVENTIONS §11 and the transition
-   permission table (architecture §8.4), where the `OPEN DECISION` keys of OQ-018 and OQ-023 refuse.
+1. **Domain 7 — Employee / Role / Permission.** Includes:
+   - the actor foreign keys of CONVENTIONS §11;
+   - the transition permission table (architecture §8.4), where the `OPEN DECISION` keys of OQ-018 and OQ-023
+     refuse;
+   - the two audit guards pending in CONVENTIONS §12: `*_by` columns equal the authenticated principal, and personal
+     fields are redacted.
 3. Then Step 3, implementation, in the order in the working agreements.
 
 Update this file after every step, including steps that failed and were abandoned.
@@ -288,3 +309,15 @@ Append-only. One dated line per step, including failed and abandoned attempts.
   Result: 229 tests passing on 4 consecutive runs, and 59 of 59 mutations detected. Decisions stated for the owner are
   in D5 §8 and OQ-023. The most important: **no refund can be paid until the owner names the `submit to provider`
   permission key.**
+- 2026-10-01 — Domain 6. Failed attempts, each fixed before commit:
+  (1) `(a, b) IS DISTINCT FROM (subquery)` is not a row comparison PostgreSQL accepts. The template migration failed;
+      rewritten with `NOT EXISTS`.
+  (2) Referencing `NEW.direction` in a trigger function shared with tables that have no such column fails when
+      PL/pgSQL prepares the expression. Caught on review and read through `to_jsonb(NEW)` instead.
+  (3) Turning audit on made seven earlier tests fail, as intended:
+      - product and device transitions now need a reason, supplied through a new `withReason` fixture;
+      - the new tables needed classifying in the schema rules.
+  (4) Four guards had no test of their own before the mutation run (source vocabulary, raw actor, raw store, session
+      time zone). A test was added for each.
+  Decisions stated for the owner, in OQ-024 and D6 §3: the vocabulary gaps (`Cash.In`, reading the log, master data
+  and configuration), `AU-02` against `AU-20`, the reading of "on exit", and the tender's event.

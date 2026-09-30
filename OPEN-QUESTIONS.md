@@ -303,6 +303,34 @@ fallback is a design that holds either answer, not a guess at the answer.
 - **Why not answerable from `/docs`:** permission keys are the owner's to name; the rest is silent or contradictory.
 - **Blocked:** paying any refund in Step 3 (the first point). Nothing else.
 
+### OQ-024 — Audit: vocabulary gaps and two contradictions
+
+- **Unknown:**
+  1. *`Cash.In`.* §22.11 records opening a shift as `Cash.In`, but `AU-12`'s closed list does not contain it, although
+     `AU-12b` says every type a rule requires is in the set. *Meanwhile:* added to the vocabulary, citing §22.11.
+  2. *Reading the log.* `AU-25` and `RT-300` require an event for every access to the log, naming the reader and what
+     was read. No type in `AU-12` records it. *Meanwhile:* not recorded. Reads of the log go unaudited until a type is
+     named (`AU-13`).
+  3. *Expiry.* `AU-02` says no event is deleted "at any privilege… not by retention cleanup"; `AU-20` says "expiring an
+     event removes a row". *Meanwhile:* no deletion path exists. Retention, expiry and archival wait for the
+     configured financial periods (`AU-17`, a legal floor like `GAP-044`), and the two rules must be reconciled first.
+  4. *Master data and configuration.* No type covers creating an organization, store, warehouse or location, or
+     changing settings (the negative-stock policy, the tax mode, the return window), tax rates, standard costs, reason
+     codes, payment-method enablement, or store deactivation. CONVENTIONS §11 had said master-data creation would be
+     attributed by its audit event; the closed vocabulary cannot do that. *Meanwhile:* not audited; CONVENTIONS
+     corrected.
+  5. *The tender's event.* §22.6 says a sale records "`Payment.Capture` or `Cash.PayOut` for the tender". *Meanwhile:*
+     every capture records `Payment.Capture` (§22.10), and every cash transaction records `Cash.In` or `Cash.PayOut` by
+     its direction, so change, the closing float and cash refunds are `Cash.PayOut`, with the cash type in the event.
+  6. *Product activation's reason.* §22.1's note says every product edge is reason-bearing; the activate row lists
+     only the completeness check. *Meanwhile:* activation needs no reason, and the other five edges do.
+  7. *"Twenty categories".* `RT-292`'s acceptance speaks of "the twenty listed categories"; `AU-03` lists about twelve.
+     *Meanwhile:* every `AU-03` category that v1 builds is recorded and tested; permission changes, provider
+     configuration and sign-in events arrive with domain 7 and the application.
+- **Why not answerable from `/docs`:** the documents are silent (2, 4) or disagree (1, 3, 5, 6, 7), and a new event type
+  is a reviewed change for the owner (`AU-13`).
+- **Blocked:** nothing in the schema; auditing reads of the log waits for a type.
+
 ## How to use this file
 
 - Add an entry the moment you hit something the specification does not answer. Then continue with a different task.

@@ -818,6 +818,263 @@ COMMENT ON FUNCTION public.assert_warehouse_has_default_location() IS 'Cites: MS
 
 
 --
+-- Name: audit_chain_breaks(uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.audit_chain_breaks(p_organization_id uuid) RETURNS TABLE(chain_seq bigint, audit_event_id uuid, problem text)
+    LANGUAGE sql STABLE SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'public'
+    AS $$
+  WITH link AS (
+    SELECT l.chain_seq, l.audit_event_id, l.prev_hash, l.hash,
+           lag(l.chain_seq) OVER w AS previous_seq, lag(l.hash) OVER w AS previous_hash
+    FROM audit_chain_link l
+    WHERE l.organization_id = p_organization_id
+    WINDOW w AS (ORDER BY l.chain_seq)
+  )
+  SELECT k.chain_seq, k.audit_event_id, 'a link is missing before this one'
+  FROM link k WHERE k.chain_seq <> coalesce(k.previous_seq, 0) + 1
+  UNION ALL
+  SELECT k.chain_seq, k.audit_event_id, 'does not continue from the link before it'
+  FROM link k WHERE k.prev_hash <> coalesce(k.previous_hash, audit_chain_genesis(p_organization_id))
+  UNION ALL
+  SELECT k.chain_seq, k.audit_event_id, 'the event was altered'
+  FROM link k JOIN audit_event e ON e.id = k.audit_event_id
+  WHERE k.hash <> sha256(k.prev_hash || audit_event_canonical(e))
+  UNION ALL
+  SELECT NULL, e.id, 'the event is not in the chain'
+  FROM audit_event e
+  WHERE e.organization_id = p_organization_id
+    AND NOT EXISTS (SELECT 1 FROM audit_chain_link k WHERE k.audit_event_id = e.id)
+  UNION ALL
+  SELECT h.last_seq, NULL, 'the chain ends before its recorded head'
+  FROM audit_chain_head h
+  WHERE h.organization_id = p_organization_id
+    AND NOT EXISTS (SELECT 1 FROM audit_chain_link l
+                    WHERE l.organization_id = p_organization_id AND l.chain_seq = h.last_seq AND l.hash = h.last_hash)
+$$;
+
+
+--
+-- Name: FUNCTION audit_chain_breaks(p_organization_id uuid); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.audit_chain_breaks(p_organization_id uuid) IS 'Cites: AU-29, AU-30, EC-76, RT-302. Walks an organization''s chain and returns every break: a missing link, a link that does not continue from its predecessor, an altered event, an unlinked event, or an end short of the recorded head. It never repairs; an empty result is the proof, and anything else is an incident.';
+
+
+--
+-- Name: audit_chain_genesis(uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.audit_chain_genesis(p_organization_id uuid) RETURNS bytea
+    LANGUAGE sql IMMUTABLE
+    AS $$
+  SELECT sha256(convert_to('smartstore-audit-chain:' || p_organization_id::text, 'UTF8'))
+$$;
+
+
+--
+-- Name: FUNCTION audit_chain_genesis(p_organization_id uuid); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.audit_chain_genesis(p_organization_id uuid) IS 'Cites: AU-29. The hash an organization''s chain starts from.';
+
+
+--
+-- Name: audit_device_mode(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.audit_device_mode() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'public'
+    AS $$
+BEGIN
+  PERFORM write_audit_event('Device.ModeChange', TG_TABLE_NAME, to_jsonb(OLD), to_jsonb(NEW), NEW.mode <> 'Training');
+  RETURN NULL;
+END
+$$;
+
+
+--
+-- Name: FUNCTION audit_device_mode(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.audit_device_mode() IS 'Cites: PT-03, SM-59, D-06. A mode change records Device.ModeChange; setting Maintenance or restoring Standard needs a reason (s22.12).';
+
+
+SET default_tablespace = '';
+
+SET default_table_access_method = heap;
+
+--
+-- Name: audit_event; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.audit_event (
+    seq bigint NOT NULL,
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    organization_id uuid NOT NULL,
+    store_id uuid,
+    occurred_at timestamp with time zone DEFAULT now() NOT NULL,
+    event_type text NOT NULL,
+    entity_type public.nonblank_text NOT NULL,
+    entity_id uuid,
+    actor_id uuid,
+    effective_actor_id uuid,
+    role_used public.nonblank_text,
+    source text NOT NULL,
+    terminal_id uuid,
+    correlation_id uuid NOT NULL,
+    client_operation_id uuid,
+    ip_address inet,
+    reason_code_id uuid,
+    before jsonb,
+    after jsonb,
+    CONSTRAINT ck_audit_event_actor CHECK (((actor_id IS NOT NULL) OR (event_type = 'Security.LoginFailed'::text))),
+    CONSTRAINT ck_audit_event_impersonation CHECK (((effective_actor_id IS NULL) OR (effective_actor_id <> actor_id))),
+    CONSTRAINT ck_audit_event_source CHECK ((source = ANY (ARRAY['UI'::text, 'API'::text, 'Job'::text, 'Device'::text, 'OfflineSync'::text, 'Terminal'::text])))
+);
+
+
+--
+-- Name: TABLE audit_event; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.audit_event IS 'Cites: AU-01, AU-02, AU-04, AU-07, AU-08, AU-10, BI-24, RT-290, RT-291, RT-464. One audit event, written in the same transaction as the change it records and never updated or deleted by any role. Organization-global with the store on it when the entity has one (MS-29).';
+
+
+--
+-- Name: CONSTRAINT ck_audit_event_actor ON audit_event; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_audit_event_actor ON public.audit_event IS 'Cites: AU-05, RT-293. Every event names the authenticated actor; only a failed sign-in, which by definition has none, may not.';
+
+
+--
+-- Name: CONSTRAINT ck_audit_event_impersonation ON audit_event; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_audit_event_impersonation ON public.audit_event IS 'Cites: AU-06, RT-294. Under impersonation both principals are recorded, and they differ.';
+
+
+--
+-- Name: CONSTRAINT ck_audit_event_source ON audit_event; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_audit_event_source ON public.audit_event IS 'Cites: AU-10. Where the change came from: UI, API, job, device, offline sync, or terminal (audit-domain s2).';
+
+
+--
+-- Name: audit_event_canonical(public.audit_event); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.audit_event_canonical(e public.audit_event) RETURNS bytea
+    LANGUAGE sql STABLE
+    AS $$
+  SELECT convert_to(jsonb_build_array(
+    e.id, e.organization_id, e.store_id, to_char(e.occurred_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US'),
+    e.event_type, e.entity_type, e.entity_id, e.actor_id, e.effective_actor_id, e.role_used, e.source, e.terminal_id,
+    e.correlation_id, e.client_operation_id, host(e.ip_address), e.reason_code_id, e.before, e.after)::text, 'UTF8')
+$$;
+
+
+--
+-- Name: FUNCTION audit_event_canonical(e public.audit_event); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.audit_event_canonical(e public.audit_event) IS 'Cites: AU-29. The event''s content in one fixed, unambiguous form, independent of the session''s time zone, for hashing.';
+
+
+--
+-- Name: audit_ledger_row(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.audit_ledger_row() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'public'
+    AS $$
+DECLARE
+  v_new jsonb := to_jsonb(NEW);
+BEGIN
+  PERFORM write_audit_event(
+    CASE TG_TABLE_NAME
+      WHEN 'inventory_movement' THEN 'Inventory.Movement'
+      WHEN 'cash_transaction' THEN CASE v_new ->> 'direction' WHEN 'In' THEN 'Cash.In' ELSE 'Cash.PayOut' END
+      ELSE 'Price.Change'
+    END,
+    TG_TABLE_NAME, NULL, v_new, false);
+  RETURN NULL;
+END
+$$;
+
+
+--
+-- Name: FUNCTION audit_ledger_row(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.audit_ledger_row() IS 'Cites: AU-03, AU-04, RT-292. Every stock movement records Inventory.Movement with its resulting balance; every cash transaction records Cash.In or Cash.PayOut by its direction; every price records Price.Change.';
+
+
+--
+-- Name: audit_setting(text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.audit_setting(p_name text) RETURNS text
+    LANGUAGE sql STABLE
+    AS $$
+  SELECT NULLIF(current_setting('smartstore.' || p_name, true), '')
+$$;
+
+
+--
+-- Name: FUNCTION audit_setting(p_name text); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.audit_setting(p_name text) IS 'Cites: AU-05, AU-10. One value of the request context the application set for this transaction, or null.';
+
+
+--
+-- Name: audit_state_transition(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.audit_state_transition() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'public'
+    AS $$
+DECLARE
+  v_machine text := TG_ARGV[0];
+  v_new     jsonb := to_jsonb(NEW);
+  v_old     jsonb;
+  v_type    text;
+  v_reason  boolean := false;
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    SELECT creation_audit_event_type INTO v_type
+    FROM state_machine_state WHERE machine = v_machine AND state = v_new ->> 'status';
+  ELSE
+    v_old := to_jsonb(OLD);
+    IF v_old ->> 'status' IS NOT DISTINCT FROM v_new ->> 'status' THEN
+      RETURN NULL;
+    END IF;
+    SELECT audit_event_type, requires_reason INTO v_type, v_reason
+    FROM state_machine_edge WHERE machine = v_machine AND from_state = v_old ->> 'status' AND to_state = v_new ->> 'status';
+  END IF;
+  IF v_type IS NOT NULL THEN
+    PERFORM write_audit_event(v_type, TG_TABLE_NAME, v_old, v_new, v_reason);
+  END IF;
+  RETURN NULL;
+END
+$$;
+
+
+--
+-- Name: FUNCTION audit_state_transition(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.audit_state_transition() IS 'Cites: AU-01, AU-03, AU-12, D-06, SM-02, RT-290, RT-292. Records the event the s22 contract names for a creation or an edge, in the same transaction; the event of an edge that needs a reason carries one or the change is refused.';
+
+
+--
 -- Name: barcode_lookup_key(text); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -1351,6 +1608,39 @@ COMMENT ON FUNCTION public.inventory_transaction_business_date() IS 'Cites: RT-2
 
 
 --
+-- Name: link_audit_event(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.link_audit_event() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'public'
+    AS $$
+DECLARE
+  v_seq  bigint;
+  v_prev bytea;
+  v_hash bytea;
+BEGIN
+  INSERT INTO audit_chain_head (organization_id, last_seq, last_hash)
+  VALUES (NEW.organization_id, 0, audit_chain_genesis(NEW.organization_id))
+  ON CONFLICT (organization_id) DO NOTHING;
+  SELECT last_seq, last_hash INTO v_seq, v_prev FROM audit_chain_head WHERE organization_id = NEW.organization_id FOR UPDATE;
+  v_hash := sha256(v_prev || audit_event_canonical(NEW));
+  INSERT INTO audit_chain_link (organization_id, chain_seq, audit_event_id, prev_hash, hash)
+  VALUES (NEW.organization_id, v_seq + 1, NEW.id, v_prev, v_hash);
+  UPDATE audit_chain_head SET last_seq = v_seq + 1, last_hash = v_hash WHERE organization_id = NEW.organization_id;
+  RETURN NULL;
+END
+$$;
+
+
+--
+-- Name: FUNCTION link_audit_event(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.link_audit_event() IS 'Cites: AU-29, RT-302. Links each event into its organization''s chain at commit. Linking last, after every business lock is held, means the chain head is never waited for while holding it, so it cannot deadlock with the business rows; it serialises the organization''s commits for the moment of linking.';
+
+
+--
 -- Name: payment_before_write(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -1484,6 +1774,45 @@ $$;
 --
 
 COMMENT ON FUNCTION public.record_archival() IS 'Cites: BI-40, PR-05, PR-48, RT-353. Archival is recorded once, stamped with server time; who and when cannot be rewritten or cleared.';
+
+
+--
+-- Name: record_audit_event(text, uuid, uuid, text, uuid, jsonb); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.record_audit_event(p_event_type text, p_organization_id uuid, p_store_id uuid, p_entity_type text, p_entity_id uuid, p_after jsonb) RETURNS uuid
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'public'
+    AS $$
+DECLARE
+  v_actor uuid := audit_setting('actor_id')::uuid;
+  v_id    uuid;
+BEGIN
+  IF EXISTS (SELECT 1 FROM audit_event_type WHERE code = p_event_type AND origin <> 'Application') THEN
+    RAISE EXCEPTION '% is written by the database with the change it records, never by the application', p_event_type
+      USING ERRCODE = 'SS056';
+  END IF;
+  IF (v_actor IS NULL AND p_event_type <> 'Security.LoginFailed') OR audit_setting('source') IS NULL
+     OR audit_setting('correlation_id') IS NULL THEN
+    RAISE EXCEPTION 'an audit event needs the authenticated actor, the source and the correlation id' USING ERRCODE = 'SS054';
+  END IF;
+  INSERT INTO audit_event (organization_id, store_id, event_type, entity_type, entity_id, actor_id, effective_actor_id,
+                           role_used, source, terminal_id, correlation_id, client_operation_id, ip_address, after)
+  VALUES (p_organization_id, p_store_id, p_event_type, p_entity_type, p_entity_id, v_actor,
+          audit_setting('effective_actor_id')::uuid, audit_setting('role'), audit_setting('source'),
+          audit_setting('terminal_id')::uuid, audit_setting('correlation_id')::uuid,
+          audit_setting('client_operation_id')::uuid, audit_setting('ip_address')::inet, p_after)
+  RETURNING id INTO v_id;
+  RETURN v_id;
+END
+$$;
+
+
+--
+-- Name: FUNCTION record_audit_event(p_event_type text, p_organization_id uuid, p_store_id uuid, p_entity_type text, p_entity_id uuid, p_after jsonb); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.record_audit_event(p_event_type text, p_organization_id uuid, p_store_id uuid, p_entity_type text, p_entity_id uuid, p_after jsonb) IS 'Cites: AU-03, AU-05, AU-12a, AU-14, AU-15, RT-296. The application''s only way to write an event: an Application type (sign-in, sign-out, session end, failed sign-in, denial, export and the like), with the actor and request context from the authenticated session, never from its arguments.';
 
 
 --
@@ -1983,9 +2312,144 @@ $_$;
 COMMENT ON FUNCTION public.upc_e_expand(p_code text) IS 'Cites: PR-12, RT-490. Expands a zero-suppressed UPC-E code to its UPC-A form, where its check digit is validated.';
 
 
-SET default_tablespace = '';
+--
+-- Name: write_audit_event(text, text, jsonb, jsonb, boolean); Type: FUNCTION; Schema: public; Owner: -
+--
 
-SET default_table_access_method = heap;
+CREATE FUNCTION public.write_audit_event(p_event_type text, p_entity_type text, p_old jsonb, p_new jsonb, p_needs_reason boolean) RETURNS void
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'public'
+    AS $$
+DECLARE
+  v_actor  uuid := audit_setting('actor_id')::uuid;
+  v_source text := audit_setting('source');
+  v_corr   uuid := audit_setting('correlation_id')::uuid;
+  v_store  uuid := (p_new ->> 'store_id')::uuid;
+  v_org    uuid := (p_new ->> 'organization_id')::uuid;
+  v_reason uuid;
+  v_before jsonb;
+  v_after  jsonb;
+BEGIN
+  IF v_actor IS NULL OR v_source IS NULL OR v_corr IS NULL THEN
+    RAISE EXCEPTION 'an audited change needs the authenticated actor, the source and the correlation id'
+      USING ERRCODE = 'SS054';
+  END IF;
+  IF v_org IS NULL THEN
+    SELECT organization_id INTO v_org FROM store WHERE id = v_store;
+  END IF;
+
+  v_reason := coalesce((p_new ->> 'cancel_reason_code_id')::uuid, (p_new ->> 'late_reason_code_id')::uuid,
+                       (p_new ->> 'reason_code_id')::uuid);
+  IF v_reason IS NULL AND p_needs_reason THEN
+    v_reason := audit_setting('reason_code_id')::uuid;
+    IF v_reason IS NULL THEN
+      RAISE EXCEPTION '% needs a reason', p_event_type USING ERRCODE = 'SS055';
+    END IF;
+    PERFORM assert_reason_code_live(v_reason);
+  END IF;
+
+  IF p_old IS NULL THEN
+    v_after := p_new;
+  ELSE
+    SELECT jsonb_object_agg(k, p_old -> k), jsonb_object_agg(k, p_new -> k) INTO v_before, v_after
+    FROM jsonb_object_keys(p_new) AS k WHERE p_old -> k IS DISTINCT FROM p_new -> k;
+  END IF;
+
+  INSERT INTO audit_event (organization_id, store_id, event_type, entity_type, entity_id, actor_id, effective_actor_id,
+                           role_used, source, terminal_id, correlation_id, client_operation_id, ip_address,
+                           reason_code_id, before, after)
+  VALUES (v_org, v_store, p_event_type, p_entity_type, (p_new ->> 'id')::uuid, v_actor,
+          audit_setting('effective_actor_id')::uuid, audit_setting('role'), v_source, audit_setting('terminal_id')::uuid,
+          v_corr, audit_setting('client_operation_id')::uuid, audit_setting('ip_address')::inet, v_reason, v_before,
+          v_after);
+END
+$$;
+
+
+--
+-- Name: FUNCTION write_audit_event(p_event_type text, p_entity_type text, p_old jsonb, p_new jsonb, p_needs_reason boolean); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.write_audit_event(p_event_type text, p_entity_type text, p_old jsonb, p_new jsonb, p_needs_reason boolean) IS 'Cites: AU-01, AU-04, AU-05, AU-06, AU-07, AU-08, AU-10, RT-290, RT-293, RT-464. Writes one event in the transaction of the change: the actor, source and correlation id from the authenticated context, refusing the change without them; the store and organization from the entity; the reason from the entity or the context, refusing a transition that needs one without it; the whole created row, or only the fields that changed.';
+
+
+--
+-- Name: audit_chain_head; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.audit_chain_head (
+    organization_id uuid NOT NULL,
+    last_seq bigint NOT NULL,
+    last_hash bytea NOT NULL
+);
+
+
+--
+-- Name: TABLE audit_chain_head; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.audit_chain_head IS 'Cites: AU-29, RT-302. The tip of an organization''s audit chain, so a removal at the end is detectable too. Written only by the linking trigger.';
+
+
+--
+-- Name: audit_chain_link; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.audit_chain_link (
+    organization_id uuid NOT NULL,
+    chain_seq bigint NOT NULL,
+    audit_event_id uuid NOT NULL,
+    prev_hash bytea NOT NULL,
+    hash bytea NOT NULL
+);
+
+
+--
+-- Name: TABLE audit_chain_link; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.audit_chain_link IS 'Cites: AU-29, AU-31, RT-302, RT-467. Each event''s place in its organization''s hash chain: the previous link''s hash and the hash of that with the event''s canonical content. Append-only at every privilege.';
+
+
+--
+-- Name: audit_event_seq_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.audit_event ALTER COLUMN seq ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.audit_event_seq_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: audit_event_type; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.audit_event_type (
+    code public.nonblank_text NOT NULL,
+    origin text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_audit_event_type_origin CHECK ((origin = ANY (ARRAY['Database'::text, 'Application'::text])))
+);
+
+
+--
+-- Name: TABLE audit_event_type; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.audit_event_type IS 'Cites: AU-11, AU-12, AU-12b, AU-12c, AU-13, D-06, RT-465. The closed, versioned event vocabulary. A type is added only by a migration, and only when a rule requires the event. Database types are written by the schema''s own triggers as part of the change; Application types (sign-in, export and the like) are recorded by the application through record_audit_event().';
+
+
+--
+-- Name: CONSTRAINT ck_audit_event_type_origin ON audit_event_type; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_audit_event_type_origin ON public.audit_event_type IS 'Cites: AU-01, AU-05. Whether the database writes the event itself, in the transaction of the change, or the application records it.';
+
 
 --
 -- Name: brand; Type: TABLE; Schema: public; Owner: -
@@ -3433,6 +3897,8 @@ CREATE TABLE public.state_machine_edge (
     from_state public.nonblank_text NOT NULL,
     to_state public.nonblank_text NOT NULL,
     event public.nonblank_text NOT NULL,
+    audit_event_type text,
+    requires_reason boolean DEFAULT false NOT NULL,
     CONSTRAINT ck_state_machine_edge_not_loop CHECK (((from_state)::text <> (to_state)::text))
 );
 
@@ -3458,7 +3924,8 @@ COMMENT ON CONSTRAINT ck_state_machine_edge_not_loop ON public.state_machine_edg
 CREATE TABLE public.state_machine_state (
     machine public.nonblank_text NOT NULL,
     state public.nonblank_text NOT NULL,
-    is_initial boolean NOT NULL
+    is_initial boolean NOT NULL,
+    creation_audit_event_type text
 );
 
 
@@ -4100,6 +4567,38 @@ COMMENT ON CONSTRAINT ck_warehouse_store_iff_attached ON public.warehouse IS 'Ci
 
 
 --
+-- Name: audit_chain_head pk_audit_chain_head; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.audit_chain_head
+    ADD CONSTRAINT pk_audit_chain_head PRIMARY KEY (organization_id);
+
+
+--
+-- Name: audit_chain_link pk_audit_chain_link; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.audit_chain_link
+    ADD CONSTRAINT pk_audit_chain_link PRIMARY KEY (organization_id, chain_seq);
+
+
+--
+-- Name: audit_event pk_audit_event; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.audit_event
+    ADD CONSTRAINT pk_audit_event PRIMARY KEY (id);
+
+
+--
+-- Name: audit_event_type pk_audit_event_type; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.audit_event_type
+    ADD CONSTRAINT pk_audit_event_type PRIMARY KEY (code);
+
+
+--
 -- Name: brand pk_brand; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4465,6 +4964,36 @@ ALTER TABLE ONLY public.warehouse
 
 ALTER TABLE ONLY public.schema_migrations
     ADD CONSTRAINT schema_migrations_pkey PRIMARY KEY (version);
+
+
+--
+-- Name: audit_chain_link uq_audit_chain_link_event; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.audit_chain_link
+    ADD CONSTRAINT uq_audit_chain_link_event UNIQUE (audit_event_id);
+
+
+--
+-- Name: CONSTRAINT uq_audit_chain_link_event ON audit_chain_link; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_audit_chain_link_event ON public.audit_chain_link IS 'Cites: AU-29. An event is linked once.';
+
+
+--
+-- Name: audit_event uq_audit_event_seq; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.audit_event
+    ADD CONSTRAINT uq_audit_event_seq UNIQUE (seq);
+
+
+--
+-- Name: CONSTRAINT uq_audit_event_seq ON audit_event; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_audit_event_seq ON public.audit_event IS 'Cites: AU-01. The order events were written in.';
 
 
 --
@@ -5638,6 +6167,34 @@ COMMENT ON CONSTRAINT uq_warehouse_id_kind_organization ON public.warehouse IS '
 
 
 --
+-- Name: ix_audit_event_entity; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_audit_event_entity ON public.audit_event USING btree (entity_id);
+
+
+--
+-- Name: INDEX ix_audit_event_entity; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.ix_audit_event_entity IS 'Cites: AU-10, AU-28. Everything that happened to one entity.';
+
+
+--
+-- Name: ix_audit_event_store_time; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_audit_event_store_time ON public.audit_event USING btree (organization_id, store_id, occurred_at);
+
+
+--
+-- Name: INDEX ix_audit_event_store_time; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.ix_audit_event_store_time IS 'Cites: MS-29, AU-27. The store-filtered, time-ordered read an investigation starts from.';
+
+
+--
 -- Name: ix_category_parent; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -5946,6 +6503,90 @@ COMMENT ON INDEX public.uq_storage_location_one_default IS 'Cites: MS-17, RT-057
 
 
 --
+-- Name: audit_chain_link tg_audit_chain_link_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_audit_chain_link_immutable BEFORE DELETE OR UPDATE ON public.audit_chain_link FOR EACH ROW EXECUTE FUNCTION public.forbid_ledger_rewrite();
+
+
+--
+-- Name: TRIGGER tg_audit_chain_link_immutable ON audit_chain_link; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_audit_chain_link_immutable ON public.audit_chain_link IS 'Cites: AU-29, BI-24. The chain is append-only at every privilege.';
+
+
+--
+-- Name: audit_chain_link tg_audit_chain_link_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_audit_chain_link_no_truncate BEFORE TRUNCATE ON public.audit_chain_link FOR EACH STATEMENT EXECUTE FUNCTION public.forbid_ledger_rewrite();
+
+
+--
+-- Name: TRIGGER tg_audit_chain_link_no_truncate ON audit_chain_link; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_audit_chain_link_no_truncate ON public.audit_chain_link IS 'Cites: AU-32. The chain cannot be emptied in bulk.';
+
+
+--
+-- Name: audit_event tg_audit_event_chain; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE CONSTRAINT TRIGGER tg_audit_event_chain AFTER INSERT ON public.audit_event DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.link_audit_event();
+
+
+--
+-- Name: TRIGGER tg_audit_event_chain ON audit_event; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_audit_event_chain ON public.audit_event IS 'Cites: AU-29. Every event is linked into the chain when its transaction commits.';
+
+
+--
+-- Name: audit_event tg_audit_event_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_audit_event_immutable BEFORE DELETE OR UPDATE ON public.audit_event FOR EACH ROW EXECUTE FUNCTION public.forbid_ledger_rewrite();
+
+
+--
+-- Name: TRIGGER tg_audit_event_immutable ON audit_event; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_audit_event_immutable ON public.audit_event IS 'Cites: AU-02, BI-24, RT-291. No update and no delete on an audit event, at any privilege.';
+
+
+--
+-- Name: audit_event tg_audit_event_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_audit_event_no_truncate BEFORE TRUNCATE ON public.audit_event FOR EACH STATEMENT EXECUTE FUNCTION public.forbid_ledger_rewrite();
+
+
+--
+-- Name: TRIGGER tg_audit_event_no_truncate ON audit_event; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_audit_event_no_truncate ON public.audit_event IS 'Cites: AU-32, RT-291. The log cannot be emptied in bulk.';
+
+
+--
+-- Name: cash_shift tg_cash_shift_audit; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_cash_shift_audit AFTER INSERT OR UPDATE OF status ON public.cash_shift FOR EACH ROW EXECUTE FUNCTION public.audit_state_transition('Shift');
+
+
+--
+-- Name: TRIGGER tg_cash_shift_audit ON cash_shift; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_cash_shift_audit ON public.cash_shift IS 'Cites: CD-21, SM-55. Shift.StateChange and Shift.Close (s22.11).';
+
+
+--
 -- Name: cash_shift tg_cash_shift_before_write; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -5999,6 +6640,20 @@ CREATE TRIGGER tg_cash_shift_state_machine BEFORE INSERT OR UPDATE OF status ON 
 --
 
 COMMENT ON TRIGGER tg_cash_shift_state_machine ON public.cash_shift IS 'Cites: SM-55, SM-56, SM-02. A shift is created Open and moves only along the edges of state-machines s22.11.';
+
+
+--
+-- Name: cash_transaction tg_cash_transaction_audit; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_cash_transaction_audit AFTER INSERT ON public.cash_transaction FOR EACH ROW EXECUTE FUNCTION public.audit_ledger_row();
+
+
+--
+-- Name: TRIGGER tg_cash_transaction_audit ON cash_transaction; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_cash_transaction_audit ON public.cash_transaction IS 'Cites: AU-03, CD-19. Every cash transaction is audited.';
 
 
 --
@@ -6097,6 +6752,20 @@ CREATE CONSTRAINT TRIGGER tg_checkout_outcome AFTER UPDATE OF status ON public.c
 --
 
 COMMENT ON TRIGGER tg_checkout_outcome ON public.checkout IS 'Cites: SP-01. Checked at commit.';
+
+
+--
+-- Name: customer_return tg_customer_return_audit; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_customer_return_audit AFTER INSERT OR UPDATE OF status ON public.customer_return FOR EACH ROW EXECUTE FUNCTION public.audit_state_transition('CustomerReturn');
+
+
+--
+-- Name: TRIGGER tg_customer_return_audit ON customer_return; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_customer_return_audit ON public.customer_return IS 'Cites: SM-42, D-06. Return.StateChange (s22.7).';
 
 
 --
@@ -6209,6 +6878,20 @@ CREATE TRIGGER tg_inventory_movement_apply BEFORE INSERT ON public.inventory_mov
 --
 
 COMMENT ON TRIGGER tg_inventory_movement_apply ON public.inventory_movement IS 'Cites: BI-02, IV-08, RT-061. A movement and its balance update are one statement: both happen or neither does.';
+
+
+--
+-- Name: inventory_movement tg_inventory_movement_audit; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_inventory_movement_audit AFTER INSERT ON public.inventory_movement FOR EACH ROW EXECUTE FUNCTION public.audit_ledger_row();
+
+
+--
+-- Name: TRIGGER tg_inventory_movement_audit ON inventory_movement; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_inventory_movement_audit ON public.inventory_movement IS 'Cites: AU-03, IV-08. Every stock movement is audited.';
 
 
 --
@@ -6338,6 +7021,20 @@ COMMENT ON TRIGGER tg_organization_money_settings ON public.organization IS 'Cit
 
 
 --
+-- Name: payment tg_payment_audit; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_payment_audit AFTER INSERT OR UPDATE OF status ON public.payment FOR EACH ROW EXECUTE FUNCTION public.audit_state_transition('Payment');
+
+
+--
+-- Name: TRIGGER tg_payment_audit ON payment; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_payment_audit ON public.payment IS 'Cites: AU-03, PY-13, PY-54. Every payment state change: Payment.StateChange and Payment.Capture (s22.10).';
+
+
+--
 -- Name: payment tg_payment_before_write; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -6366,6 +7063,20 @@ COMMENT ON TRIGGER tg_payment_state_machine ON public.payment IS 'Cites: PY-12, 
 
 
 --
+-- Name: pos_terminal tg_pos_terminal_audit; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_pos_terminal_audit AFTER INSERT OR UPDATE OF status ON public.pos_terminal FOR EACH ROW EXECUTE FUNCTION public.audit_state_transition('Device');
+
+
+--
+-- Name: TRIGGER tg_pos_terminal_audit ON pos_terminal; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_pos_terminal_audit ON public.pos_terminal IS 'Cites: SM-60b, HD-08. Device.StateChange (s22.12).';
+
+
+--
 -- Name: pos_terminal tg_pos_terminal_location; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -6377,6 +7088,20 @@ CREATE TRIGGER tg_pos_terminal_location BEFORE INSERT OR UPDATE OF sell_from_loc
 --
 
 COMMENT ON TRIGGER tg_pos_terminal_location ON public.pos_terminal IS 'Cites: WH-01, RT-004. Checks the till''s sell-from location.';
+
+
+--
+-- Name: pos_terminal tg_pos_terminal_mode_audit; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_pos_terminal_mode_audit AFTER UPDATE OF mode ON public.pos_terminal FOR EACH ROW WHEN ((old.mode IS DISTINCT FROM new.mode)) EXECUTE FUNCTION public.audit_device_mode();
+
+
+--
+-- Name: TRIGGER tg_pos_terminal_mode_audit ON pos_terminal; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_pos_terminal_mode_audit ON public.pos_terminal IS 'Cites: SM-59. Changing a till''s mode is audited.';
 
 
 --
@@ -6405,6 +7130,20 @@ CREATE TRIGGER tg_pos_terminal_status_stamp BEFORE UPDATE OF status ON public.po
 --
 
 COMMENT ON TRIGGER tg_pos_terminal_status_stamp ON public.pos_terminal IS 'Cites: SM-03. Server time for each terminal status change.';
+
+
+--
+-- Name: product tg_product_audit; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_product_audit AFTER INSERT OR UPDATE OF status ON public.product FOR EACH ROW EXECUTE FUNCTION public.audit_state_transition('Product');
+
+
+--
+-- Name: TRIGGER tg_product_audit ON product; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_product_audit ON public.product IS 'Cites: D-06, PR-47. Product.StateChange and Product.Archive (s22.1).';
 
 
 --
@@ -6520,6 +7259,20 @@ COMMENT ON TRIGGER tg_reason_code_archival ON public.reason_code IS 'Cites: BI-4
 
 
 --
+-- Name: refund tg_refund_audit; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_refund_audit AFTER INSERT OR UPDATE OF status ON public.refund FOR EACH ROW EXECUTE FUNCTION public.audit_state_transition('Refund');
+
+
+--
+-- Name: TRIGGER tg_refund_audit ON refund; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_refund_audit ON public.refund IS 'Cites: AU-03, SM-40, RR-24. Approval.Decided, Payment.Refund and Refund.StateChange: every refund (s22.7).';
+
+
+--
 -- Name: refund tg_refund_before_write; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -6590,6 +7343,20 @@ COMMENT ON TRIGGER tg_refund_whole ON public.refund IS 'Cites: RR-43, PY-27. Che
 
 
 --
+-- Name: sale tg_sale_audit; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_sale_audit AFTER INSERT OR UPDATE OF status ON public.sale FOR EACH ROW EXECUTE FUNCTION public.audit_state_transition('Sale');
+
+
+--
+-- Name: TRIGGER tg_sale_audit ON sale; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_sale_audit ON public.sale IS 'Cites: SP-02, D-06. Sale.Completed at completion (s22.6).';
+
+
+--
 -- Name: sale tg_sale_before_insert; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -6657,6 +7424,20 @@ CREATE TRIGGER tg_shift_count_before_write BEFORE INSERT OR UPDATE ON public.shi
 --
 
 COMMENT ON TRIGGER tg_shift_count_before_write ON public.shift_count IS 'Cites: CD-21, CD-22. Server-computed expected amount and pass number.';
+
+
+--
+-- Name: stock_adjustment tg_stock_adjustment_audit; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_stock_adjustment_audit AFTER INSERT OR UPDATE OF status ON public.stock_adjustment FOR EACH ROW EXECUTE FUNCTION public.audit_state_transition('StockAdjustment');
+
+
+--
+-- Name: TRIGGER tg_stock_adjustment_audit ON stock_adjustment; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_stock_adjustment_audit ON public.stock_adjustment IS 'Cites: AU-03, IV-33. Approval.Decided and Inventory.Adjustment (s22.17).';
 
 
 --
@@ -6786,6 +7567,20 @@ COMMENT ON TRIGGER tg_store_setting_version_tax_mode ON public.store_setting_ver
 
 
 --
+-- Name: store_variant_price tg_store_variant_price_audit; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_store_variant_price_audit AFTER INSERT ON public.store_variant_price FOR EACH ROW EXECUTE FUNCTION public.audit_ledger_row();
+
+
+--
+-- Name: TRIGGER tg_store_variant_price_audit ON store_variant_price; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_store_variant_price_audit ON public.store_variant_price IS 'Cites: AU-03, PR-30. Every store price change is audited.';
+
+
+--
 -- Name: unit tg_unit_quantity_kind; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -6800,6 +7595,20 @@ COMMENT ON TRIGGER tg_unit_quantity_kind ON public.unit IS 'Cites: PR-14, RT-491
 
 
 --
+-- Name: variant_price tg_variant_price_audit; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_variant_price_audit AFTER INSERT ON public.variant_price FOR EACH ROW EXECUTE FUNCTION public.audit_ledger_row();
+
+
+--
+-- Name: TRIGGER tg_variant_price_audit ON variant_price; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_variant_price_audit ON public.variant_price IS 'Cites: AU-03, PR-30. Every price change is audited.';
+
+
+--
 -- Name: warehouse tg_warehouse_default_location; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -6811,6 +7620,111 @@ CREATE CONSTRAINT TRIGGER tg_warehouse_default_location AFTER INSERT ON public.w
 --
 
 COMMENT ON TRIGGER tg_warehouse_default_location ON public.warehouse IS 'Cites: MS-17, RT-057. Checked at commit, so the warehouse and its Default location are created together.';
+
+
+--
+-- Name: audit_chain_head fk_audit_chain_head_organization; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.audit_chain_head
+    ADD CONSTRAINT fk_audit_chain_head_organization FOREIGN KEY (organization_id) REFERENCES public.organization(id);
+
+
+--
+-- Name: CONSTRAINT fk_audit_chain_head_organization ON audit_chain_head; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_audit_chain_head_organization ON public.audit_chain_head IS 'Cites: AU-29. One chain per organization.';
+
+
+--
+-- Name: audit_chain_link fk_audit_chain_link_event; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.audit_chain_link
+    ADD CONSTRAINT fk_audit_chain_link_event FOREIGN KEY (audit_event_id) REFERENCES public.audit_event(id);
+
+
+--
+-- Name: CONSTRAINT fk_audit_chain_link_event ON audit_chain_link; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_audit_chain_link_event ON public.audit_chain_link IS 'Cites: AU-29, AU-32. A link names an event that exists.';
+
+
+--
+-- Name: audit_chain_link fk_audit_chain_link_organization; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.audit_chain_link
+    ADD CONSTRAINT fk_audit_chain_link_organization FOREIGN KEY (organization_id) REFERENCES public.organization(id);
+
+
+--
+-- Name: CONSTRAINT fk_audit_chain_link_organization ON audit_chain_link; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_audit_chain_link_organization ON public.audit_chain_link IS 'Cites: AU-29. A chain is per organization.';
+
+
+--
+-- Name: audit_event fk_audit_event_organization; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.audit_event
+    ADD CONSTRAINT fk_audit_event_organization FOREIGN KEY (organization_id) REFERENCES public.organization(id);
+
+
+--
+-- Name: CONSTRAINT fk_audit_event_organization ON audit_event; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_audit_event_organization ON public.audit_event IS 'Cites: MS-29. The log is global within the organization.';
+
+
+--
+-- Name: audit_event fk_audit_event_reason; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.audit_event
+    ADD CONSTRAINT fk_audit_event_reason FOREIGN KEY (reason_code_id, organization_id) REFERENCES public.reason_code(id, organization_id);
+
+
+--
+-- Name: CONSTRAINT fk_audit_event_reason ON audit_event; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_audit_event_reason ON public.audit_event IS 'Cites: BI-25. A reason is a reason code of the organization.';
+
+
+--
+-- Name: audit_event fk_audit_event_store; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.audit_event
+    ADD CONSTRAINT fk_audit_event_store FOREIGN KEY (store_id, organization_id) REFERENCES public.store(id, organization_id);
+
+
+--
+-- Name: CONSTRAINT fk_audit_event_store ON audit_event; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_audit_event_store ON public.audit_event IS 'Cites: AU-07, MS-29. The store of the affected entity, in the same organization, so the log filters by store without a join.';
+
+
+--
+-- Name: audit_event fk_audit_event_type; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.audit_event
+    ADD CONSTRAINT fk_audit_event_type FOREIGN KEY (event_type) REFERENCES public.audit_event_type(code);
+
+
+--
+-- Name: CONSTRAINT fk_audit_event_type ON audit_event; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_audit_event_type ON public.audit_event IS 'Cites: AU-11, RT-465. A free-text or placeholder event type is refused.';
 
 
 --
@@ -7954,6 +8868,21 @@ COMMENT ON CONSTRAINT fk_shift_count_store ON public.shift_count IS 'Cites: RT-0
 
 
 --
+-- Name: state_machine_edge fk_state_machine_edge_audit_type; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.state_machine_edge
+    ADD CONSTRAINT fk_state_machine_edge_audit_type FOREIGN KEY (audit_event_type) REFERENCES public.audit_event_type(code);
+
+
+--
+-- Name: CONSTRAINT fk_state_machine_edge_audit_type ON state_machine_edge; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_state_machine_edge_audit_type ON public.state_machine_edge IS 'Cites: AU-12, D-06, SM-02. The event an edge records, from the s22 Audit column; null where the contract records none or another row records it.';
+
+
+--
 -- Name: state_machine_edge fk_state_machine_edge_from; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7981,6 +8910,21 @@ ALTER TABLE ONLY public.state_machine_edge
 --
 
 COMMENT ON CONSTRAINT fk_state_machine_edge_to ON public.state_machine_edge IS 'Cites: SM-07. An edge ends at a state of its machine.';
+
+
+--
+-- Name: state_machine_state fk_state_machine_state_audit_type; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.state_machine_state
+    ADD CONSTRAINT fk_state_machine_state_audit_type FOREIGN KEY (creation_audit_event_type) REFERENCES public.audit_event_type(code);
+
+
+--
+-- Name: CONSTRAINT fk_state_machine_state_audit_type ON state_machine_state; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_state_machine_state_audit_type ON public.state_machine_state IS 'Cites: AU-12, D-06. The event a creation records, from the s22 Audit column; null where the contract records none.';
 
 
 --
@@ -8451,4 +9395,5 @@ INSERT INTO public.schema_migrations (version) VALUES
     ('20260930150000'),
     ('20260930160000'),
     ('20260930161000'),
-    ('20260930170000');
+    ('20260930170000'),
+    ('20261001100000');

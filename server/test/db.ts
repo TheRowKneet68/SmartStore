@@ -16,6 +16,28 @@ export interface TestDb {
 // CREATE DATABASE ... TEMPLATE needs a quiet template, so clones are made one at a time across processes.
 const CLONE_LOCK = 7_310_001;
 
+/**
+ * The authenticated request context every audited change needs (AU-05, AU-10; docs/database/D6-AUDIT.md). The
+ * application sets it per transaction from the signed-in session; test connections carry this TEST-ONLY default from
+ * connection start, and tests that need another actor or a reason set their own with set_config(..., true).
+ */
+export const TEST_CONTEXT = {
+  actor: '00000000-0000-4000-8000-00000000a0d1',
+  correlation: '00000000-0000-4000-8000-00000000c0e1',
+  source: 'API',
+} as const;
+
+/** `url` with the test audit context applied to every connection opened from it. */
+export function withTestContext(url: string): string {
+  const u = new URL(url);
+  u.searchParams.set(
+    'options',
+    `-c smartstore.actor_id=${TEST_CONTEXT.actor} -c smartstore.source=${TEST_CONTEXT.source} ` +
+      `-c smartstore.correlation_id=${TEST_CONTEXT.correlation}`,
+  );
+  return u.toString();
+}
+
 /** A private database cloned from the migrated template. Drop it in afterAll. */
 export async function createTestDb(): Promise<TestDb> {
   loadEnv();
@@ -36,13 +58,13 @@ export async function createTestDb(): Promise<TestDb> {
     await admin.end();
   }
 
-  const owner = new pg.Pool({ connectionString: urlFor(ownerUrl, name), max: 8 });
-  const app = new pg.Pool({ connectionString: urlFor(appUrl, name), max: 8 });
+  const owner = new pg.Pool({ connectionString: withTestContext(urlFor(ownerUrl, name)), max: 8 });
+  const app = new pg.Pool({ connectionString: withTestContext(urlFor(appUrl, name)), max: 8 });
 
   return {
     owner,
     app,
-    appUrl: urlFor(appUrl, name),
+    appUrl: withTestContext(urlFor(appUrl, name)),
     name,
     async drop() {
       await owner.end();

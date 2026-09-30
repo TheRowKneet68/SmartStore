@@ -29,6 +29,7 @@ import {
   TEST_CURRENCY,
   tillWorld,
   type TillWorld,
+  withReason,
 } from './fixtures.ts';
 
 /** Domain 5 — Returns / Refunds. Design: docs/database/D5-RETURNS-REFUNDS.md */
@@ -222,7 +223,10 @@ describe('returns: goods come back against a sold line (RR-08, RR-13, RR-14, RR-
 
   it('RR-12: a discontinued product is still returnable', async () => {
     const { t, saleId, line } = await soldShop(3);
-    await db.app.query(`UPDATE product SET status = 'Discontinued', status_changed_by = $2 WHERE id = $1`, [t.product, actor()]);
+    await withReason(db.app, t.reason, `UPDATE product SET status = 'Discontinued', status_changed_by = $2 WHERE id = $1`, [
+      t.product,
+      actor(),
+    ]);
     expect(await sqlState(returnGoods(db.app, t, saleId, [{ line, quantity: 1 }]))).toBeUndefined();
   });
 });
@@ -698,7 +702,7 @@ describe('refunds (RR-03, RR-22..RR-24, RR-35, PY-21..PY-27)', () => {
     await approveRefund(db.app, id);
     await db.app.query(`UPDATE pos_terminal SET mode = 'Training' WHERE id = $1`, [t.terminal]);
     expect(await sqlState(payOutRefund(db.app, id)), 'a training till').toBe('SS025');
-    await db.app.query(`UPDATE pos_terminal SET mode = 'Standard' WHERE id = $1`, [t.terminal]);
+    await withReason(db.app, t.reason, `UPDATE pos_terminal SET mode = 'Standard' WHERE id = $1`, [t.terminal]);
     await db.app.query(`UPDATE cash_shift SET status = 'Reconciling', status_changed_by = $2 WHERE id = $1`, [t.shift, actor()]);
     expect(await sqlState(payOutRefund(db.app, id)), 'a shift being counted').toBe('SS026');
   });

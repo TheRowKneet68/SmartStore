@@ -207,6 +207,17 @@ export async function insertSettings(db: Db, storeId: string, policy: Policy, ef
   );
 }
 
+/**
+ * Runs one statement in its own transaction with `reason` as the audit context's reason code: how the application
+ * supplies the reason a transition's contract requires when the document has no reason column of its own (s22; D6).
+ */
+export async function withReason(pool: pg.Pool, reason: string, sql: string, params: unknown[]): Promise<void> {
+  await inTransaction(pool, async (c) => {
+    await c.query(`SELECT set_config('smartstore.reason_code_id', $1, true)`, [reason]);
+    await c.query(sql, params);
+  });
+}
+
 export async function insertReasonCode(db: Db, organizationId: string): Promise<string> {
   const { rows } = await db.query<{ id: string }>(
     `INSERT INTO reason_code (organization_id, code, name) VALUES ($1, $2, 'TEST-ONLY reason') RETURNING id`,

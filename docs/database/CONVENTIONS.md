@@ -169,6 +169,14 @@ by a `created_by` column. An organization is necessarily created before any of i
 Onboarding order is therefore organization, then its first employee, then store and settings, so the first
 `store_setting_version.created_by` has an employee to name.
 
+> **Correction (2026-10-01, domain 6).** The paragraph above promised an attribution the audit vocabulary cannot give.
+> The vocabulary is closed (`AU-11`, `AU-12c`) and has no type for creating an organization, store, warehouse or
+> location, nor for configuration changes. In v1, master data's creation is therefore attributed by no event and by
+> no column. Recorded as OQ-024; the owner can add types by the `AU-13` change.
+
+`audit_event.actor_id` and `effective_actor_id` (domain 6) are the authenticated principal taken from the audit
+context (§17), not `*_by` columns. Domain 7 decides whether they reference `employee`; a failed sign-in has no actor.
+
 ## 12. Guards that depend on tables designed later
 
 Some rules are defined by the *existence of rows* that a later domain creates: `ORG-01`/`ORG-02` (the organization's
@@ -193,6 +201,8 @@ Each domain document lists the guards it leaves pending, and the domain that clo
 | `WH-02` | A central-warehouse location never goes negative | Domain 3 |
 | `MS-16`, `MS-19`, `D-03` | A movement's store is the location's warehouse store, or a store attributed to the central location | Domain 3 |
 | `SP-55`, `BI-41` | A sale with a posted return cannot be voided | The migration that builds voids (OQ-017); until then no sale can be voided (`SS044`) |
+| `AU-05`, `BI-33` | A document's `*_by` columns equal the authenticated principal of the change (the audit context's actor) | Domain 7, with the employee table |
+| `AU-09`, `RT-295` | Personal fields are redacted in an audit event's `before` and `after` at write time | Domain 7, which brings the first personal data (the employee) |
 
 ## 13. Citations
 
@@ -242,7 +252,7 @@ standard leaves to implementations and PostgreSQL does not use:
 | `SS007` | A variant with live barcodes must have exactly one primary | `assert_variant_has_primary_barcode()` |
 | `SS008` | An active variant of a released product needs a price in force | `product_before_status_change()`, `assert_new_variant_usable()` |
 | `SS009` | Nothing new may reference an archived product | `assert_new_variant_usable()` |
-| `SS010` | An append-only ledger refuses UPDATE, DELETE and TRUNCATE, for every role | `forbid_ledger_rewrite()` |
+| `SS010` | An append-only ledger refuses UPDATE, DELETE and TRUNCATE, for every role (movements, cash, audit events, the audit chain) | `forbid_ledger_rewrite()` |
 | `SS011` | Not enough stock under `BlockNegative` (the message names what is available) | `apply_inventory_movement()` |
 | `SS012` | A service variant cannot be stocked | `apply_inventory_movement()` |
 | `SS013` | A quantity has more decimals than its unit allows | `apply_inventory_movement()` |
@@ -256,7 +266,7 @@ standard leaves to implementations and PostgreSQL does not use:
 | `SS021` | A used unit's quantity kind cannot change | `freeze_used_quantity_kind()` |
 | `SS022` | Posting or reversal did not write exactly its movements | `assert_adjustment_posting_complete()`, `assert_return_posting_complete()` |
 | `SS023` | A Transit location is reached only by transfer movements | `apply_inventory_movement()` |
-| `SS024` | An archived reason code takes no new documents | `stock_adjustment_before_write()`, `assert_reason_code_live()` |
+| `SS024` | An archived reason code takes no new documents | `stock_adjustment_before_write()`, `assert_reason_code_live()` (also for an audit context's reason) |
 | `SS025` | The till is not in service, or is in training, for a real sale or a cash refund | `checkout_before_write()`, `sale_before_insert()`, `cash_shift_before_write()`, `refund_before_write()` |
 | `SS026` | The shift is not open | `checkout_before_write()`, `sale_before_insert()`, `refund_before_write()` |
 | `SS027` | The checkout is not open | `payment_before_write()`, `sale_before_insert()` |
@@ -286,6 +296,9 @@ standard leaves to implementations and PostgreSQL does not use:
 | `SS051` | A refund for a return names a line that the posted return did not take back | `apply_refund_hold()` |
 | `SS052` | The refund's tax is not the line's stored tax in proportion to the amount refunded | `apply_refund_hold()` |
 | `SS053` | The refund is not whole at commit (its lines; the drawer payout and the completion) | `assert_refund_whole()`, `assert_refund_payout_completes()` |
+| `SS054` | An audited change, or an application event, lacks the authenticated actor, source or correlation id | `write_audit_event()`, `record_audit_event()` |
+| `SS055` | A transition whose contract needs a reason has none from its document or the audit context | `write_audit_event()` |
+| `SS056` | The application tried to record an event type the database writes itself | `record_audit_event()` |
 
 Where a refusal names a quantity, an amount or a date, the value is in the error's `DETAIL` field, so the application
 can show it without parsing the message.
@@ -299,3 +312,21 @@ can show it without parsing the message.
    and to accept the legitimate case, and every append-only table is shown to refuse `UPDATE` and `DELETE` to the
    runtime role. A test that could pass with the constraint removed is not a test of it.
 4. An update to BUILD-STATUS.md, including anything that failed.
+
+## 17. The audit context
+
+Every audited change runs with the authenticated request context set for its transaction (`AU-05`, `AU-10`,
+[D6](D6-AUDIT.md) §4):
+
+```sql
+SELECT set_config('smartstore.actor_id', $1, true),
+       set_config('smartstore.source', $2, true),          -- UI, API, Job, Device, OfflineSync or Terminal
+       set_config('smartstore.correlation_id', $3, true);
+```
+
+The optional settings are `effective_actor_id` (impersonation), `role`, `terminal_id`, `client_operation_id`,
+`ip_address`, and `reason_code_id`, for a transition that needs a reason its document cannot carry. The repository
+layer sets them from the signed-in session, never from a request body. It sets them with the third argument `true`,
+so they end with the transaction. Without the three required settings, an audited change is refused (`SS054`). A
+new table whose changes the specification audits gets its trigger in its own migration. A new machine's edges carry
+their §22 Audit type and reason flag in `state_machine_edge`.

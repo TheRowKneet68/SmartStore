@@ -71,6 +71,12 @@ const SCOPE: Record<string, 'tenant' | 'organization' | 'store' | 'reference' | 
   customer_return_line: 'store',
   refund: 'store',
   refund_line: 'store',
+  // Domain 6. MS-29: the audit log is organization-global; AU-07: an event carries the store of its entity when the
+  // entity has one, so store_id is nullable here by rule. fk_audit_event_store proves it when present.
+  audit_event_type: 'reference',
+  audit_event: 'exception',
+  audit_chain_head: 'organization',
+  audit_chain_link: 'organization',
 };
 
 /** Tables the runtime role may DELETE from, each with its authority. Nothing else may be deleted. */
@@ -92,6 +98,8 @@ const APPEND_ONLY = [
   'inventory_movement',
   'cash_transaction',
   'sale_line',
+  'audit_event',
+  'audit_chain_link',
 ];
 
 let db: TestDb;
@@ -206,6 +214,14 @@ describe('RT-001, MS-01: every table declares its scope, and store scope is a no
       `SELECT 1 FROM pg_constraint WHERE conname = 'ck_warehouse_store_iff_attached' AND conrelid = 'warehouse'::regclass`,
     );
     expect(rows).toHaveLength(1);
+  });
+
+  it('MS-29, AU-07: the audit exception is organization-scoped, with its store proven by key when it has one', async () => {
+    const cols = await columns();
+    const org = cols.find((x) => x.table_name === 'audit_event' && x.column_name === 'organization_id');
+    expect(org?.is_nullable).toBe('NO');
+    expect((await tablesWithForeignKey('organization_id', 'organization')).has('audit_event')).toBe(true);
+    expect((await tablesWithForeignKey('store_id', 'store')).has('audit_event')).toBe(true);
   });
 });
 
