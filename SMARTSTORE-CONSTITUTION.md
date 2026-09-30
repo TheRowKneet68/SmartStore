@@ -696,3 +696,31 @@ This document was created and validated:
 
 Per the boundary of this task, no Phase 3 work was started: no schemas, no migrations, no
 application code, and no framework selection were created.
+
+---
+
+## 35. ADDENDUM — OWNER AUTHORIZATION FOR PHASE 3 (2026-09-30)
+
+**Append-only.** No existing section of this Constitution is changed by this addendum. Sections 1 through 34 stand
+as written, including §31's record that Phase 3 was not started as of 2026-09-29. This addendum is dated later and
+supersedes that status only; every other rule in this document remains in force.
+
+**Owner authorization.** Recorded by the owner on 2026-09-30:
+
+> Owner authorizes Phase 3 (database design) and the subsequent v1 implementation. The backend language/framework
+> must be chosen by an ADR that the owner approves. PostgreSQL stays per ADR-03. All other Constitution rules still
+> apply.
+
+**What this does and does not change.**
+
+| Rule | Effect |
+|---|---|
+| §6 Phase discipline | Phase 3 is authorized to begin. Scope is database design; application implementation follows in later phases. |
+| §14 Database design rule | Unchanged. PostgreSQL is the central store per `ADR-03`; no SQLite-as-server. |
+| §15 API / backend rule | Unchanged, and now gated on an owner-approved ADR for the backend language/framework. The ADR is the only place that choice may be made, and the owner must approve it. |
+| §7 Owner decisions | Unchanged. Nothing was decided on the owner's behalf. `D-01` through `D-14` stand as recorded in `OWNER-DECISIONS.md`; `D-12` and `D-13` remain open and are release/configuration inputs, not schema gates. |
+| §32 Constitution change rule | This addendum is the required record: change (authorize Phase 3 and v1 implementation), reason (all entry criteria met, last blocker `CON-03` closed by D-14), evidence (`PHASE-3-ENTRY-CRITERIA.md` §6, `PRE-PHASE-3-GAP-REGISTER.md` §7.7), affected rules (listed above), affected phases (Phase 3, then v1 implementation), migration impact (none yet, no schema exists), approval requirement (owner, given). |
+| Everything else | Unchanged and still binding, including the anti-hallucination rule (§3), the evidence rule (§4), requirement integrity (§8), business invariants (§9), auditability (§12), state machines (§13), and the testing rule (§19). |
+
+**Still not authorized by this addendum:** choosing a backend language or framework. That choice requires an ADR
+the owner approves. Authorizing the *work* is not authorizing a *stack*.
