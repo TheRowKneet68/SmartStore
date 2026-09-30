@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDb, sqlState, type TestDb } from './db.ts';
+import { createTestDb, inTransaction, sqlState, type TestDb } from './db.ts';
 import {
   actor,
   ensureTestCurrency,
@@ -28,21 +28,6 @@ afterAll(async () => {
   await db.drop();
 });
 
-/** Runs `fn` in one transaction on one connection and commits; rolls back and rethrows on any error. */
-async function inTransaction<T>(pool: pg.Pool, fn: (c: pg.PoolClient) => Promise<T>): Promise<T> {
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    const result = await fn(client);
-    await client.query('COMMIT');
-    return result;
-  } catch (error) {
-    await client.query('ROLLBACK').catch(() => undefined);
-    throw error;
-  } finally {
-    client.release();
-  }
-}
 
 describe('currency (BI-01, ADR-04)', () => {
   it('BI-01: a currency code is three upper-case letters', async () => {
@@ -216,16 +201,17 @@ describe('store settings (REQ-AU-06, SP-33, PR-38, IV-16)', () => {
     const tomorrow = new Date(Date.now() + 86_400_000).toISOString();
     await insertVersion(store, { effectiveFrom: tomorrow, taxMode: 'Inclusive', policy: 'BlockNegative' });
 
-    const inForce = (at: string) =>
+    // "Now" is the database's clock, never the test process's (RT-353). Using the client clock here made this test
+    // fail intermittently whenever it read a fraction of a millisecond behind the server.
+    const inForce = (offset: string) =>
       db.app.query<{ negative_stock_policy: string }>(
         `SELECT negative_stock_policy FROM store_setting_version
-         WHERE store_id = $1 AND effective_from <= $2::timestamptz
+         WHERE store_id = $1 AND effective_from <= now() + $2::interval
          ORDER BY effective_from DESC LIMIT 1`,
-        [store, at],
+        [store, offset],
       );
-    expect((await inForce(new Date().toISOString())).rows[0]!.negative_stock_policy).toBe('AllowNegative');
-    const dayAfter = new Date(Date.now() + 2 * 86_400_000).toISOString();
-    expect((await inForce(dayAfter)).rows[0]!.negative_stock_policy).toBe('BlockNegative');
+    expect((await inForce('0 seconds')).rows[0]!.negative_stock_policy).toBe('AllowNegative');
+    expect((await inForce('2 days')).rows[0]!.negative_stock_policy).toBe('BlockNegative');
   });
 
   it('REQ-AU-06: two versions cannot take effect at the same instant', async () => {

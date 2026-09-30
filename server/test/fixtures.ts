@@ -73,6 +73,110 @@ export async function insertWarehouse(pool: pg.Pool, organizationId: string, sto
   }
 }
 
+// ---------------------------------------------------------------- catalog (domain 2)
+
+export async function insertUnit(db: Db, organizationId: string, kind = 'Countable', scale = 0): Promise<string> {
+  const { rows } = await db.query<{ id: string }>(
+    `INSERT INTO unit (organization_id, code, name, quantity_kind, scale) VALUES ($1, $2, 'Unit', $3, $4) RETURNING id`,
+    [organizationId, `U-${randomUUID()}`, kind, scale],
+  );
+  return rows[0]!.id;
+}
+
+/** TEST-ONLY tax category; no real rate or category is asserted anywhere (D-12, GAP-044). */
+export async function insertTaxCategory(db: Db, organizationId: string): Promise<string> {
+  const { rows } = await db.query<{ id: string }>(
+    `INSERT INTO tax_category (organization_id, code, name) VALUES ($1, $2, 'TEST-ONLY') RETURNING id`,
+    [organizationId, `T-${randomUUID()}`],
+  );
+  return rows[0]!.id;
+}
+
+export async function insertCategory(db: Db, organizationId: string, parentId: string | null = null): Promise<string> {
+  const { rows } = await db.query<{ id: string }>(
+    `INSERT INTO category (organization_id, parent_id, name, sort_order) VALUES ($1, $2, 'Category', 0) RETURNING id`,
+    [organizationId, parentId],
+  );
+  return rows[0]!.id;
+}
+
+export async function insertProduct(db: Db, organizationId: string, categoryId: string): Promise<string> {
+  const { rows } = await db.query<{ id: string }>(
+    `INSERT INTO product (organization_id, category_id, name, status_changed_by) VALUES ($1, $2, 'Product', $3) RETURNING id`,
+    [organizationId, categoryId, actor()],
+  );
+  return rows[0]!.id;
+}
+
+export async function insertVariant(
+  db: Db,
+  organizationId: string,
+  productId: string,
+  unitId: string,
+  taxCategoryId: string | null = null,
+): Promise<string> {
+  const { rows } = await db.query<{ id: string }>(
+    `INSERT INTO product_variant (organization_id, product_id, base_unit_id, tax_category_id) VALUES ($1, $2, $3, $4) RETURNING id`,
+    [organizationId, productId, unitId, taxCategoryId],
+  );
+  return rows[0]!.id;
+}
+
+/** An organization default price in minor units. Omitting `effectiveFrom` makes it take effect now. */
+export async function insertPrice(
+  db: Db,
+  organizationId: string,
+  variantId: string,
+  amount = 100,
+  effectiveFrom?: string,
+): Promise<void> {
+  if (effectiveFrom) {
+    await db.query(
+      `INSERT INTO variant_price (organization_id, variant_id, currency_code, amount, effective_from, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [organizationId, variantId, TEST_CURRENCY, amount, effectiveFrom, actor()],
+    );
+  } else {
+    await db.query(
+      `INSERT INTO variant_price (organization_id, variant_id, currency_code, amount, created_by) VALUES ($1, $2, $3, $4, $5)`,
+      [organizationId, variantId, TEST_CURRENCY, amount, actor()],
+    );
+  }
+}
+
+export async function insertBarcode(
+  db: Db,
+  organizationId: string,
+  variantId: string,
+  value: string,
+  kind: string,
+  isPrimary = true,
+): Promise<string> {
+  const { rows } = await db.query<{ id: string }>(
+    `INSERT INTO product_barcode (organization_id, variant_id, value, kind, is_primary) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+    [organizationId, variantId, value, kind, isPrimary],
+  );
+  return rows[0]!.id;
+}
+
+export interface SellableVariant {
+  productId: string;
+  variantId: string;
+  unitId: string;
+  taxCategoryId: string;
+}
+
+/** A released product with one priced, tax-classified variant, as later domains need. Barcodes are added separately. */
+export async function insertSellableVariant(db: Db, organizationId: string, price = 100): Promise<SellableVariant> {
+  const unitId = await insertUnit(db, organizationId);
+  const taxCategoryId = await insertTaxCategory(db, organizationId);
+  const productId = await insertProduct(db, organizationId, await insertCategory(db, organizationId));
+  const variantId = await insertVariant(db, organizationId, productId, unitId, taxCategoryId);
+  await insertPrice(db, organizationId, variantId, price);
+  await db.query(`UPDATE product SET status = 'Active', status_changed_by = $2 WHERE id = $1`, [productId, actor()]);
+  return { productId, variantId, unitId, taxCategoryId };
+}
+
 export async function insertLocation(
   db: Db,
   organizationId: string,

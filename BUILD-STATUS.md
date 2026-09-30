@@ -38,6 +38,19 @@ remain. The last one, `CON-03`, was closed by owner decision **D-14**.
 | Loyalty | Accrual basis is documented and configurable (D-11), but no loyalty build in v1 |
 | Multi-store | Warehouse attribution is designed for future multi-store (D-03); v1 is single-store |
 
+Outside the v1 slice as well, found while designing (the slice is the positive list above). Each is additive to the
+schema; details in the domain documents:
+
+| Area | Rules | Found in |
+|---|---|---|
+| Weighed goods (scale, embedded-weight barcodes, tare) | `PR-13`, `PR-24`..`PR-28`, `RT-038`, `RT-039` | D2 — needs scales (devices deferred) |
+| Variant option matrix | `PR-03`, `RT-030` | D2 — v1 variants carry a descriptive name |
+| Unit conversions, packaging sales, purchasing units | `PR-16`..`PR-23`, `RT-034`..`RT-037` | D2 — purchasing is outside the slice |
+| Discounts and coupons | `PR-42`..`PR-45`, `RT-049`..`RT-052`, `RT-494` | D2 |
+| Customer-group prices | `PR-30` tier 1 | D2 — customers are outside the slice |
+| Supplier products, imports, attributes, images | `PR-07`, `PR-49`..`PR-55` | D2 |
+| Approval workflow | `PR-32` backdated price, `PR-33`/`RT-043` below-cost price | D2 — without approvals these are **refused** (architecture §8.4 fallback) |
+
 Design these so the schema can carry them without a rewrite. Do not build them.
 
 Test gates deferred with them (`TEST-STRATEGY.md` §1, ADR-31 §7): idempotency of offline apply (`OF-22/23`) waits for
@@ -85,9 +98,18 @@ Owner-approved with ADR-31 on 2026-09-30 (ADR-31 §13 has the full text):
   - Mutation-checked: three guards removed one at a time, each test went red.
   - Guards that depend on later tables are registered in CONVENTIONS §12 and D1 §6, not stubbed.
 
+- 2026-09-30 — **Domain 2 — Product / Barcode / Unit.** DESIGNED + IMPLEMENTED (migration) + **TESTED** (105
+  tests passing, 10 consecutive clean runs). No application code. [D2 design](docs/database/D2-PRODUCT-BARCODE-UNIT.md).
+  - Tables: `state_machine_state`/`state_machine_edge` (lifecycles as data, one trigger enforces any machine),
+    `unit`, `tax_category`, `tax_rate`, `category`, `brand`, `product`, `product_variant`, `product_barcode`,
+    `variant_price`, `store_variant_price`, `variant_standard_cost`.
+  - Scan path: exact match on `uq_product_barcode_active_key (organization_id, lookup_key)`; UPC-A and EAN-13
+    spellings of one code are one barcode; check digits validated in the database.
+  - Mutation-checked: four guards removed one at a time, each test went red.
+
 ## In progress
 
-- Domain 2 (Product / Barcode / Unit): design document and migration.
+- Domain 3 (Inventory ledger / Batch): design document and migration.
 
 ## Owner actions pending
 
@@ -101,10 +123,10 @@ Until then, tests run on a scratch PostgreSQL 17.11 cluster and a portable Node 
 
 ## Next
 
-1. **Domain 2 — Product / Barcode / Unit.** Barcode lookup is an exact match on a unique index (`PR-08`, `PR-12`,
-   `UX-48`) and is the scan path for the ~100 ms budget.
-2. Then continue domain by domain — one at a time, with tests, committing after each passing step: 3 Inventory
-   ledger / Batch, 4 Sale / Payment, 5 Returns / Refunds, 6 Audit, 7 Employee / Role / Permission.
+1. **Domain 3 — Inventory ledger / Batch.** Balance plus append-only movements (`ADR-05`), lock the balance row,
+   movement and balance in one transaction (§9.2), reconciliation that alerts and never repairs (`ADR-22`).
+2. Then continue domain by domain — one at a time, with tests, committing after each passing step: 4 Sale / Payment,
+   5 Returns / Refunds, 6 Audit, 7 Employee / Role / Permission.
 3. Then Step 3, implementation, in the order in the working agreements.
 
 Update this file after every step, including steps that failed and were abandoned.
@@ -137,3 +159,13 @@ Append-only. One dated line per step, including failed and abandoned attempts.
   the test goes red. The migration file was restored byte for byte after each mutation.
   Also: the untracked `docs.zip` present at session start is gone from the working tree. This session's commands did
   not delete it (the one `Remove-Item` attempted was blocked, and it targeted a scratch file). Flagged to the owner.
+- 2026-09-30 — Domain 2. Failed attempts, each fixed:
+  (1) The first run had two failing tests whose expectations were wrong: PostgreSQL runs BEFORE triggers before CHECK
+  constraints, so a self-move is refused by the cycle trigger (`SS006`), not the check (`23514`), and `OutOfStock` by
+  the state machine (`SS004`). The tests now expect the named codes and prove each CHECK separately.
+  (2) Three tests were flaky (about 3 failing runs in 17). Two used the test process's clock to ask "what is in force
+  now" against database-stamped times. One called `has_column_privilege` with a literal column name that SQL's
+  unordered WHERE evaluation sometimes applied to `schema_migrations`. Fixed at the root and confirmed by 10
+  consecutive clean runs.
+  (3) Twice wrote SQL-style `''` escapes into TypeScript strings (a syntax error), and once patched it with a
+  `.replace` hack before replacing that with proper double-quoted strings.

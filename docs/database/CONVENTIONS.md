@@ -94,8 +94,9 @@ domain document), [PHASE-2-ARCHITECTURE.md](../architecture/PHASE-2-ARCHITECTURE
   overview §3.9. No store-scoped column is nullable or absent.
 - An **organization-global** table has `organization_id uuid NOT NULL REFERENCES organization(id)` and **no**
   `store_id`. Overview §3.9: `StoreId` is absent, not null, only for organization-global entities.
-- A store-scoped table does not repeat `organization_id`: the store determines it, and the caller's permitted store
-  set is always inside one organization.
+- A store-scoped table does not repeat `organization_id`, because the store determines it, **unless** it needs the
+  column for a composite foreign key that proves a parent is in the same organization (for example a store price of
+  an organization-global variant).
 - A row that must belong to the **same** store or organization as another row uses a composite foreign key on
   `(id, store_id)` or `(id, organization_id)`, so a mismatch is impossible rather than checked.
 - The scope predicate is applied in the repository layer before pagination, filtering, sorting and aggregation
@@ -140,6 +141,14 @@ constraint, and a test then asserts that no column named `*_by` lacks one.
 | `store` | `deactivated_by` | Domain 1 |
 | `store_setting_version` | `created_by` | Domain 1 |
 | `storage_location_attribution` | `created_by` | Domain 1 |
+| `tax_rate` | `created_by` | Domain 2 |
+| `category` | `archived_by` | Domain 2 |
+| `product` | `status_changed_by` | Domain 2 |
+| `product_variant` | `archived_by` | Domain 2 |
+| `product_barcode` | `archived_by` | Domain 2 |
+| `variant_price` | `created_by` | Domain 2 |
+| `store_variant_price` | `created_by` | Domain 2 |
+| `variant_standard_cost` | `created_by` | Domain 2 |
 
 Creation of master data (organization, store, warehouse, location) is attributed by its audit event (domain 6), not
 by a `created_by` column. An organization is necessarily created before any of its employees exists, so a
@@ -213,6 +222,12 @@ standard leaves to implementations and PostgreSQL does not use:
 | `SS001` | A recorded fact (who and when) cannot be rewritten | `record_deactivation()` |
 | `SS002` | A warehouse must have its Default storage location | `assert_warehouse_has_default_location()` |
 | `SS003` | A document-number counter cannot move backwards | `forbid_document_number_decrease()` |
+| `SS004` | Not a legal state for creation, or not an edge of the machine | `enforce_state_transition()` |
+| `SS005` | A product cannot be activated without an active variant | `product_before_status_change()` |
+| `SS006` | A category cannot be moved under itself or its own descendant | `prevent_category_cycle()` |
+| `SS007` | A variant with live barcodes must have exactly one primary | `assert_variant_has_primary_barcode()` |
+| `SS008` | An active variant of a released product needs a price in force | `product_before_status_change()`, `assert_new_variant_usable()` |
+| `SS009` | Nothing new may reference an archived product | `assert_new_variant_usable()` |
 
 ## 16. What every domain delivers
 

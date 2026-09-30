@@ -132,6 +132,47 @@ fallback is a design that holds either answer, not a guess at the answer.
   location codes per warehouse. This is a data-integrity choice, not business behaviour, and it is listed as such in
   the domain 1 design so it can be reversed.
 
+### OQ-009 — Product `Draft → Hidden`: drawn but not contracted
+
+- **Unknown:** `state-machines.md` §1's diagram draws a `Draft → Hidden` branch, but the §22.1 transition contract
+  (the eight attributes per edge) lists only `Active → Hidden`.
+- **Why not answerable from `/docs`:** the two representations in one document disagree. §22 is the contract, the
+  diagram is not.
+- **Blocked:** nothing.
+- **Meanwhile:** the §22.1 table is built. `Draft → Hidden` is refused (`SS004`). Adding it later is one row in
+  `state_machine_edge`.
+
+### OQ-010 — Variant lifecycle: deactivation, archival, reactivation
+
+- **Unknown:** no variant state machine exists. `EC-33` and `RT-443` say a variant is "deactivated", which blocks new
+  use but keeps stock. `PR-48` and `RT-495` say a variant is "archived" while its product stays on sale. Nothing says
+  whether these are one edge or two, or whether either can be reversed.
+- **Why not answerable from `/docs`:** there is no machine and no §22 contract for `ProductVariant`.
+- **Blocked:** nothing in the schema.
+- **Meanwhile:** one write-once archival fact (`archived_at`, `archived_by`) satisfies both descriptions: it blocks new
+  use and never touches stock. No reactivation is built.
+
+### OQ-011 — What the product completeness check requires
+
+- **Unknown:** `SM-12` requires a completeness check on `Draft → Active`. `PR-02` defines it as "at least one active
+  variant", and `RT-042` requires a price on an active variant. But `RT-028`'s acceptance also says "a non-draft
+  product lacking a barcode cannot be activated", which contradicts `PR-11` and `RT-489`: a search-only variant may
+  have no barcode and is still sellable.
+- **Why not answerable from `/docs`:** the domain rule and an acceptance criterion disagree. The traceability matrix
+  says the domain document is authoritative for a rule's wording.
+- **Blocked:** nothing.
+- **Meanwhile:** activation requires `PR-02` and `RT-042` (a live variant, each priced), and no barcode. A barcode
+  requirement would be one more condition in `product_before_status_change()`.
+
+### OQ-012 — Tax jurisdiction selection and compound taxes
+
+- **Unknown:** a tax rate carries "a jurisdiction label" (product-domain §9), but no rule says how a store selects its
+  jurisdiction, or whether several rates (for example national plus local) apply to one category at once.
+- **Why not answerable from `/docs`:** jurisdictional tax is decision `D-12`, still open (`GAP-044`).
+- **Blocked:** release, with `GAP-044`. Not engineering.
+- **Meanwhile:** one rate is in force per tax category at a time (the latest version whose effective time has passed),
+  and the jurisdiction is a label. Compound taxes would need a rate-to-store mapping, which is additive.
+
 ## How to use this file
 
 - Add an entry the moment you hit something the specification does not answer. Then continue with a different task.

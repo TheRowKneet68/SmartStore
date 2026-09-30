@@ -58,6 +58,22 @@ export async function createTestDb(): Promise<TestDb> {
   };
 }
 
+/** Runs `fn` in one transaction on one connection and commits; rolls back and rethrows on any error. */
+export async function inTransaction<T>(pool: pg.Pool, fn: (c: pg.PoolClient) => Promise<T>): Promise<T> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await fn(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 /** SQLSTATE of a failed query, or undefined if it succeeded. Tests assert on codes, never on message text. */
 export async function sqlState(run: Promise<unknown>): Promise<string | undefined> {
   try {

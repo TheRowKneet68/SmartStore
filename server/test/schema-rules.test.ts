@@ -29,10 +29,31 @@ const SCOPE: Record<string, 'tenant' | 'organization' | 'store' | 'reference' | 
   storage_location: 'organization',
   storage_location_attribution: 'store',
   document_number_sequence: 'store',
+  // Domain 2. organization-model s8.1: the catalog, units and tax categories are organization-global.
+  state_machine_state: 'reference',
+  state_machine_edge: 'reference',
+  unit: 'organization',
+  tax_category: 'organization',
+  tax_rate: 'organization',
+  category: 'organization',
+  brand: 'organization',
+  product: 'organization',
+  product_variant: 'organization',
+  product_barcode: 'organization',
+  variant_price: 'organization',
+  variant_standard_cost: 'organization',
+  store_variant_price: 'store', // organization-model s8.2: a store-level price is store-scoped
 };
 
 /** Tables whose rows are history: the application role may read and insert, never update or delete. */
-const APPEND_ONLY = ['store_setting_version', 'storage_location_attribution'];
+const APPEND_ONLY = [
+  'store_setting_version',
+  'storage_location_attribution',
+  'tax_rate',
+  'variant_price',
+  'store_variant_price',
+  'variant_standard_cost',
+];
 
 let db: TestDb;
 
@@ -64,15 +85,19 @@ async function columns(): Promise<Column[]> {
   return rows;
 }
 
-/** Tables with a foreign key whose columns include `column` and that references `target`. */
-async function tablesWithForeignKey(column: string, target: string): Promise<Set<string>> {
+/**
+ * Tables with a foreign key whose columns include `column`, referencing `target` (any table when omitted).
+ * A composite key such as (variant_id, organization_id) -> product_variant proves the organization as surely as a
+ * direct key to organization, because the parent's own organization_id is proven the same way.
+ */
+async function tablesWithForeignKey(column: string, target?: string): Promise<Set<string>> {
   const { rows } = await db.owner.query<{ name: string }>(
     `SELECT DISTINCT cl.relname AS name
      FROM pg_constraint con
        JOIN pg_class cl ON cl.oid = con.conrelid
        JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = ANY (con.conkey)
-     WHERE con.contype = 'f' AND a.attname = $1 AND con.confrelid = $2::regclass`,
-    [column, target],
+     WHERE con.contype = 'f' AND a.attname = $1 AND ($2::text IS NULL OR con.confrelid = $2::regclass)`,
+    [column, target ?? null],
   );
   return new Set(rows.map((r) => r.name));
 }
@@ -101,15 +126,14 @@ describe('RT-001, MS-01: every table declares its scope, and store scope is a no
 
   it('organization-scoped tables carry organization_id NOT NULL with a foreign key, and no store_id', async () => {
     const cols = await columns();
-    const fk = await tablesWithForeignKey('organization_id', 'organization');
-    const viaWarehouse = await tablesWithForeignKey('organization_id', 'warehouse');
+    const fk = await tablesWithForeignKey('organization_id');
     const problems = Object.entries(SCOPE)
       .filter(([, scope]) => scope === 'organization')
       .flatMap(([table]) => {
         const c = cols.find((x) => x.table_name === table && x.column_name === 'organization_id');
         if (!c) return [`${table}: no organization_id`];
         if (c.is_nullable === 'YES') return [`${table}: organization_id is nullable`];
-        if (!fk.has(table) && !viaWarehouse.has(table)) return [`${table}: organization_id has no foreign key`];
+        if (!fk.has(table)) return [`${table}: organization_id is in no foreign key`];
         if (cols.some((x) => x.table_name === table && x.column_name === 'store_id')) return [`${table}: has store_id`];
         return [];
       });
@@ -163,11 +187,13 @@ describe('ADR-11, BI-40, CONVENTIONS s10: what the runtime role may do', () => {
   });
 
   it('RT-353: created_at is never insertable by the runtime role, so it is always server time', async () => {
+    // Pass the row's own column_name, not the literal 'created_at': SQL does not fix the order WHERE conditions are
+    // evaluated in, and the literal made this query fail intermittently on tables without that column.
     const { rows } = await db.owner.query<{ t: string }>(`
       SELECT table_name AS t FROM information_schema.columns
       WHERE table_schema = 'public' AND column_name = 'created_at'
-        AND (has_column_privilege('smartstore_app', table_name, 'created_at', 'INSERT')
-          OR has_column_privilege('smartstore_app', table_name, 'created_at', 'UPDATE'))`);
+        AND (has_column_privilege('smartstore_app', format('%I', table_name), column_name, 'INSERT')
+          OR has_column_privilege('smartstore_app', format('%I', table_name), column_name, 'UPDATE'))`);
     expect(rows).toEqual([]);
   });
 
