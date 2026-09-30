@@ -199,3 +199,23 @@ Section 7.3 gives the `GAP-035` register status. The C-06 *criterion* status, id
 It is recorded here so this register can be read on its own. `GAP-035` is not closed by that wording:
 `GAP-045`, `GAP-046` and `GAP-047` are open alongside it, and `GAP-046` is the one approving the 175-row list
 will not decide.
+
+### 7.5 C-06 owner decisions recorded 2026-09-30
+
+The owner reviewed `OWNER-APPROVAL-WORKSHEET.md` and recorded decisions. The criterion status in 7.4 narrows
+from two conditions to one:
+
+- **Row approvals: DONE.** 175 rows, no blanks. 10 owner decisions among the drafted rows (13 GAP-046
+  corrections, of which `RT-475` is in the drafted range, plus the `RT-435` reword and the `RT-476` citation
+  change), and 165 rows dispositioned by agent review under explicit owner delegation. Both kinds are labelled
+  distinctly in the worksheet so owner judgement and delegated review are never conflated.
+- **Applied to the trace:** 15 rows. 14 wordings (the 13 approved GAP-046 corrections plus the owner's `RT-435`
+  reword) and 1 citation (`RR-09` added to `RT-476`). `RR-09` is now cited by `RT-148` and `RT-476`; its canonical
+  home in 26.2 is unchanged and the 1161-rule bijection still measures clean.
+- **Still OPEN: owner acceptance of the rebuilt audit.** This is the owner's own judgement and has deliberately
+  not been answered. Until it is, the C-06 criterion status remains:
+
+> **MET pending owner approval of 175 proposed rows and acceptance of the rebuilt audit**
+
+with the first condition now satisfied and the second outstanding. `GAP-046` is closed by the 13 approvals.
+`GAP-045` and `GAP-047` remain open. `measure-c06.ps1` passes all checks after the change.
