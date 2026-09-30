@@ -1330,4 +1330,87 @@ citations are present, but which batch adjudicated them, and why, is **original 
 This is the honest limit of the rebuild. The traceability work itself is unaffected: every one of the
 1161 rules is `mapped` and cited, 0 are `inferred`, and the coverage table and the citation columns are a
 bijection. What is missing is the narrative record for a subset of the 342, not the mappings.
+## Independent verification sample - 42 of 1161 mappings
 
+Added after the rebuild. This section is new work, not recovered prose.
+
+### Why this sample
+
+A rebuild that only checks its own arithmetic can be internally consistent and still wrong, so a
+sample was drawn **by a method fixed before any rule text was read**, and each sampled rule was then
+checked by reading the source and the RT row it is filed under.
+
+Selection method, stated in advance:
+
+- **Stratum A** - the 246 rules homed in a row this review drafted (`RT-355`..`RT-529`): every
+  12th rule in id order, first 20.
+- **Stratum B** - the remaining 915 rules homed in pre-existing rows: every 45th rule in id order,
+  first 20.
+- **Coverage top-up** - two rules added, lowest id in each source document not otherwise represented
+  (`MS-01`, `RP-01`... `RP-01` was already in A; the top-up was `MS-01` and `RP-01`).
+
+Final sample: **42 rules**, covering **all 25 source documents**, of which **21 are homed in a row
+this review drafted** and 21 in pre-existing rows.
+
+Each rule carries one of four verdicts:
+
+| Verdict | Meaning |
+|---|---|
+| `CONFIRMED` | The row's statement is supported by the source; this rule's own contribution is represented |
+| `WEAK MATCH` | The rule is filed at a thematically correct row, but that row's wording does not carry the rule's substance |
+| `WRONG HOME` | The rule is filed under a row about an unrelated subject |
+| `ADDS BEHAVIOUR NOT IN SOURCE` | The row asserts something the rule and its co-cited rules do not say |
+
+### Result
+
+| Verdict | Count |
+|---|---|
+| `CONFIRMED` | 29 |
+| `WEAK MATCH` | 12 |
+| `ADDS BEHAVIOUR NOT IN SOURCE` | 1 |
+| `WRONG HOME` | 0 |
+
+**No sampled rule is filed under an unrelated row.** Every one of the 13 non-confirmed verdicts is a
+statement-granularity problem, not a mapping error: the citation is at a defensible row, the coverage
+bijection is unaffected, and nothing here was silently changed.
+
+### The 13 findings in detail
+
+| Rule | Source quote | Home | Verdict | Note |
+|---|---|---|---|---|
+| `IV-34` | "Adjustments are one-directional per line: a line is an increase or a decrease, with a non-negative quantity" | `RT-475` | `ADDS BEHAVIOUR NOT IN SOURCE` | The row also asserts "a negative stock balance is a store policy decision". Neither `IV-34` nor `BI-05` says that; the stock-policy rule is `SM-14`, which is homed at `RT-410`. **This is the one finding inside a drafted row and needs an owner decision before C-06 closes** |
+| `CU-26` | "points are awarded on the line, in the completion transaction" | `RT-170` | `WEAK MATCH` | Row says "accrue on a configured basis and are a ledger projection"; the completion-transaction and one-event requirement is absent |
+| `EM-15` | "revoking access is immediate at the next request, within the permission cache window" | `RT-002` | `WEAK MATCH` | Row says only that store access is a first-class entity; revocation timing and the before/after audit entry are absent |
+| `HD-31` | "`Device.Disable` is a high-impact operation and is a SHOULD with approval for a device attached to an active till" | `RT-218` | `WEAK MATCH` | Row covers technician separation; the approval gate on a live till is absent |
+| `IV-45` | "Batch identity is preserved across a transfer: the same batch moves, retaining its batch number, expiry, and cost" | `RT-078` | `WEAK MATCH` | Row says only that out and in are paired; batch identity retention is absent |
+| `OF-20` | "`SyncSession` records a sync run ... `SyncConflict` records an individual item's disagreement" | `RT-223` | `WEAK MATCH` | Row says only that the queue is durable across restart; the recording requirement is absent |
+| `PR-21` | "Conversions carry no price" | `RT-036` | `WEAK MATCH` | Row is about exactness of a calculated conversion; the no-price rule is absent |
+| `PR-Q21` | "A rejected line may be returned to the supplier without ever entering stock" | `RT-106` | `WEAK MATCH` | Row says only that a receipt creates stock, not a payable; the return-to-supplier path is absent |
+| `RF-21` | "a tag never satisfies an approval" | `RT-200` | `WEAK MATCH` | Row states only the read, identity, permission, action order; the two-person approval prohibition is absent |
+| `RR-02` | "A return of an item bought at a different price ... Refunded at what was paid, per line" | `RT-145` | `WEAK MATCH` | Refund-at-what-was-paid is absent from the row |
+| `SM-64` | "Offline retries are bounded; a dead-lettered item needs a person" | `RT-231` | `WEAK MATCH` | Row covers reporting depth and a dead-lettered item; bounded retries are absent |
+| `SP-34` | "`gross x rate` is forbidden" | `RT-130` | `WEAK MATCH` | Row states store mode and rate version; the extract-then-derive prohibition is absent |
+| `SU-14` | "an early-payment discount is recorded when taken" | `RT-179` | `WEAK MATCH` | Row says the payable is a ledger projection; the recording requirement is absent |
+
+### What this does and does not change
+
+- **Within this review's scope** (`RT-355`..`RT-529`): 1 finding, `IV-34` / `RT-475`. It must be put
+  to the owner rather than fixed here.
+- **Outside this review's scope**: the other 12 findings all sit in **pre-existing** rows
+  (`RT-002`, `RT-036`, `RT-078`, `RT-106`, `RT-130`, `RT-145`, `RT-170`, `RT-179`, `RT-200`,
+  `RT-218`, `RT-223`, `RT-231`). These are **not covered by the 175-row owner confirmation list** and
+  need their own decision. They are recorded in the gap register rather than fixed.
+- **The verified invariants still hold**: 1161 rules, 1161 `mapped`, 0 `inferred`, coverage table and
+  citation columns a bijection.
+
+### Method notes worth keeping
+
+- Two source documents give a rule id a different text in its prose definition and in its summary
+  table. `MS-01` is the clean case: the prose definition at `multi-store-domain.md` line 16 is the
+  non-null `StoreId` rule and matches `RT-001` exactly, while the permitted-store-set text belongs to
+  `MS-03`. A regex-only extractor picked up `MS-03` and would have produced a false `WRONG HOME`. Every
+  `WRONG HOME` or `WEAK MATCH` verdict below was confirmed against the source by hand for this reason.
+- Where a verdict depended on a co-cited rule, that co-cited rule was also read: `UX-42` and `UX-43`
+  (for `RT-377`), `NT-23` (for `RT-359`), `SP-25` (for `RT-502`), `SM-15` (for `RT-410`), `BI-05`
+  (for `RT-475`). `RT-410`'s enumeration of the two policy names and `RT-422`'s "no `Void` state" were
+  **not** independently re-verified and are marked as such in the table above.
