@@ -202,6 +202,118 @@ COMMENT ON FUNCTION public.apply_inventory_movement() IS 'Cites: BI-02, BI-36, I
 
 
 --
+-- Name: apply_refund_hold(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.apply_refund_hold() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'public'
+    AS $$
+DECLARE
+  v_line record;
+  v_left bigint;
+BEGIN
+  IF NEW.status = 'Processing' AND OLD.status = 'Approved' THEN
+    IF NEW.customer_return_id IS NOT NULL AND (
+         NOT EXISTS (SELECT 1 FROM customer_return WHERE id = NEW.customer_return_id AND status = 'Posted')
+         OR EXISTS (SELECT 1 FROM refund_line f
+                    WHERE f.refund_id = NEW.id
+                      AND NOT EXISTS (SELECT 1 FROM customer_return_line r
+                                      WHERE r.customer_return_id = NEW.customer_return_id
+                                        AND r.sale_line_id = f.sale_line_id))) THEN
+      RAISE EXCEPTION 'a refund for a return pays only for lines that the posted return took back' USING ERRCODE = 'SS051';
+    END IF;
+    FOR v_line IN SELECT sale_line_id, amount, tax_amount FROM refund_line WHERE refund_id = NEW.id ORDER BY sale_line_id LOOP
+      -- RR-03, RR-24: one conditional increment holds the amount; it affects no row past the bound. The tax it carries
+      -- keeps the line's refunded tax at the line's stored tax in proportion to its refunded amount (RR-06, RR-42).
+      UPDATE sale_line
+        SET refunded_amount = refunded_amount + v_line.amount,
+            refunded_tax_amount = refunded_tax_amount + v_line.tax_amount
+      WHERE id = v_line.sale_line_id
+        AND refunded_amount + v_line.amount <= settled_amount
+        AND refunded_tax_amount + v_line.tax_amount
+            = round(tax_amount::numeric * (refunded_amount + v_line.amount) / NULLIF(settled_amount, 0));
+      IF NOT FOUND THEN
+        SELECT settled_amount - refunded_amount INTO v_left FROM sale_line WHERE id = v_line.sale_line_id;
+        IF v_line.amount > v_left THEN
+          RAISE EXCEPTION 'only % of that line can still be refunded', v_left USING ERRCODE = 'SS049', DETAIL = v_left::text;
+        END IF;
+        RAISE EXCEPTION 'refund tax must be the line''s stored tax in proportion to the amount refunded'
+          USING ERRCODE = 'SS052';
+      END IF;
+    END LOOP;
+  ELSIF NEW.status = 'Cancelled' AND OLD.status = 'Processing' THEN
+    UPDATE sale_line l
+      SET refunded_amount = l.refunded_amount - r.amount,
+          refunded_tax_amount = l.refunded_tax_amount - r.tax_amount
+    FROM refund_line r
+    WHERE r.refund_id = NEW.id AND l.id = r.sale_line_id;
+  END IF;
+  RETURN NULL;
+END
+$$;
+
+
+--
+-- Name: FUNCTION apply_refund_hold(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.apply_refund_hold() IS 'Cites: RR-03, RR-06, RR-24, RR-42, BI-10, SM-40, SM-41, PY-22, PY-23, RT-145, RT-155, RT-161, EC-02. Entering Processing holds the refund against each line''s settled amount with a conditional update, naming the remainder when it refuses, with the tax at the line''s stored tax in proportion; a refund for a return pays only for what that posted return took back. The hold stays through Failed and Completed and is released only by cancellation. The per-sale cap follows: the settled amounts sum to the total due (SS034).';
+
+
+--
+-- Name: apply_return_posting(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.apply_return_posting() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'public'
+    AS $$
+DECLARE
+  v_line    record;
+  v_left    numeric;
+  v_status  text;
+  v_derived text;
+BEGIN
+  IF NEW.status = 'Posted' AND OLD.status = 'Draft' THEN
+    FOR v_line IN SELECT sale_line_id, sum(quantity) AS quantity FROM customer_return_line
+                  WHERE customer_return_id = NEW.id GROUP BY sale_line_id ORDER BY sale_line_id LOOP
+      -- RR-14: one conditional increment; it affects no row if the sold quantity would be passed.
+      UPDATE sale_line SET returned_quantity = returned_quantity + v_line.quantity
+      WHERE id = v_line.sale_line_id AND returned_quantity + v_line.quantity <= quantity;
+      IF NOT FOUND THEN
+        SELECT quantity - returned_quantity INTO v_left FROM sale_line WHERE id = v_line.sale_line_id;
+        RAISE EXCEPTION 'only % of that line can still be returned', v_left USING ERRCODE = 'SS046', DETAIL = v_left::text;
+      END IF;
+    END LOOP;
+
+    -- SP-66: the status caches the counters, moving along the contracted edges of s22.6 only, so a return that takes
+    -- everything back at once passes through PartiallyReturned.
+    SELECT status INTO v_status FROM sale WHERE id = NEW.sale_id FOR UPDATE;
+    SELECT CASE WHEN bool_and(returned_quantity = quantity) THEN 'Returned'
+                WHEN bool_or(returned_quantity > 0) THEN 'PartiallyReturned' ELSE 'Completed' END
+      INTO v_derived
+    FROM sale_line WHERE sale_id = NEW.sale_id;
+    IF v_derived <> 'Completed' AND v_status = 'Completed' THEN
+      UPDATE sale SET status = 'PartiallyReturned' WHERE id = NEW.sale_id;
+    END IF;
+    IF v_derived = 'Returned' AND v_status <> 'Returned' THEN
+      UPDATE sale SET status = 'Returned' WHERE id = NEW.sale_id;
+    END IF;
+  END IF;
+  RETURN NULL;
+END
+$$;
+
+
+--
+-- Name: FUNCTION apply_return_posting(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.apply_return_posting() IS 'Cites: RR-14, BI-06, BI-16, RT-148, SP-66, SM-35, SM-35a. Posting a return increments each sold line''s returned counter with one conditional update that refuses to pass the sold quantity and names the remainder, then moves the sale''s status to what its counters say.';
+
+
+--
 -- Name: assert_adjustment_posting_complete(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -294,6 +406,33 @@ COMMENT ON FUNCTION public.assert_movement_adjustment_state() IS 'Cites: BI-27, 
 
 
 --
+-- Name: assert_movement_return_state(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.assert_movement_return_state() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  IF NEW.customer_return_id IS NULL THEN
+    RETURN NEW;
+  END IF;
+  IF NEW.movement_type <> 'SALE_RETURN'
+     OR NOT EXISTS (SELECT 1 FROM customer_return WHERE id = NEW.customer_return_id AND status = 'Posted') THEN
+    RAISE EXCEPTION 'a return moves stock only as SALE_RETURN, when it is posted' USING ERRCODE = 'SS016';
+  END IF;
+  RETURN NEW;
+END
+$$;
+
+
+--
+-- Name: FUNCTION assert_movement_return_state(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.assert_movement_return_state() IS 'Cites: BI-27, IV-14, RR-17, SM-38. A return moves stock only as SALE_RETURN and only once posted. It is never reversed: a correction is a further reason-bearing movement.';
+
+
+--
 -- Name: assert_movement_sale_state(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -364,6 +503,112 @@ $$;
 --
 
 COMMENT ON FUNCTION public.assert_new_variant_usable() IS 'Cites: RT-042, PR-34, PR-47, SM-13. At commit, a new variant of an archived product is refused, and a new variant of a released product carries a price in force.';
+
+
+--
+-- Name: assert_reason_code_live(uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.assert_reason_code_live(p_reason_code_id uuid) RETURNS void
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM reason_code WHERE id = p_reason_code_id AND archived_at IS NOT NULL) THEN
+    RAISE EXCEPTION 'reason code % is archived and takes no new documents', p_reason_code_id USING ERRCODE = 'SS024';
+  END IF;
+END
+$$;
+
+
+--
+-- Name: FUNCTION assert_reason_code_live(p_reason_code_id uuid); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.assert_reason_code_live(p_reason_code_id uuid) IS 'Cites: BI-40, BI-25. An archived reason code is kept for history and takes no new use.';
+
+
+--
+-- Name: assert_refund_payout_completes(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.assert_refund_payout_completes() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM refund WHERE id = NEW.refund_id AND status = 'Completed') THEN
+    RAISE EXCEPTION 'cash left the drawer for refund %, which did not complete', NEW.refund_id USING ERRCODE = 'SS053';
+  END IF;
+  RETURN NULL;
+END
+$$;
+
+
+--
+-- Name: FUNCTION assert_refund_payout_completes(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.assert_refund_payout_completes() IS 'Cites: PY-27, BI-04, RT-156. At commit, cash paid out for a refund belongs to a refund that completed in the same transaction: the payout and the completion are one event.';
+
+
+--
+-- Name: assert_refund_whole(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.assert_refund_whole() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+  v_lines  integer;
+  v_amount bigint;
+  v_tax    bigint;
+BEGIN
+  SELECT count(*), coalesce(sum(amount), 0), coalesce(sum(tax_amount), 0) INTO v_lines, v_amount, v_tax
+  FROM refund_line WHERE refund_id = NEW.id;
+  IF v_lines = 0 OR v_amount <> NEW.amount OR v_tax <> NEW.tax_amount THEN
+    RAISE EXCEPTION 'refund % must equal the sum of its lines', NEW.id USING ERRCODE = 'SS053';
+  END IF;
+  IF NEW.status = 'Completed' AND NEW.disbursement = 'Drawer' AND NEW.amount IS DISTINCT FROM (
+       SELECT amount FROM cash_transaction WHERE refund_id = NEW.id) THEN
+    RAISE EXCEPTION 'cash refund % completed without being paid out of the drawer', NEW.id USING ERRCODE = 'SS053';
+  END IF;
+  RETURN NULL;
+END
+$$;
+
+
+--
+-- Name: FUNCTION assert_refund_whole(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.assert_refund_whole() IS 'Cites: RR-43, PY-27, CD-19, BI-04, RT-156. At commit, a refund that has left Draft equals the sum of its lines, tax included, and a completed cash refund has left the drawer as a recorded disbursement of exactly its amount.';
+
+
+--
+-- Name: assert_return_posting_complete(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.assert_return_posting_complete() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  IF NEW.status = 'Posted' AND OLD.status = 'Draft' AND (
+       NOT EXISTS (SELECT 1 FROM customer_return_line WHERE customer_return_id = NEW.id)
+       OR EXISTS (SELECT 1 FROM customer_return_line l
+                  WHERE l.customer_return_id = NEW.id
+                    AND NOT EXISTS (SELECT 1 FROM inventory_movement m
+                                    WHERE m.customer_return_line_id = l.id AND m.quantity = l.quantity))) THEN
+    RAISE EXCEPTION 'return % was posted without exactly one movement per line', NEW.id USING ERRCODE = 'SS022';
+  END IF;
+  RETURN NULL;
+END
+$$;
+
+
+--
+-- Name: FUNCTION assert_return_posting_complete(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.assert_return_posting_complete() IS 'Cites: RR-17, SM-43, BI-04, RT-153. At commit, a posted return has lines and has brought each one back, whole, into its dispositioned location.';
 
 
 --
@@ -655,6 +900,116 @@ $$;
 --
 
 COMMENT ON FUNCTION public.checkout_before_write() IS 'Cites: PT-03, BI-39, SP-43, RT-353. A checkout starts only on a till in service and not in training, inside an open shift; once completed or abandoned it never changes.';
+
+
+--
+-- Name: customer_return_before_write(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.customer_return_before_write() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+  v_closes date;
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    PERFORM assert_reason_code_live(NEW.late_reason_code_id);
+    NEW.document_number := allocate_document_number(NEW.store_id, 'CustomerReturn');
+    RETURN NEW;
+  END IF;
+  IF OLD.status <> 'Draft' AND (NEW.posted_by IS DISTINCT FROM OLD.posted_by
+       OR NEW.late_approved_by IS DISTINCT FROM OLD.late_approved_by
+       OR NEW.late_reason_code_id IS DISTINCT FROM OLD.late_reason_code_id
+       OR NEW.cancel_reason_code_id IS DISTINCT FROM OLD.cancel_reason_code_id) THEN
+    RAISE EXCEPTION 'return % is % and its record of who and why is fixed', OLD.id, OLD.status USING ERRCODE = 'SS001';
+  END IF;
+  IF NEW.late_reason_code_id IS DISTINCT FROM OLD.late_reason_code_id THEN
+    PERFORM assert_reason_code_live(NEW.late_reason_code_id);
+  END IF;
+  IF NEW.status IS DISTINCT FROM OLD.status THEN
+    NEW.status_changed_at := now();
+    IF NEW.status = 'Cancelled' THEN
+      PERFORM assert_reason_code_live(NEW.cancel_reason_code_id);
+    END IF;
+    IF NEW.status = 'Posted' THEN
+      NEW.posted_at := now();
+      SELECT (now() AT TIME ZONE s.time_zone)::date INTO NEW.business_date FROM store s WHERE s.id = NEW.store_id;
+      SELECT sa.business_date + v.return_window_days INTO v_closes
+      FROM sale sa, LATERAL (SELECT return_window_days FROM store_setting_version
+                             WHERE store_id = NEW.store_id AND effective_from <= now()
+                             ORDER BY effective_from DESC LIMIT 1) v
+      WHERE sa.id = NEW.sale_id;
+      IF NEW.business_date > v_closes AND NEW.late_approved_by IS NULL THEN
+        RAISE EXCEPTION 'the return window for this sale closed on %', v_closes
+          USING ERRCODE = 'SS048', DETAIL = to_char(v_closes, 'YYYY-MM-DD');
+      END IF;
+    END IF;
+  END IF;
+  RETURN NEW;
+END
+$$;
+
+
+--
+-- Name: FUNCTION customer_return_before_write(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.customer_return_before_write() IS 'Cites: BI-42, RR-10, RR-11, SM-03, RT-234, RT-150. Allocates the return number; stamps posting with server time and business date; beyond the store''s return window a return needs an approver and a reason, and the refusal names the date the window closed; once a return leaves Draft its who and why are fixed.';
+
+
+--
+-- Name: customer_return_line_rules(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.customer_return_line_rules() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+  v_status   text;
+  v_type     text;
+  v_sellable boolean;
+  v_left     numeric;
+BEGIN
+  SELECT status INTO v_status FROM customer_return
+  WHERE id = CASE WHEN TG_OP = 'DELETE' THEN OLD.customer_return_id ELSE NEW.customer_return_id END
+  FOR SHARE;
+  IF v_status IS DISTINCT FROM 'Draft' THEN
+    RAISE EXCEPTION 'document lines change only while the document is a draft (it is %)', v_status USING ERRCODE = 'SS018';
+  END IF;
+  IF TG_OP = 'DELETE' THEN
+    RETURN OLD;
+  END IF;
+
+  -- An unknown or missing disposition is left to the column's CHECK and NOT NULL.
+  SELECT location_type, is_sellable INTO v_type, v_sellable FROM storage_location WHERE id = NEW.storage_location_id;
+  IF (CASE NEW.disposition
+        WHEN 'Sellable' THEN NOT v_sellable
+        WHEN 'Quarantine' THEN v_type <> 'Quarantine'
+        WHEN 'Damaged' THEN v_type <> 'Damaged'
+        WHEN 'Expired' THEN v_type <> 'ExpiredHold'
+      END) THEN
+    RAISE EXCEPTION 'a % return cannot go to a % location', NEW.disposition, v_type USING ERRCODE = 'SS047';
+  END IF;
+
+  -- s12.1: a draft is bounded as it is built. The atomic bound is taken when the return is posted (RR-14).
+  SELECT l.quantity - l.returned_quantity
+         - coalesce((SELECT sum(r.quantity) FROM customer_return_line r
+                     WHERE r.customer_return_id = NEW.customer_return_id AND r.sale_line_id = l.id AND r.id <> NEW.id), 0)
+    INTO v_left
+  FROM sale_line l WHERE l.id = NEW.sale_line_id;
+  IF NEW.quantity > v_left THEN
+    RAISE EXCEPTION 'only % of that line can still be returned', v_left USING ERRCODE = 'SS046', DETAIL = v_left::text;
+  END IF;
+  RETURN NEW;
+END
+$$;
+
+
+--
+-- Name: FUNCTION customer_return_line_rules(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.customer_return_line_rules() IS 'Cites: RR-14, RR-17, RR-19, BI-17, WH-01, BI-08, RT-148. Lines change only while the return is a draft; each disposition sends the goods to its own kind of location, and only Sellable to a sellable one (batch-expiry-fefo s6); a draft never holds more than is still returnable, naming the remainder.';
 
 
 --
@@ -1161,6 +1516,97 @@ COMMENT ON FUNCTION public.record_deactivation() IS 'Cites: BI-40, RT-506, RT-50
 
 
 --
+-- Name: refund_before_write(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.refund_before_write() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+  v_method_type text;
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    IF NEW.method = 'OriginalTender' THEN
+      SELECT p.method_type INTO v_method_type
+      FROM payment p JOIN sale s ON s.checkout_id = p.checkout_id
+      WHERE p.id = NEW.payment_id AND s.id = NEW.sale_id AND p.status = 'Captured';
+      IF v_method_type IS NULL THEN
+        RAISE EXCEPTION 'payment % is not a captured tender of this sale', NEW.payment_id USING ERRCODE = 'SS050';
+      END IF;
+      NEW.disbursement := CASE v_method_type WHEN 'Cash' THEN 'Drawer' ELSE 'Provider' END;
+    ELSE
+      NEW.disbursement := 'Drawer';
+    END IF;
+    PERFORM assert_reason_code_live(NEW.reason_code_id);
+    NEW.document_number := allocate_document_number(NEW.store_id, 'Refund');
+    RETURN NEW;
+  END IF;
+  IF OLD.status IN ('Completed', 'Cancelled') THEN
+    RAISE EXCEPTION 'refund % is % and is never changed; a correction is a further linked refund', OLD.id, OLD.status
+      USING ERRCODE = 'SS035';
+  END IF;
+  IF (OLD.submitted_by IS NOT NULL AND NEW.submitted_by IS DISTINCT FROM OLD.submitted_by)
+     OR (OLD.approved_by IS NOT NULL AND NEW.approved_by IS DISTINCT FROM OLD.approved_by) THEN
+    RAISE EXCEPTION 'who submitted or approved refund % cannot be changed', OLD.id USING ERRCODE = 'SS001';
+  END IF;
+  IF NEW.status IS DISTINCT FROM OLD.status THEN
+    NEW.status_changed_at := now();
+    IF NEW.status = 'PendingApproval' THEN
+      NEW.submitted_at := now();
+    ELSIF NEW.status = 'Approved' THEN
+      NEW.approved_at := now();
+    ELSIF NEW.status = 'Cancelled' THEN
+      PERFORM assert_reason_code_live(NEW.cancel_reason_code_id);
+    ELSIF NEW.status = 'Completed' AND NEW.disbursement = 'Drawer' THEN
+      IF NOT EXISTS (SELECT 1 FROM pos_terminal WHERE id = NEW.pos_terminal_id AND status = 'Active' AND mode <> 'Training') THEN
+        RAISE EXCEPTION 'terminal % may not pay out a real refund', NEW.pos_terminal_id USING ERRCODE = 'SS025';
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM cash_shift WHERE id = NEW.cash_shift_id AND status = 'Open') THEN
+        RAISE EXCEPTION 'shift % is not open', NEW.cash_shift_id USING ERRCODE = 'SS026';
+      END IF;
+    END IF;
+  END IF;
+  RETURN NEW;
+END
+$$;
+
+
+--
+-- Name: FUNCTION refund_before_write(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.refund_before_write() IS 'Cites: RR-22, RR-23, RR-25, PY-25, PY-27, PT-03, BI-09, BI-42, SM-03. A refund to the original tender goes back to a captured tender of the same sale, cash through the drawer and card through the provider; numbering; transition stamps; a completed or cancelled refund is frozen; drawer cash is paid out only at a till in service and not in training, during an open shift.';
+
+
+--
+-- Name: refund_line_rules(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.refund_line_rules() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+  v_status text;
+BEGIN
+  SELECT status INTO v_status FROM refund
+  WHERE id = CASE WHEN TG_OP = 'DELETE' THEN OLD.refund_id ELSE NEW.refund_id END
+  FOR SHARE;
+  IF v_status IS DISTINCT FROM 'Draft' THEN
+    RAISE EXCEPTION 'document lines change only while the document is a draft (it is %)', v_status USING ERRCODE = 'SS018';
+  END IF;
+  RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+END
+$$;
+
+
+--
+-- Name: FUNCTION refund_line_rules(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.refund_line_rules() IS 'Cites: BI-08, BI-27, AP-03. A refund''s allocation is fixed once it is submitted for approval, so the approver approves what is paid; a draft line may be deleted (overview s3.6).';
+
+
+--
 -- Name: resolve_price(uuid, uuid, timestamp with time zone); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -1230,6 +1676,50 @@ $$;
 --
 
 COMMENT ON FUNCTION public.sale_before_insert() IS 'Cites: SP-02, SP-05, PT-03, BI-39, BI-42, SP-33, REQ-AU-06, RT-234. The completion transaction''s header: a till in service and not in training, an open shift, the settings in force and never under a scheduled tax-mode change, the checkout closed into this sale, the number allocated and the business date computed by the server.';
+
+
+--
+-- Name: sale_counter_drift(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.sale_counter_drift() RETURNS TABLE(sale_id uuid, sale_line_id uuid, problem text, recorded numeric, expected numeric)
+    LANGUAGE sql STABLE
+    AS $$
+  WITH rebuilt AS (
+    SELECT l.sale_id, l.id, l.quantity, l.returned_quantity, l.refunded_amount, l.refunded_tax_amount,
+           coalesce((SELECT sum(r.quantity) FROM customer_return_line r JOIN customer_return c ON c.id = r.customer_return_id
+                     WHERE r.sale_line_id = l.id AND c.status IN ('Posted', 'Settled', 'Closed')), 0) AS returned,
+           coalesce(h.amount, 0) AS refunded,
+           coalesce(h.tax, 0) AS refunded_tax
+    FROM sale_line l
+    LEFT JOIN LATERAL (SELECT sum(r.amount) AS amount, sum(r.tax_amount) AS tax
+                       FROM refund_line r JOIN refund f ON f.id = r.refund_id
+                       WHERE r.sale_line_id = l.id AND f.status IN ('Processing', 'Failed', 'Completed')) h ON true
+  ), derived AS (
+    SELECT rb.sale_id, CASE WHEN bool_and(rb.returned = rb.quantity) THEN 'Returned'
+                            WHEN bool_or(rb.returned > 0) THEN 'PartiallyReturned' ELSE 'Completed' END AS status
+    FROM rebuilt rb GROUP BY rb.sale_id
+  )
+  SELECT rb.sale_id, rb.id, 'returned quantity differs from the posted returns', rb.returned_quantity, rb.returned
+  FROM rebuilt rb WHERE rb.returned_quantity <> rb.returned
+  UNION ALL
+  SELECT rb.sale_id, rb.id, 'refunded amount differs from the refunds holding it', rb.refunded_amount, rb.refunded
+  FROM rebuilt rb WHERE rb.refunded_amount <> rb.refunded
+  UNION ALL
+  SELECT rb.sale_id, rb.id, 'refunded tax differs from the refunds holding it', rb.refunded_tax_amount, rb.refunded_tax
+  FROM rebuilt rb WHERE rb.refunded_tax_amount <> rb.refunded_tax
+  UNION ALL
+  SELECT s.id, NULL, 'sale status is ' || s.status || ' but its returns make it ' || d.status, NULL, NULL
+  FROM sale s JOIN derived d ON d.sale_id = s.id
+  WHERE s.status <> d.status
+$$;
+
+
+--
+-- Name: FUNCTION sale_counter_drift(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.sale_counter_drift() IS 'Cites: SP-66, SM-35a, RR-14, RR-24. Rebuilds every line''s returned and refunded counters from the returns and refunds, and every sale''s status from the rebuilt counters, and returns each disagreement. It never repairs; an empty result is the proof.';
 
 
 --
@@ -1345,6 +1835,7 @@ CREATE FUNCTION public.shift_expected_cash(p_shift_id uuid) RETURNS bigint
        + coalesce((SELECT sum(p.amount) FROM payment p JOIN checkout c ON c.id = p.checkout_id
                    WHERE c.cash_shift_id = p_shift_id AND c.status = 'Completed'
                      AND p.status = 'Captured' AND p.method_type = 'Cash'), 0)
+       - coalesce((SELECT sum(amount) FROM cash_transaction WHERE cash_shift_id = p_shift_id AND type = 'RefundFromDrawer'), 0)
 $$;
 
 
@@ -1352,7 +1843,7 @@ $$;
 -- Name: FUNCTION shift_expected_cash(p_shift_id uuid); Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON FUNCTION public.shift_expected_cash(p_shift_id uuid) IS 'Cites: CD-06, CD-08, CD-09, RT-135. What should be in the drawer, derived and never stored: the opening float plus the cash applied to the shift''s sales (net of change, which is why change is not subtracted again; OQ-015). Card is never in the drawer.';
+COMMENT ON FUNCTION public.shift_expected_cash(p_shift_id uuid) IS 'Cites: CD-06, CD-08, CD-09, PY-27, RT-135, RT-156. What should be in the drawer, derived and never stored: the opening float, plus the cash applied to the shift''s sales (net of change), minus cash refunded out of it. CD-06 writes the refund term with a plus; cash-management s5 gives RefundFromDrawer the direction Out, and PY-27 says an unrecorded refund leaves the count short, so it is subtracted (OQ-015).';
 
 
 --
@@ -1603,14 +2094,16 @@ CREATE TABLE public.cash_transaction (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     created_by uuid NOT NULL,
     sale_id uuid,
+    refund_id uuid,
     CONSTRAINT ck_cash_transaction_amount CHECK (((amount > 0) OR ((amount = 0) AND (type = ANY (ARRAY['OpeningFloat'::text, 'ClosingFloat'::text]))))),
     CONSTRAINT ck_cash_transaction_direction CHECK ((direction =
 CASE type
     WHEN 'OpeningFloat'::text THEN 'In'::text
     ELSE 'Out'::text
 END)),
+    CONSTRAINT ck_cash_transaction_refund CHECK (((type = 'RefundFromDrawer'::text) = (refund_id IS NOT NULL))),
     CONSTRAINT ck_cash_transaction_sale CHECK (((type = 'ChangeDisbursed'::text) = (sale_id IS NOT NULL))),
-    CONSTRAINT ck_cash_transaction_type CHECK ((type = ANY (ARRAY['OpeningFloat'::text, 'ChangeDisbursed'::text, 'ClosingFloat'::text])))
+    CONSTRAINT ck_cash_transaction_type CHECK ((type = ANY (ARRAY['OpeningFloat'::text, 'ChangeDisbursed'::text, 'ClosingFloat'::text, 'RefundFromDrawer'::text])))
 );
 
 
@@ -1618,7 +2111,7 @@ END)),
 -- Name: TABLE cash_transaction; Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON TABLE public.cash_transaction IS 'Cites: CD-11, CD-18, CD-19, RT-135. The drawer''s ledger: every cash movement is a row, never a field update. v1 writes the opening float, change given, and the closing float; the other types of cash-management s5 arrive with their flows.';
+COMMENT ON TABLE public.cash_transaction IS 'Cites: CD-11, CD-18, CD-19, PY-27, RT-135. The drawer''s ledger: every cash movement is a row, never a field update. v1 writes the opening float, change given, cash refunds and the closing float; the other types of cash-management s5 arrive with their flows.';
 
 
 --
@@ -1636,6 +2129,13 @@ COMMENT ON CONSTRAINT ck_cash_transaction_direction ON public.cash_transaction I
 
 
 --
+-- Name: CONSTRAINT ck_cash_transaction_refund ON cash_transaction; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_cash_transaction_refund ON public.cash_transaction IS 'Cites: PY-27. A cash refund, and only a cash refund, names its refund.';
+
+
+--
 -- Name: CONSTRAINT ck_cash_transaction_sale ON cash_transaction; Type: COMMENT; Schema: public; Owner: -
 --
 
@@ -1646,7 +2146,7 @@ COMMENT ON CONSTRAINT ck_cash_transaction_sale ON public.cash_transaction IS 'Ci
 -- Name: CONSTRAINT ck_cash_transaction_type ON cash_transaction; Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON CONSTRAINT ck_cash_transaction_type ON public.cash_transaction IS 'Cites: CD-11, CD-18, CD-20. The cash transaction types v1 writes (cash-management s5).';
+COMMENT ON CONSTRAINT ck_cash_transaction_type ON public.cash_transaction IS 'Cites: CD-11, CD-18, CD-20, PY-27. The cash transaction types v1 writes (cash-management s5).';
 
 
 --
@@ -1800,6 +2300,129 @@ COMMENT ON TABLE public.customer IS 'Cites: CU-01, RT-001. A customer. v1 builds
 
 
 --
+-- Name: customer_return; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.customer_return (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    store_id uuid NOT NULL,
+    organization_id uuid NOT NULL,
+    sale_id uuid NOT NULL,
+    document_number bigint NOT NULL,
+    client_operation_id uuid NOT NULL,
+    status text DEFAULT 'Draft'::text NOT NULL,
+    business_date date,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    created_by uuid NOT NULL,
+    posted_at timestamp with time zone,
+    posted_by uuid,
+    late_approved_by uuid,
+    late_reason_code_id uuid,
+    cancel_reason_code_id uuid,
+    status_changed_at timestamp with time zone DEFAULT now() NOT NULL,
+    status_changed_by uuid NOT NULL,
+    correlation_id uuid,
+    CONSTRAINT ck_customer_return_cancelled CHECK (((status = 'Cancelled'::text) = (cancel_reason_code_id IS NOT NULL))),
+    CONSTRAINT ck_customer_return_late CHECK (((late_approved_by IS NULL) = (late_reason_code_id IS NULL))),
+    CONSTRAINT ck_customer_return_late_separation CHECK (((late_approved_by IS NULL) OR ((late_approved_by <> created_by) AND (late_approved_by IS DISTINCT FROM posted_by)))),
+    CONSTRAINT ck_customer_return_posted CHECK (((posted_at IS NULL) = (posted_by IS NULL))),
+    CONSTRAINT ck_customer_return_posted_when CHECK (((status = ANY (ARRAY['Draft'::text, 'Cancelled'::text])) = (posted_by IS NULL))),
+    CONSTRAINT ck_customer_return_status CHECK ((status = ANY (ARRAY['Draft'::text, 'Posted'::text, 'Settled'::text, 'Closed'::text, 'Cancelled'::text])))
+);
+
+
+--
+-- Name: TABLE customer_return; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.customer_return IS 'Cites: RR-01, RR-08, RR-13, RR-15, RT-144, RT-148, RT-149. Goods coming back against exactly one sale. Stock moves only when it is posted, and the sold-quantity bound is taken atomically then.';
+
+
+--
+-- Name: CONSTRAINT ck_customer_return_cancelled ON customer_return; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_customer_return_cancelled ON public.customer_return IS 'Cites: SM-42, BI-25. A return is cancelled with a reason, and only a cancelled return carries one.';
+
+
+--
+-- Name: CONSTRAINT ck_customer_return_late ON customer_return; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_customer_return_late ON public.customer_return IS 'Cites: RR-11. A late return is approved by someone, for a reason, together.';
+
+
+--
+-- Name: CONSTRAINT ck_customer_return_late_separation ON customer_return; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_customer_return_late_separation ON public.customer_return IS 'Cites: AP-08, BI-26. The approver of a late return is neither the employee who opened it nor the one who posts it.';
+
+
+--
+-- Name: CONSTRAINT ck_customer_return_posted ON customer_return; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_customer_return_posted ON public.customer_return IS 'Cites: SM-03. Posting records who and when together.';
+
+
+--
+-- Name: CONSTRAINT ck_customer_return_posted_when ON customer_return; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_customer_return_posted_when ON public.customer_return IS 'Cites: BI-27, SM-03. A return records who posted it exactly when it has been posted.';
+
+
+--
+-- Name: CONSTRAINT ck_customer_return_status ON customer_return; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_customer_return_status ON public.customer_return IS 'Cites: SM-43a. The return states of returns-refunds s12.1; a refusal is Cancelled from Draft (SM-42).';
+
+
+--
+-- Name: customer_return_line; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.customer_return_line (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    customer_return_id uuid NOT NULL,
+    store_id uuid NOT NULL,
+    organization_id uuid NOT NULL,
+    sale_id uuid NOT NULL,
+    sale_line_id uuid NOT NULL,
+    variant_id uuid NOT NULL,
+    quantity numeric(18,4) NOT NULL,
+    disposition text NOT NULL,
+    storage_location_id uuid NOT NULL,
+    client_operation_id uuid NOT NULL,
+    CONSTRAINT ck_customer_return_line_disposition CHECK ((disposition = ANY (ARRAY['Sellable'::text, 'Quarantine'::text, 'Damaged'::text, 'Expired'::text]))),
+    CONSTRAINT ck_customer_return_line_quantity CHECK ((quantity > (0)::numeric))
+);
+
+
+--
+-- Name: TABLE customer_return_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.customer_return_line IS 'Cites: RR-08, RR-14, RR-16, RR-17, RR-19, BI-17, RT-151. One returned quantity of one sold line, with its mandatory disposition and the location that disposition sends it to.';
+
+
+--
+-- Name: CONSTRAINT ck_customer_return_line_disposition ON customer_return_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_customer_return_line_disposition ON public.customer_return_line IS 'Cites: RR-17, BI-17. Every return line resolves to exactly one of the four dispositions.';
+
+
+--
+-- Name: CONSTRAINT ck_customer_return_line_quantity ON customer_return_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_customer_return_line_quantity ON public.customer_return_line IS 'Cites: BI-05. A returned quantity is positive.';
+
+
+--
 -- Name: document_number_sequence; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1870,9 +2493,13 @@ END) STORED,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     sale_id uuid,
     sale_line_id uuid,
+    customer_return_id uuid,
+    customer_return_line_id uuid,
+    disposition text,
     CONSTRAINT ck_inventory_movement_adjustment_pair CHECK (((stock_adjustment_id IS NULL) = (stock_adjustment_line_id IS NULL))),
-    CONSTRAINT ck_inventory_movement_one_cause CHECK ((num_nonnulls(stock_adjustment_line_id, sale_line_id) = 1)),
+    CONSTRAINT ck_inventory_movement_one_cause CHECK ((num_nonnulls(stock_adjustment_line_id, sale_line_id, customer_return_line_id) = 1)),
     CONSTRAINT ck_inventory_movement_positive CHECK ((quantity > (0)::numeric)),
+    CONSTRAINT ck_inventory_movement_return_triple CHECK ((num_nulls(customer_return_id, customer_return_line_id, disposition) = ANY (ARRAY[0, 3]))),
     CONSTRAINT ck_inventory_movement_reversal CHECK (((movement_type = 'REVERSAL'::text) = (reverses_movement_id IS NOT NULL))),
     CONSTRAINT ck_inventory_movement_sale_pair CHECK (((sale_id IS NULL) = (sale_line_id IS NULL)))
 );
@@ -1903,7 +2530,7 @@ COMMENT ON CONSTRAINT ck_inventory_movement_adjustment_pair ON public.inventory_
 -- Name: CONSTRAINT ck_inventory_movement_one_cause ON inventory_movement; Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON CONSTRAINT ck_inventory_movement_one_cause ON public.inventory_movement IS 'Cites: BI-03, RT-060, IV-14. Exactly one causing document line: an adjustment line or a sale line. Later domains add their line columns to this count.';
+COMMENT ON CONSTRAINT ck_inventory_movement_one_cause ON public.inventory_movement IS 'Cites: BI-03, RT-060, IV-14. Exactly one causing document line: an adjustment line, a sale line or a return line. Later domains add their line columns to this count.';
 
 
 --
@@ -1911,6 +2538,13 @@ COMMENT ON CONSTRAINT ck_inventory_movement_one_cause ON public.inventory_moveme
 --
 
 COMMENT ON CONSTRAINT ck_inventory_movement_positive ON public.inventory_movement IS 'Cites: BI-05. A movement quantity is positive; its effect''s sign comes from its direction.';
+
+
+--
+-- Name: CONSTRAINT ck_inventory_movement_return_triple ON inventory_movement; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_inventory_movement_return_triple ON public.inventory_movement IS 'Cites: BI-03, BE-36. A return line is always named with its return and its disposition, and a disposition only with a return line.';
 
 
 --
@@ -2337,6 +2971,202 @@ COMMENT ON CONSTRAINT ck_reason_code_archival ON public.reason_code IS 'Cites: B
 
 
 --
+-- Name: refund; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.refund (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    store_id uuid NOT NULL,
+    organization_id uuid NOT NULL,
+    sale_id uuid NOT NULL,
+    customer_return_id uuid,
+    document_number bigint NOT NULL,
+    client_operation_id uuid NOT NULL,
+    method text NOT NULL,
+    payment_id uuid,
+    disbursement text NOT NULL,
+    pos_terminal_id uuid,
+    cash_drawer_id uuid,
+    cash_shift_id uuid,
+    amount bigint NOT NULL,
+    tax_amount bigint NOT NULL,
+    currency_code text NOT NULL,
+    reason_code_id uuid,
+    cancel_reason_code_id uuid,
+    status text DEFAULT 'Draft'::text NOT NULL,
+    provider_transaction_reference text,
+    provider_outcome text,
+    provider_raw_code text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    created_by uuid NOT NULL,
+    submitted_at timestamp with time zone,
+    submitted_by uuid,
+    approved_at timestamp with time zone,
+    approved_by uuid,
+    status_changed_at timestamp with time zone DEFAULT now() NOT NULL,
+    status_changed_by uuid NOT NULL,
+    correlation_id uuid,
+    CONSTRAINT ck_refund_amounts CHECK (((amount > 0) AND (tax_amount >= 0) AND (tax_amount <= amount))),
+    CONSTRAINT ck_refund_approved CHECK (((approved_at IS NULL) = (approved_by IS NULL))),
+    CONSTRAINT ck_refund_approved_when CHECK (((status <> ALL (ARRAY['Approved'::text, 'Processing'::text, 'Completed'::text, 'Failed'::text])) OR (approved_by IS NOT NULL))),
+    CONSTRAINT ck_refund_cancelled CHECK (((status = 'Cancelled'::text) = (cancel_reason_code_id IS NOT NULL))),
+    CONSTRAINT ck_refund_disbursement CHECK ((disbursement = ANY (ARRAY['Drawer'::text, 'Provider'::text]))),
+    CONSTRAINT ck_refund_drawer CHECK (((disbursement = 'Drawer'::text) = (cash_shift_id IS NOT NULL))),
+    CONSTRAINT ck_refund_goodwill_reason CHECK (((customer_return_id IS NOT NULL) OR (reason_code_id IS NOT NULL))),
+    CONSTRAINT ck_refund_method CHECK ((method = ANY (ARRAY['OriginalTender'::text, 'Cash'::text]))),
+    CONSTRAINT ck_refund_method_payment CHECK (((method = 'OriginalTender'::text) = (payment_id IS NOT NULL))),
+    CONSTRAINT ck_refund_provider_outcome CHECK ((provider_outcome = ANY (ARRAY['Approved'::text, 'Declined'::text, 'Pending'::text, 'Failed'::text, 'Errored'::text, 'Timeout'::text]))),
+    CONSTRAINT ck_refund_separation CHECK (((approved_by IS NULL) OR ((approved_by <> created_by) AND (approved_by <> submitted_by)))),
+    CONSTRAINT ck_refund_status CHECK ((status = ANY (ARRAY['Draft'::text, 'PendingApproval'::text, 'Approved'::text, 'Processing'::text, 'Completed'::text, 'Failed'::text, 'Cancelled'::text]))),
+    CONSTRAINT ck_refund_submitted CHECK (((submitted_at IS NULL) = (submitted_by IS NULL))),
+    CONSTRAINT ck_refund_submitted_when CHECK (((status = 'Draft'::text) OR (submitted_by IS NOT NULL))),
+    CONSTRAINT ck_refund_till CHECK ((num_nulls(pos_terminal_id, cash_drawer_id, cash_shift_id) = ANY (ARRAY[0, 3])))
+);
+
+
+--
+-- Name: TABLE refund; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.refund IS 'Cites: RR-01, RR-03, RR-22, RR-23, RR-24, RR-35, RR-43, PY-21, PY-22, PY-23, PY-25, PY-26, PY-27, BI-09, BI-10, RT-144, RT-145, RT-154, RT-157. Money going back: a new, linked document with its own lifecycle, bounded per line by what each line settled and holding its amount while in flight. Linked to a return where there is one; without one it is a goodwill refund and carries a reason.';
+
+
+--
+-- Name: CONSTRAINT ck_refund_amounts ON refund; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_refund_amounts ON public.refund IS 'Cites: RR-06, RR-43, BI-10. A refund is positive and carries its own tax total, which is part of it.';
+
+
+--
+-- Name: CONSTRAINT ck_refund_approved ON refund; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_refund_approved ON public.refund IS 'Cites: SM-03, BI-26. Approval records who and when together.';
+
+
+--
+-- Name: CONSTRAINT ck_refund_approved_when ON refund; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_refund_approved_when ON public.refund IS 'Cites: BI-27, RR-35. No refund is processed, completed or failed without an approver on record.';
+
+
+--
+-- Name: CONSTRAINT ck_refund_cancelled ON refund; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_refund_cancelled ON public.refund IS 'Cites: BI-25, SM-40. A refund is cancelled with a reason, and only a cancelled refund carries one.';
+
+
+--
+-- Name: CONSTRAINT ck_refund_disbursement ON refund; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_refund_disbursement ON public.refund IS 'Cites: RR-23, PY-25, PY-27. The money leaves through the drawer or through the provider.';
+
+
+--
+-- Name: CONSTRAINT ck_refund_drawer ON refund; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_refund_drawer ON public.refund IS 'Cites: PY-27, CD-19. A drawer refund names the shift it is paid in; a provider refund names none.';
+
+
+--
+-- Name: CONSTRAINT ck_refund_goodwill_reason ON refund; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_refund_goodwill_reason ON public.refund IS 'Cites: RR-35, PY-26, RT-157. A refund with no return is a goodwill refund and always carries a reason.';
+
+
+--
+-- Name: CONSTRAINT ck_refund_method ON refund; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_refund_method ON public.refund IS 'Cites: RR-22. The refund methods v1 pays: back to the original tender, or cash out of the drawer. Store credit and exchange arrive with customer credit.';
+
+
+--
+-- Name: CONSTRAINT ck_refund_method_payment ON refund; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_refund_method_payment ON public.refund IS 'Cites: RR-22, RR-23. A refund to the original tender names that tender, and only such a refund does.';
+
+
+--
+-- Name: CONSTRAINT ck_refund_provider_outcome ON refund; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_refund_provider_outcome ON public.refund IS 'Cites: PY-10. The provider''s response normalised, with the raw code kept.';
+
+
+--
+-- Name: CONSTRAINT ck_refund_separation ON refund; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_refund_separation ON public.refund IS 'Cites: BI-26, AP-08, RR-35. The approver is neither the employee who drafted the refund nor the one who submitted it (s22.7: approver differs from issuer).';
+
+
+--
+-- Name: CONSTRAINT ck_refund_status ON refund; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_refund_status ON public.refund IS 'Cites: SM-43a, SM-40, SM-41. The refund states of returns-refunds s12.2.';
+
+
+--
+-- Name: CONSTRAINT ck_refund_submitted ON refund; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_refund_submitted ON public.refund IS 'Cites: SM-03. Submission records who and when together.';
+
+
+--
+-- Name: CONSTRAINT ck_refund_submitted_when ON refund; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_refund_submitted_when ON public.refund IS 'Cites: SM-03. Every refund past Draft records who submitted it.';
+
+
+--
+-- Name: CONSTRAINT ck_refund_till ON refund; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_refund_till ON public.refund IS 'Cites: PY-27, RT-122. The till, drawer and shift of a drawer refund are named together, or not at all.';
+
+
+--
+-- Name: refund_line; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.refund_line (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    refund_id uuid NOT NULL,
+    store_id uuid NOT NULL,
+    sale_id uuid NOT NULL,
+    sale_line_id uuid NOT NULL,
+    amount bigint NOT NULL,
+    tax_amount bigint NOT NULL,
+    CONSTRAINT ck_refund_line_amounts CHECK (((amount > 0) AND (tax_amount >= 0) AND (tax_amount <= amount)))
+);
+
+
+--
+-- Name: TABLE refund_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.refund_line IS 'Cites: RR-03, RR-06, RR-42, RR-43, RT-161. The refund''s allocation to the sold lines, each with its tax taken from the line''s stored tax; these are the refund''s own tax lines.';
+
+
+--
+-- Name: CONSTRAINT ck_refund_line_amounts ON refund_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_refund_line_amounts ON public.refund_line IS 'Cites: RR-05, RR-06. A positive amount (a free item refunds nothing), with its tax part.';
+
+
+--
 -- Name: sale; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2442,6 +3272,7 @@ CREATE TABLE public.sale_line (
     scanned_barcode text,
     returned_quantity numeric(18,4) DEFAULT 0 NOT NULL,
     refunded_amount bigint DEFAULT 0 NOT NULL,
+    refunded_tax_amount bigint DEFAULT 0 NOT NULL,
     CONSTRAINT ck_sale_line_cost CHECK ((unit_cost >= 0)),
     CONSTRAINT ck_sale_line_entry CHECK ((((entry_method = 'Scanned'::text) AND (scanned_barcode IS NOT NULL)) OR ((entry_method = 'Selected'::text) AND (scanned_barcode IS NULL)))),
     CONSTRAINT ck_sale_line_gross CHECK (((gross_amount)::numeric = round((quantity * (unit_price)::numeric)))),
@@ -2449,6 +3280,7 @@ CREATE TABLE public.sale_line (
     CONSTRAINT ck_sale_line_price CHECK ((unit_price > 0)),
     CONSTRAINT ck_sale_line_quantity CHECK ((quantity > (0)::numeric)),
     CONSTRAINT ck_sale_line_refunded CHECK (((refunded_amount >= 0) AND (refunded_amount <= settled_amount))),
+    CONSTRAINT ck_sale_line_refunded_tax CHECK (((refunded_tax_amount >= 0) AND (refunded_tax_amount <= tax_amount))),
     CONSTRAINT ck_sale_line_returned CHECK (((returned_quantity >= (0)::numeric) AND (returned_quantity <= quantity))),
     CONSTRAINT ck_sale_line_settled CHECK (((settled_amount >= 0) AND (settled_amount <= line_total))),
     CONSTRAINT ck_sale_line_tax CHECK (((tax_amount >= 0) AND (line_total >= 0)))
@@ -2509,6 +3341,13 @@ COMMENT ON CONSTRAINT ck_sale_line_quantity ON public.sale_line IS 'Cites: SP-15
 --
 
 COMMENT ON CONSTRAINT ck_sale_line_refunded ON public.sale_line IS 'Cites: BI-10, RT-145, RT-147. The refunded amount never exceeds what the line settled.';
+
+
+--
+-- Name: CONSTRAINT ck_sale_line_refunded_tax ON sale_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_sale_line_refunded_tax ON public.sale_line IS 'Cites: RR-06, RR-42, RT-161. The tax refunded against a line never exceeds the tax it was charged.';
 
 
 --
@@ -2818,7 +3657,7 @@ CREATE TABLE public.storage_location (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT ck_storage_location_central_not_sellable CHECK (((NOT is_sellable) OR (warehouse_kind = 'StoreAttached'::text))),
     CONSTRAINT ck_storage_location_sellable_type CHECK (((NOT is_sellable) OR (location_type = 'Default'::text))),
-    CONSTRAINT ck_storage_location_type CHECK ((location_type = ANY (ARRAY['Default'::text, 'Receiving'::text, 'Quarantine'::text, 'Damaged'::text, 'ReturnsPending'::text, 'Transit'::text])))
+    CONSTRAINT ck_storage_location_type CHECK ((location_type = ANY (ARRAY['Default'::text, 'Receiving'::text, 'Quarantine'::text, 'Damaged'::text, 'ReturnsPending'::text, 'Transit'::text, 'ExpiredHold'::text])))
 );
 
 
@@ -2847,7 +3686,7 @@ COMMENT ON CONSTRAINT ck_storage_location_sellable_type ON public.storage_locati
 -- Name: CONSTRAINT ck_storage_location_type ON storage_location; Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON CONSTRAINT ck_storage_location_type ON public.storage_location IS 'Cites: WH-04, RT-510. The standard location types of organization-model s5.';
+COMMENT ON CONSTRAINT ck_storage_location_type ON public.storage_location IS 'Cites: WH-04, RT-510, BE-24, BE-36. The standard location types of organization-model s5, plus ExpiredHold, where an Expired disposition goes (batch-expiry-fefo s6; organization-model s5 names the IsExpiredHold flag).';
 
 
 --
@@ -2945,8 +3784,12 @@ CREATE TABLE public.store_setting_version (
     negative_stock_policy text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     created_by uuid NOT NULL,
+    return_window_days smallint DEFAULT 30 NOT NULL,
+    default_return_disposition text DEFAULT 'Quarantine'::text NOT NULL,
     CONSTRAINT ck_store_setting_version_negative_stock CHECK ((negative_stock_policy = ANY (ARRAY['AllowNegative'::text, 'BlockNegative'::text]))),
     CONSTRAINT ck_store_setting_version_prospective CHECK ((effective_from >= created_at)),
+    CONSTRAINT ck_store_setting_version_return_disposition CHECK ((default_return_disposition = ANY (ARRAY['Sellable'::text, 'Quarantine'::text]))),
+    CONSTRAINT ck_store_setting_version_return_window CHECK ((return_window_days >= 0)),
     CONSTRAINT ck_store_setting_version_tax_mode CHECK ((tax_mode = ANY (ARRAY['Inclusive'::text, 'Exclusive'::text])))
 );
 
@@ -2970,6 +3813,20 @@ COMMENT ON CONSTRAINT ck_store_setting_version_negative_stock ON public.store_se
 --
 
 COMMENT ON CONSTRAINT ck_store_setting_version_prospective ON public.store_setting_version IS 'Cites: REQ-AU-06, RT-353. A change takes effect now or later, never in the past (organization-model s3.1: prospective only). created_at is server time.';
+
+
+--
+-- Name: CONSTRAINT ck_store_setting_version_return_disposition ON store_setting_version; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_store_setting_version_return_disposition ON public.store_setting_version IS 'Cites: RR-18, BI-17. The disposition the return screen pre-fills and never applies by itself: Sellable or Quarantine (organization-model s3), Quarantine unless set, as Quarantine holds customer returns by default (organization-model s5).';
+
+
+--
+-- Name: CONSTRAINT ck_store_setting_version_return_window ON store_setting_version; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_store_setting_version_return_window ON public.store_setting_version IS 'Cites: RR-10, RT-150. The return window is a store setting in days, measured on the business date; the documented default is 30.';
 
 
 --
@@ -3307,6 +4164,22 @@ ALTER TABLE ONLY public.customer
 
 
 --
+-- Name: customer_return pk_customer_return; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.customer_return
+    ADD CONSTRAINT pk_customer_return PRIMARY KEY (id);
+
+
+--
+-- Name: customer_return_line pk_customer_return_line; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.customer_return_line
+    ADD CONSTRAINT pk_customer_return_line PRIMARY KEY (id);
+
+
+--
 -- Name: document_number_sequence pk_document_number_sequence; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3408,6 +4281,22 @@ ALTER TABLE ONLY public.product_variant
 
 ALTER TABLE ONLY public.reason_code
     ADD CONSTRAINT pk_reason_code PRIMARY KEY (id);
+
+
+--
+-- Name: refund pk_refund; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.refund
+    ADD CONSTRAINT pk_refund PRIMARY KEY (id);
+
+
+--
+-- Name: refund_line pk_refund_line; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.refund_line
+    ADD CONSTRAINT pk_refund_line PRIMARY KEY (id);
 
 
 --
@@ -3669,6 +4558,21 @@ COMMENT ON CONSTRAINT uq_cash_shift_identity ON public.cash_shift IS 'Cites: RT-
 
 
 --
+-- Name: cash_transaction uq_cash_transaction_refund; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cash_transaction
+    ADD CONSTRAINT uq_cash_transaction_refund UNIQUE (refund_id);
+
+
+--
+-- Name: CONSTRAINT uq_cash_transaction_refund ON cash_transaction; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_cash_transaction_refund ON public.cash_transaction IS 'Cites: PY-27, BI-28. A refund is paid out of the drawer once.';
+
+
+--
 -- Name: cash_transaction uq_cash_transaction_seq; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3759,6 +4663,96 @@ COMMENT ON CONSTRAINT uq_customer_id_organization ON public.customer IS 'Cites: 
 
 
 --
+-- Name: customer_return uq_customer_return_id_store; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.customer_return
+    ADD CONSTRAINT uq_customer_return_id_store UNIQUE (id, store_id);
+
+
+--
+-- Name: CONSTRAINT uq_customer_return_id_store ON customer_return; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_customer_return_id_store ON public.customer_return IS 'Cites: RT-001, BI-14. Lets a movement prove, by foreign key, that it belongs to the return''s store.';
+
+
+--
+-- Name: customer_return uq_customer_return_identity; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.customer_return
+    ADD CONSTRAINT uq_customer_return_identity UNIQUE (id, sale_id, store_id);
+
+
+--
+-- Name: CONSTRAINT uq_customer_return_identity ON customer_return; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_customer_return_identity ON public.customer_return IS 'Cites: RR-13, SM-39. Lets a return line or a refund prove, by foreign key, that it concerns the return''s one sale and store.';
+
+
+--
+-- Name: customer_return_line uq_customer_return_line_identity; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.customer_return_line
+    ADD CONSTRAINT uq_customer_return_line_identity UNIQUE (id, customer_return_id, variant_id, storage_location_id, disposition);
+
+
+--
+-- Name: CONSTRAINT uq_customer_return_line_identity ON customer_return_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_customer_return_line_identity ON public.customer_return_line IS 'Cites: BI-03, RT-096. Lets a movement prove, by foreign key, that it applies this line''s variant at this line''s location, naming this line''s disposition.';
+
+
+--
+-- Name: customer_return_line uq_customer_return_line_operation; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.customer_return_line
+    ADD CONSTRAINT uq_customer_return_line_operation UNIQUE (store_id, client_operation_id);
+
+
+--
+-- Name: CONSTRAINT uq_customer_return_line_operation ON customer_return_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_customer_return_line_operation ON public.customer_return_line IS 'Cites: RR-16, BI-07. Each return line carries its own operation reference, so a retried line is not re-applied.';
+
+
+--
+-- Name: customer_return uq_customer_return_number; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.customer_return
+    ADD CONSTRAINT uq_customer_return_number UNIQUE (store_id, document_number);
+
+
+--
+-- Name: CONSTRAINT uq_customer_return_number ON customer_return; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_customer_return_number ON public.customer_return IS 'Cites: BI-42, RT-479. The return number is unique per store and never reused.';
+
+
+--
+-- Name: customer_return uq_customer_return_operation; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.customer_return
+    ADD CONSTRAINT uq_customer_return_operation UNIQUE (store_id, client_operation_id);
+
+
+--
+-- Name: CONSTRAINT uq_customer_return_operation ON customer_return; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_customer_return_operation ON public.customer_return IS 'Cites: RR-15, BI-07, RT-149. A return is processed exactly once: a replay with the same operation id finds the original.';
+
+
+--
 -- Name: inventory_movement uq_inventory_movement_balance_sequence; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3801,6 +4795,21 @@ ALTER TABLE ONLY public.inventory_movement
 --
 
 COMMENT ON CONSTRAINT uq_inventory_movement_id_sale_line ON public.inventory_movement IS 'Cites: BI-03. Lets a reversal prove, by foreign key, that it answers to the same sale line as the movement it reverses.';
+
+
+--
+-- Name: inventory_movement uq_inventory_movement_return_line; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.inventory_movement
+    ADD CONSTRAINT uq_inventory_movement_return_line UNIQUE (customer_return_line_id);
+
+
+--
+-- Name: CONSTRAINT uq_inventory_movement_return_line ON inventory_movement; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_inventory_movement_return_line ON public.inventory_movement IS 'Cites: BI-07, RR-15, RT-149. A return line brings its goods back once; a posted return is never reversed (SM-38).';
 
 
 --
@@ -4014,6 +5023,96 @@ COMMENT ON CONSTRAINT uq_reason_code_id_organization ON public.reason_code IS 'C
 
 
 --
+-- Name: refund uq_refund_id_sale; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.refund
+    ADD CONSTRAINT uq_refund_id_sale UNIQUE (id, sale_id);
+
+
+--
+-- Name: CONSTRAINT uq_refund_id_sale ON refund; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_refund_id_sale ON public.refund IS 'Cites: RR-03. Lets a refund line prove, by foreign key, that it refunds the refund''s own sale.';
+
+
+--
+-- Name: refund uq_refund_id_shift; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.refund
+    ADD CONSTRAINT uq_refund_id_shift UNIQUE (id, cash_shift_id);
+
+
+--
+-- Name: CONSTRAINT uq_refund_id_shift ON refund; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_refund_id_shift ON public.refund IS 'Cites: PY-27. Lets the drawer payout prove, by foreign key, that it is in the refund''s shift.';
+
+
+--
+-- Name: refund_line uq_refund_line_per_sale_line; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.refund_line
+    ADD CONSTRAINT uq_refund_line_per_sale_line UNIQUE (refund_id, sale_line_id);
+
+
+--
+-- Name: CONSTRAINT uq_refund_line_per_sale_line ON refund_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_refund_line_per_sale_line ON public.refund_line IS 'Cites: RR-03. One allocation per sold line per refund.';
+
+
+--
+-- Name: refund uq_refund_number; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.refund
+    ADD CONSTRAINT uq_refund_number UNIQUE (store_id, document_number);
+
+
+--
+-- Name: CONSTRAINT uq_refund_number ON refund; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_refund_number ON public.refund IS 'Cites: BI-42, RT-479. The refund number is unique per store and never reused.';
+
+
+--
+-- Name: refund uq_refund_operation; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.refund
+    ADD CONSTRAINT uq_refund_operation UNIQUE (store_id, client_operation_id);
+
+
+--
+-- Name: CONSTRAINT uq_refund_operation ON refund; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_refund_operation ON public.refund IS 'Cites: BI-28, PY-39. A refund request replayed with the same operation id finds the original.';
+
+
+--
+-- Name: refund uq_refund_provider_reference; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.refund
+    ADD CONSTRAINT uq_refund_provider_reference UNIQUE (provider_transaction_reference);
+
+
+--
+-- Name: CONSTRAINT uq_refund_provider_reference ON refund; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_refund_provider_reference ON public.refund IS 'Cites: PY-15, RT-480. A provider refund transaction is recorded once.';
+
+
+--
 -- Name: sale uq_sale_checkout; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4056,6 +5155,36 @@ ALTER TABLE ONLY public.sale
 --
 
 COMMENT ON CONSTRAINT uq_sale_id_store ON public.sale IS 'Cites: RT-001, BI-14. Lets a line or movement prove, by foreign key, that it belongs to the sale''s store.';
+
+
+--
+-- Name: sale_line uq_sale_line_id_sale; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sale_line
+    ADD CONSTRAINT uq_sale_line_id_sale UNIQUE (id, sale_id);
+
+
+--
+-- Name: CONSTRAINT uq_sale_line_id_sale ON sale_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_sale_line_id_sale ON public.sale_line IS 'Cites: RR-03, RT-145. Lets a refund line prove, by foreign key, that it refunds a line of the refund''s own sale.';
+
+
+--
+-- Name: sale_line uq_sale_line_id_sale_variant; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sale_line
+    ADD CONSTRAINT uq_sale_line_id_sale_variant UNIQUE (id, sale_id, variant_id);
+
+
+--
+-- Name: CONSTRAINT uq_sale_line_id_sale_variant ON sale_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_sale_line_id_sale_variant ON public.sale_line IS 'Cites: RR-08, BI-16. Lets a return line prove, by foreign key, that it returns this line''s variant from the return''s sale.';
 
 
 --
@@ -4523,6 +5652,20 @@ COMMENT ON INDEX public.ix_category_parent IS 'Cites: PR-04, RT-026. Walks the t
 
 
 --
+-- Name: ix_customer_return_line_return; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_customer_return_line_return ON public.customer_return_line USING btree (customer_return_id);
+
+
+--
+-- Name: INDEX ix_customer_return_line_return; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.ix_customer_return_line_return IS 'Cites: RR-14. Finds a return''s lines when posting it.';
+
+
+--
 -- Name: ix_payment_checkout; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -4887,6 +6030,20 @@ COMMENT ON TRIGGER tg_cash_transaction_no_truncate ON public.cash_transaction IS
 
 
 --
+-- Name: cash_transaction tg_cash_transaction_refund_completes; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE CONSTRAINT TRIGGER tg_cash_transaction_refund_completes AFTER INSERT ON public.cash_transaction DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN ((new.refund_id IS NOT NULL)) EXECUTE FUNCTION public.assert_refund_payout_completes();
+
+
+--
+-- Name: TRIGGER tg_cash_transaction_refund_completes ON cash_transaction; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_cash_transaction_refund_completes ON public.cash_transaction IS 'Cites: PY-27, BI-04. Checked at commit.';
+
+
+--
 -- Name: category tg_category_archival; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -4940,6 +6097,76 @@ CREATE CONSTRAINT TRIGGER tg_checkout_outcome AFTER UPDATE OF status ON public.c
 --
 
 COMMENT ON TRIGGER tg_checkout_outcome ON public.checkout IS 'Cites: SP-01. Checked at commit.';
+
+
+--
+-- Name: customer_return tg_customer_return_before_write; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_customer_return_before_write BEFORE INSERT OR UPDATE ON public.customer_return FOR EACH ROW EXECUTE FUNCTION public.customer_return_before_write();
+
+
+--
+-- Name: TRIGGER tg_customer_return_before_write ON customer_return; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_customer_return_before_write ON public.customer_return IS 'Cites: RR-10, RR-11. Numbering, stamps and the return window.';
+
+
+--
+-- Name: customer_return_line tg_customer_return_line_rules; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_customer_return_line_rules BEFORE INSERT OR DELETE OR UPDATE ON public.customer_return_line FOR EACH ROW EXECUTE FUNCTION public.customer_return_line_rules();
+
+
+--
+-- Name: TRIGGER tg_customer_return_line_rules ON customer_return_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_customer_return_line_rules ON public.customer_return_line IS 'Cites: RR-17, RR-19. Disposition and destination are checked at entry.';
+
+
+--
+-- Name: customer_return tg_customer_return_posting; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_customer_return_posting AFTER UPDATE OF status ON public.customer_return FOR EACH ROW EXECUTE FUNCTION public.apply_return_posting();
+
+
+--
+-- Name: TRIGGER tg_customer_return_posting ON customer_return; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_customer_return_posting ON public.customer_return IS 'Cites: RR-14, BI-06. The atomic sold-quantity bound, taken when the goods are accepted.';
+
+
+--
+-- Name: customer_return tg_customer_return_posting_complete; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE CONSTRAINT TRIGGER tg_customer_return_posting_complete AFTER UPDATE OF status ON public.customer_return DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.assert_return_posting_complete();
+
+
+--
+-- Name: TRIGGER tg_customer_return_posting_complete ON customer_return; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_customer_return_posting_complete ON public.customer_return IS 'Cites: SM-43, BI-04. Posting is all or nothing, checked at commit.';
+
+
+--
+-- Name: customer_return tg_customer_return_state_machine; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_customer_return_state_machine BEFORE INSERT OR UPDATE OF status ON public.customer_return FOR EACH ROW EXECUTE FUNCTION public.enforce_state_transition('CustomerReturn', 'status');
+
+
+--
+-- Name: TRIGGER tg_customer_return_state_machine ON customer_return; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_customer_return_state_machine ON public.customer_return IS 'Cites: SM-43a, SM-02. A return is created Draft and moves only along the edges of state-machines s22.7.';
 
 
 --
@@ -5010,6 +6237,20 @@ CREATE TRIGGER tg_inventory_movement_no_truncate BEFORE TRUNCATE ON public.inven
 --
 
 COMMENT ON TRIGGER tg_inventory_movement_no_truncate ON public.inventory_movement IS 'Cites: BI-15, RT-059, AU-32. The ledger cannot be emptied in bulk.';
+
+
+--
+-- Name: inventory_movement tg_inventory_movement_return_state; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_inventory_movement_return_state BEFORE INSERT ON public.inventory_movement FOR EACH ROW EXECUTE FUNCTION public.assert_movement_return_state();
+
+
+--
+-- Name: TRIGGER tg_inventory_movement_return_state ON inventory_movement; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_inventory_movement_return_state ON public.inventory_movement IS 'Cites: BI-27, RR-17. Only a posted return brings goods back.';
 
 
 --
@@ -5276,6 +6517,76 @@ CREATE TRIGGER tg_reason_code_archival BEFORE UPDATE ON public.reason_code FOR E
 --
 
 COMMENT ON TRIGGER tg_reason_code_archival ON public.reason_code IS 'Cites: BI-40. Records a reason code''s archival once, with server time; an archived code takes no new documents.';
+
+
+--
+-- Name: refund tg_refund_before_write; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_refund_before_write BEFORE INSERT OR UPDATE ON public.refund FOR EACH ROW EXECUTE FUNCTION public.refund_before_write();
+
+
+--
+-- Name: TRIGGER tg_refund_before_write ON refund; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_refund_before_write ON public.refund IS 'Cites: RR-23, BI-09. Refund routing, numbering and freezing.';
+
+
+--
+-- Name: refund tg_refund_hold; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_refund_hold AFTER UPDATE OF status ON public.refund FOR EACH ROW EXECUTE FUNCTION public.apply_refund_hold();
+
+
+--
+-- Name: TRIGGER tg_refund_hold ON refund; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_refund_hold ON public.refund IS 'Cites: RR-24, SM-40. Two refunds of the same money cannot both be in flight.';
+
+
+--
+-- Name: refund_line tg_refund_line_rules; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_refund_line_rules BEFORE INSERT OR DELETE OR UPDATE ON public.refund_line FOR EACH ROW EXECUTE FUNCTION public.refund_line_rules();
+
+
+--
+-- Name: TRIGGER tg_refund_line_rules ON refund_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_refund_line_rules ON public.refund_line IS 'Cites: BI-27, AP-03. Freezes the allocation after Draft.';
+
+
+--
+-- Name: refund tg_refund_state_machine; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_refund_state_machine BEFORE INSERT OR UPDATE OF status ON public.refund FOR EACH ROW EXECUTE FUNCTION public.enforce_state_transition('Refund', 'status');
+
+
+--
+-- Name: TRIGGER tg_refund_state_machine ON refund; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_refund_state_machine ON public.refund IS 'Cites: SM-43a, SM-02. A refund is created Draft and moves only along the edges of state-machines s22.7.';
+
+
+--
+-- Name: refund tg_refund_whole; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE CONSTRAINT TRIGGER tg_refund_whole AFTER UPDATE OF status ON public.refund DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.assert_refund_whole();
+
+
+--
+-- Name: TRIGGER tg_refund_whole ON refund; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_refund_whole ON public.refund IS 'Cites: RR-43, PY-27. Checked at commit.';
 
 
 --
@@ -5578,6 +6889,21 @@ COMMENT ON CONSTRAINT fk_cash_transaction_currency ON public.cash_transaction IS
 
 
 --
+-- Name: cash_transaction fk_cash_transaction_refund; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cash_transaction
+    ADD CONSTRAINT fk_cash_transaction_refund FOREIGN KEY (refund_id, cash_shift_id) REFERENCES public.refund(id, cash_shift_id);
+
+
+--
+-- Name: CONSTRAINT fk_cash_transaction_refund ON cash_transaction; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_cash_transaction_refund ON public.cash_transaction IS 'Cites: PY-27, RT-156. A cash refund belongs to one refund, paid in that refund''s shift.';
+
+
+--
 -- Name: cash_transaction fk_cash_transaction_sale; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5683,6 +7009,111 @@ COMMENT ON CONSTRAINT fk_customer_organization ON public.customer IS 'Cites: CU-
 
 
 --
+-- Name: customer_return fk_customer_return_cancel_reason; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.customer_return
+    ADD CONSTRAINT fk_customer_return_cancel_reason FOREIGN KEY (cancel_reason_code_id, organization_id) REFERENCES public.reason_code(id, organization_id);
+
+
+--
+-- Name: CONSTRAINT fk_customer_return_cancel_reason ON customer_return; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_customer_return_cancel_reason ON public.customer_return IS 'Cites: SM-42, BI-25. A refused or withdrawn return carries a reason code of the organization.';
+
+
+--
+-- Name: customer_return fk_customer_return_late_reason; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.customer_return
+    ADD CONSTRAINT fk_customer_return_late_reason FOREIGN KEY (late_reason_code_id, organization_id) REFERENCES public.reason_code(id, organization_id);
+
+
+--
+-- Name: CONSTRAINT fk_customer_return_late_reason ON customer_return; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_customer_return_late_reason ON public.customer_return IS 'Cites: RR-11, BI-25. A late return carries a reason code of the organization.';
+
+
+--
+-- Name: customer_return_line fk_customer_return_line_location; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.customer_return_line
+    ADD CONSTRAINT fk_customer_return_line_location FOREIGN KEY (storage_location_id, organization_id) REFERENCES public.storage_location(id, organization_id);
+
+
+--
+-- Name: CONSTRAINT fk_customer_return_line_location ON customer_return_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_customer_return_line_location ON public.customer_return_line IS 'Cites: RR-19. The destination location, in the same organization.';
+
+
+--
+-- Name: customer_return_line fk_customer_return_line_return; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.customer_return_line
+    ADD CONSTRAINT fk_customer_return_line_return FOREIGN KEY (customer_return_id, sale_id, store_id) REFERENCES public.customer_return(id, sale_id, store_id);
+
+
+--
+-- Name: CONSTRAINT fk_customer_return_line_return ON customer_return_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_customer_return_line_return ON public.customer_return_line IS 'Cites: RR-13, RT-001. A line belongs to its return, and to that return''s one sale and store.';
+
+
+--
+-- Name: customer_return_line fk_customer_return_line_sale_line; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.customer_return_line
+    ADD CONSTRAINT fk_customer_return_line_sale_line FOREIGN KEY (sale_line_id, sale_id, variant_id) REFERENCES public.sale_line(id, sale_id, variant_id);
+
+
+--
+-- Name: CONSTRAINT fk_customer_return_line_sale_line ON customer_return_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_customer_return_line_sale_line ON public.customer_return_line IS 'Cites: RR-08, BI-16. A return line names the sold line it returns, and that line''s variant.';
+
+
+--
+-- Name: customer_return fk_customer_return_sale; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.customer_return
+    ADD CONSTRAINT fk_customer_return_sale FOREIGN KEY (sale_id, store_id) REFERENCES public.sale(id, store_id);
+
+
+--
+-- Name: CONSTRAINT fk_customer_return_sale ON customer_return; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_customer_return_sale ON public.customer_return IS 'Cites: RR-08, RR-13, BI-16. A return references exactly one sale, of the same store.';
+
+
+--
+-- Name: customer_return fk_customer_return_store; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.customer_return
+    ADD CONSTRAINT fk_customer_return_store FOREIGN KEY (store_id, organization_id) REFERENCES public.store(id, organization_id);
+
+
+--
+-- Name: CONSTRAINT fk_customer_return_store ON customer_return; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_customer_return_store ON public.customer_return IS 'Cites: RT-001. A return belongs to a store of its organization.';
+
+
+--
 -- Name: document_number_sequence fk_document_number_sequence_store; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5755,6 +7186,36 @@ ALTER TABLE ONLY public.inventory_movement
 --
 
 COMMENT ON CONSTRAINT fk_inventory_movement_location ON public.inventory_movement IS 'Cites: IV-01, MS-17. Stock moves at a location.';
+
+
+--
+-- Name: inventory_movement fk_inventory_movement_return_line; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.inventory_movement
+    ADD CONSTRAINT fk_inventory_movement_return_line FOREIGN KEY (customer_return_line_id, customer_return_id, variant_id, storage_location_id, disposition) REFERENCES public.customer_return_line(id, customer_return_id, variant_id, storage_location_id, disposition);
+
+
+--
+-- Name: CONSTRAINT fk_inventory_movement_return_line ON inventory_movement; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_inventory_movement_return_line ON public.inventory_movement IS 'Cites: BI-03, RT-096, RR-17, BE-36. The causing return line, with its variant, destination and disposition proven to match: the movement names its disposition.';
+
+
+--
+-- Name: inventory_movement fk_inventory_movement_return_store; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.inventory_movement
+    ADD CONSTRAINT fk_inventory_movement_return_store FOREIGN KEY (customer_return_id, store_id) REFERENCES public.customer_return(id, store_id);
+
+
+--
+-- Name: CONSTRAINT fk_inventory_movement_return_store ON inventory_movement; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_inventory_movement_return_store ON public.inventory_movement IS 'Cites: MS-16, BI-14. A return''s movements are attributed to the return''s store.';
 
 
 --
@@ -6145,6 +7606,171 @@ ALTER TABLE ONLY public.reason_code
 --
 
 COMMENT ON CONSTRAINT fk_reason_code_organization ON public.reason_code IS 'Cites: BI-25. Reason codes are per organization.';
+
+
+--
+-- Name: refund fk_refund_cancel_reason; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.refund
+    ADD CONSTRAINT fk_refund_cancel_reason FOREIGN KEY (cancel_reason_code_id, organization_id) REFERENCES public.reason_code(id, organization_id);
+
+
+--
+-- Name: CONSTRAINT fk_refund_cancel_reason ON refund; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_refund_cancel_reason ON public.refund IS 'Cites: BI-25. A cancelled refund carries a reason code of the organization (s22.7: cancel needs a reason).';
+
+
+--
+-- Name: refund fk_refund_currency; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.refund
+    ADD CONSTRAINT fk_refund_currency FOREIGN KEY (store_id, currency_code) REFERENCES public.store(id, currency_code);
+
+
+--
+-- Name: CONSTRAINT fk_refund_currency ON refund; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_refund_currency ON public.refund IS 'Cites: BI-01. A refund is in the store''s currency, as integer minor units.';
+
+
+--
+-- Name: refund_line fk_refund_line_refund; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.refund_line
+    ADD CONSTRAINT fk_refund_line_refund FOREIGN KEY (refund_id, sale_id) REFERENCES public.refund(id, sale_id);
+
+
+--
+-- Name: CONSTRAINT fk_refund_line_refund ON refund_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_refund_line_refund ON public.refund_line IS 'Cites: RR-03. A line belongs to its refund and to that refund''s sale.';
+
+
+--
+-- Name: refund_line fk_refund_line_sale_line; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.refund_line
+    ADD CONSTRAINT fk_refund_line_sale_line FOREIGN KEY (sale_line_id, sale_id) REFERENCES public.sale_line(id, sale_id);
+
+
+--
+-- Name: CONSTRAINT fk_refund_line_sale_line ON refund_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_refund_line_sale_line ON public.refund_line IS 'Cites: RR-03, RT-145. A line refunds a sold line of the same sale.';
+
+
+--
+-- Name: refund_line fk_refund_line_store; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.refund_line
+    ADD CONSTRAINT fk_refund_line_store FOREIGN KEY (sale_id, store_id) REFERENCES public.sale(id, store_id);
+
+
+--
+-- Name: CONSTRAINT fk_refund_line_store ON refund_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_refund_line_store ON public.refund_line IS 'Cites: RT-001, MS-01. A line carries its sale''s store.';
+
+
+--
+-- Name: refund fk_refund_payment; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.refund
+    ADD CONSTRAINT fk_refund_payment FOREIGN KEY (payment_id) REFERENCES public.payment(id);
+
+
+--
+-- Name: CONSTRAINT fk_refund_payment ON refund; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_refund_payment ON public.refund IS 'Cites: RR-22, RR-23, BI-09. For a refund to the original tender, the payment it goes back to.';
+
+
+--
+-- Name: refund fk_refund_reason; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.refund
+    ADD CONSTRAINT fk_refund_reason FOREIGN KEY (reason_code_id, organization_id) REFERENCES public.reason_code(id, organization_id);
+
+
+--
+-- Name: CONSTRAINT fk_refund_reason ON refund; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_refund_reason ON public.refund IS 'Cites: RR-35, BI-25. A reason code of the organization.';
+
+
+--
+-- Name: refund fk_refund_return; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.refund
+    ADD CONSTRAINT fk_refund_return FOREIGN KEY (customer_return_id, sale_id, store_id) REFERENCES public.customer_return(id, sale_id, store_id);
+
+
+--
+-- Name: CONSTRAINT fk_refund_return ON refund; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_refund_return ON public.refund IS 'Cites: RR-01, SM-39. The originating return, where there is one, of the same sale and store; a return may have several refunds.';
+
+
+--
+-- Name: refund fk_refund_sale; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.refund
+    ADD CONSTRAINT fk_refund_sale FOREIGN KEY (sale_id, store_id) REFERENCES public.sale(id, store_id);
+
+
+--
+-- Name: CONSTRAINT fk_refund_sale ON refund; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_refund_sale ON public.refund IS 'Cites: BI-10, RT-145. A refund is bounded against one sale of the same store.';
+
+
+--
+-- Name: refund fk_refund_shift; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.refund
+    ADD CONSTRAINT fk_refund_shift FOREIGN KEY (cash_shift_id, cash_drawer_id, pos_terminal_id, store_id) REFERENCES public.cash_shift(id, cash_drawer_id, pos_terminal_id, store_id);
+
+
+--
+-- Name: CONSTRAINT fk_refund_shift ON refund; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_refund_shift ON public.refund IS 'Cites: PY-27, CD-19. Cash paid out of a drawer is paid in one shift of one till of the store.';
+
+
+--
+-- Name: refund fk_refund_store; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.refund
+    ADD CONSTRAINT fk_refund_store FOREIGN KEY (store_id, organization_id) REFERENCES public.store(id, organization_id);
+
+
+--
+-- Name: CONSTRAINT fk_refund_store ON refund; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_refund_store ON public.refund IS 'Cites: RT-001. A refund belongs to a store of its organization.';
 
 
 --
@@ -6824,4 +8450,5 @@ INSERT INTO public.schema_migrations (version) VALUES
     ('20260930140000'),
     ('20260930150000'),
     ('20260930160000'),
-    ('20260930161000');
+    ('20260930161000'),
+    ('20260930170000');

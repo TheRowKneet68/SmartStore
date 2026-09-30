@@ -160,6 +160,8 @@ constraint, and a test then asserts that no column named `*_by` lacks one.
 | `payment` | `created_by`, `status_changed_by` | Domain 4 |
 | `sale` | `employee_id` (named for the spec's `EmployeeId`; domain 7's test must include it) | Domain 4 |
 | `shift_count` | `counted_by`, `acknowledged_by` | Domain 4 |
+| `customer_return` | `created_by`, `posted_by`, `late_approved_by`, `status_changed_by` | Domain 5 |
+| `refund` | `created_by`, `submitted_by`, `approved_by`, `status_changed_by` | Domain 5 |
 
 Creation of master data (organization, store, warehouse, location) is attributed by its audit event (domain 6), not
 by a `created_by` column. An organization is necessarily created before any of its employees exists, so a
@@ -190,6 +192,7 @@ Each domain document lists the guards it leaves pending, and the domain that clo
 | `WH-01`, `RT-004`, `MS-18` | Stock is sold only from a sellable location | Domains 3 and 4 |
 | `WH-02` | A central-warehouse location never goes negative | Domain 3 |
 | `MS-16`, `MS-19`, `D-03` | A movement's store is the location's warehouse store, or a store attributed to the central location | Domain 3 |
+| `SP-55`, `BI-41` | A sale with a posted return cannot be voided | The migration that builds voids (OQ-017); until then no sale can be voided (`SS044`) |
 
 ## 13. Citations
 
@@ -230,7 +233,7 @@ standard leaves to implementations and PostgreSQL does not use:
 
 | Code | Meaning | Raised by |
 |---|---|---|
-| `SS001` | A recorded fact (who and when) cannot be rewritten | `record_deactivation()` |
+| `SS001` | A recorded fact (who and when) cannot be rewritten | `record_deactivation()`, `customer_return_before_write()`, `refund_before_write()` |
 | `SS002` | A warehouse must have its Default storage location | `assert_warehouse_has_default_location()` |
 | `SS003` | A document-number counter cannot move backwards | `forbid_document_number_decrease()` |
 | `SS004` | Not a legal state for creation, or not an edge of the machine | `enforce_state_transition()` |
@@ -245,17 +248,17 @@ standard leaves to implementations and PostgreSQL does not use:
 | `SS013` | A quantity has more decimals than its unit allows | `apply_inventory_movement()` |
 | `SS014` | The movement's store may not move stock at that location | `apply_inventory_movement()` |
 | `SS015` | A reversal must mirror the movement it reverses | `apply_inventory_movement()` |
-| `SS016` | The causing document is not in a state that moves stock that way | `assert_movement_adjustment_state()` |
+| `SS016` | The causing document is not in a state that moves stock that way | `assert_movement_adjustment_state()`, `assert_movement_sale_state()`, `assert_movement_return_state()` |
 | `SS017` | The store has no settings in force | `apply_inventory_movement()` |
-| `SS018` | Adjustment lines change only while the adjustment is a draft | `stock_adjustment_line_draft_only()` |
+| `SS018` | Document lines change only while the document is a draft (adjustment, return, refund) | `stock_adjustment_line_draft_only()`, `customer_return_line_rules()`, `refund_line_rules()` |
 | `SS019` | A store holding stock cannot be deactivated | `forbid_store_deactivation_with_stock()` |
 | `SS020` | A deactivated store moves no stock | `apply_inventory_movement()` |
 | `SS021` | A used unit's quantity kind cannot change | `freeze_used_quantity_kind()` |
-| `SS022` | Posting or reversal did not write exactly its movements | `assert_adjustment_posting_complete()` |
+| `SS022` | Posting or reversal did not write exactly its movements | `assert_adjustment_posting_complete()`, `assert_return_posting_complete()` |
 | `SS023` | A Transit location is reached only by transfer movements | `apply_inventory_movement()` |
-| `SS024` | An archived reason code takes no new documents | `stock_adjustment_before_write()` |
-| `SS025` | The till is not in service, or is in training, for a real sale | `checkout_before_write()`, `sale_before_insert()`, `cash_shift_before_write()` |
-| `SS026` | The shift is not open | `checkout_before_write()`, `sale_before_insert()` |
+| `SS024` | An archived reason code takes no new documents | `stock_adjustment_before_write()`, `assert_reason_code_live()` |
+| `SS025` | The till is not in service, or is in training, for a real sale or a cash refund | `checkout_before_write()`, `sale_before_insert()`, `cash_shift_before_write()`, `refund_before_write()` |
+| `SS026` | The shift is not open | `checkout_before_write()`, `sale_before_insert()`, `refund_before_write()` |
 | `SS027` | The checkout is not open | `payment_before_write()`, `sale_before_insert()` |
 | `SS028` | The variant is not sellable (product status or archived variant) | `sale_line_before_insert()` |
 | `SS029` | The variant is unclassified for tax, or not taxed at the rate in force | `sale_line_before_insert()` |
@@ -264,7 +267,7 @@ standard leaves to implementations and PostgreSQL does not use:
 | `SS032` | The location is not a sellable location of the store | `sale_line_before_insert()`, `assert_terminal_sells_from_own_location()` |
 | `SS033` | The scanned barcode does not identify the variant | `sale_line_before_insert()` |
 | `SS034` | The sale is not whole at commit (lines, totals, tenders, change or stock) | `assert_sale_complete()` |
-| `SS035` | A payment in a terminal state is never changed | `payment_before_write()` |
+| `SS035` | A payment or refund in a terminal state is never changed | `payment_before_write()`, `refund_before_write()` |
 | `SS036` | Written only in the sale's completion transaction | `sale_line_before_insert()`, `assert_movement_sale_state()` |
 | `SS037` | The organization's currency and time zone are fixed once a financial document exists | `freeze_organization_money_settings()` |
 | `SS038` | Tax mode or settings snapshot conflict (fixed once sold; not the version in force; a scheduled change) | `sale_before_insert()`, `freeze_tax_mode_after_sale()` |
@@ -275,6 +278,17 @@ standard leaves to implementations and PostgreSQL does not use:
 | `SS043` | A checkout closes once, and completes only with its sale | `checkout_before_write()`, `assert_checkout_outcome()` |
 | `SS044` | Voiding a sale is not built in v1 (OQ-017) | `assert_movement_sale_state()` |
 | `SS045` | The payment method is not enabled at the store | `payment_before_write()` |
+| `SS046` | More than is still returnable on the sold line (`DETAIL`: the remainder) | `customer_return_line_rules()`, `apply_return_posting()` |
+| `SS047` | The return's disposition does not go to that kind of location | `customer_return_line_rules()` |
+| `SS048` | The return window has closed and there is no late approval (`DETAIL`: the closing date) | `customer_return_before_write()` |
+| `SS049` | More than is still refundable on the sold line (`DETAIL`: the remainder) | `apply_refund_hold()` |
+| `SS050` | The original tender is not a captured payment of the refund's sale | `refund_before_write()` |
+| `SS051` | A refund for a return names a line that the posted return did not take back | `apply_refund_hold()` |
+| `SS052` | The refund's tax is not the line's stored tax in proportion to the amount refunded | `apply_refund_hold()` |
+| `SS053` | The refund is not whole at commit (its lines; the drawer payout and the completion) | `assert_refund_whole()`, `assert_refund_payout_completes()` |
+
+Where a refusal names a quantity, an amount or a date, the value is in the error's `DETAIL` field, so the application
+can show it without parsing the message.
 
 ## 16. What every domain delivers
 

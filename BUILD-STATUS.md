@@ -70,6 +70,15 @@ schema; details in the domain documents:
 | Shift reopen | `CD-26`, `SM-56` | D4 — permission `OPEN DECISION` (OQ-014) |
 | Customer management | `CU-02`..`CU-38` | D4 — only the walk-in record exists |
 | Device telemetry | `SM-60a`, `PT-04`, `HD-16` | D4 — terminal status is the lifecycle only |
+| Goodwill return with no sale | `RR-09`, `RT-476` | D5 — every v1 return names its sale's lines; a goodwill refund (with a reason) covers money without goods |
+| Store credit and gift-card refunds | `RR-07`, `RR-26`..`RR-29`, `PY-28`, `RT-158`, `RT-162`, `RT-522` | D5 — deferred with credit; v1 refunds to the original tender or in cash |
+| Exchanges | `RR-30`..`RR-34`, `RT-159` | D5 — a return and a new sale, done separately in v1 |
+| Loyalty reversal, promotion recalculation, coupon decrements | `RR-38`..`RR-41`, `RT-160` | D5 — deferred with loyalty and discounts |
+| Batch attribution of returns | `RR-20`, `BE-45`, `BE-46` | D5 — with batches (D3 §7) |
+| Settling and closing returns | §22.7, `SM-43` | D5 — undefined refundable remainder and `OPEN DECISION` keys (OQ-023); a return rests at `Posted` |
+| Refund notifications, cash-out threshold, goodwill concentration report | `SM-41`, `CD-15`, `RR-37`, `RT-523` | D5 — with notifications, approval thresholds and reporting |
+| Customer-facing refusal text | `RT-524`, `UX-31` | D5 — UX phase; the internal reason code is stored |
+| Cross-store returns | multi-store-domain | D5 — a return is at its sale's store; comes with multi-store |
 
 Design these so the schema can carry them without a rewrite. Do not build them.
 
@@ -155,9 +164,24 @@ Owner-approved with ADR-31 on 2026-09-30 (ADR-31 §13 has the full text):
   - **Owner decision needed before Step 3's card path: OQ-018** (payment submit, capture and void permission keys are
     `OPEN DECISION`).
 
+- 2026-09-30 — **Domain 5 — Returns / Refunds.** DESIGNED + IMPLEMENTED (migration) + **TESTED** (229 tests
+  passing). No application code. [D5 design](docs/database/D5-RETURNS-REFUNDS.md).
+  - `customer_return` + lines: goods back against the lines of exactly one sale; a mandatory disposition that decides
+    the location (Sellable, Quarantine, Damaged, ExpiredHold); the store's return window with late approval by a
+    different employee; posting all-or-nothing; the stock movement names its disposition.
+  - `refund` + lines: to the original tender (cash to the drawer, card to the provider) or in cash; approved by a
+    second person; the hold on `Processing` bounded per line by the settled amount; tax at the stored tax in
+    proportion; the drawer payout and the completion are one event; expected cash reduced.
+  - Both bounds are single conditional updates of the `sale_line` counters, written only by owner triggers. **50
+    concurrent returns of a five-unit line: exactly 5 succeed.** 10 concurrent refunds of the same money: exactly 1.
+    `sale_counter_drift()` rebuilds the counters and the sale's status and never repairs.
+  - Mutation-checked: 59 guard removals (see the log).
+  - **Owner decision needed before Step 3 pays any refund: OQ-023** (the `submit to provider` and `cancel` keys are
+    `OPEN DECISION`).
+
 ## In progress
 
-- Domain 5 (Returns / Refunds): design document and migration.
+- Domain 6 (Audit): design document and migration.
 
 ## Owner actions pending
 
@@ -171,11 +195,10 @@ Until then, tests run on a scratch PostgreSQL 17.11 cluster and a portable Node 
 
 ## Next
 
-1. **Domain 5 — Returns / Refunds.** Returns bounded per line by the sold quantity (`BI-06`, `BI-16`), refunds by the
-   settled amount (`BI-10`), both atomically through the `sale_line` counters; disposition on every line (`RR-17`);
-   the sale's status as a cache of its counters (`SP-66`).
-2. Then continue domain by domain — one at a time, with tests, committing after each passing step: 6 Audit,
-   7 Employee / Role / Permission.
+1. **Domain 6 — Audit.** The append-only audit trail (architecture §14), the event types of D-06, and the audit rows
+   the transition contracts of domains 1–5 require.
+2. Then domain 7, Employee / Role / Permission, with the actor foreign keys of CONVENTIONS §11 and the transition
+   permission table (architecture §8.4), where the `OPEN DECISION` keys of OQ-018 and OQ-023 refuse.
 3. Then Step 3, implementation, in the order in the working agreements.
 
 Update this file after every step, including steps that failed and were abandoned.
@@ -241,3 +264,27 @@ Append-only. One dated line per step, including failed and abandoned attempts.
   All 191 tests passed on the first full run after those review fixes. Design decisions stated for the owner:
   `checkout` (a structure PY-38's order requires; its name and statuses are this design's own), the quote-time price
   check (RT-124 over architecture s10.3), and the nine open questions OQ-014..OQ-022.
+- 2026-09-30 — Domain 5. Failed attempts, each fixed before commit:
+  (1) Review of the first draft against the specification, before any run, found five defects.
+      - A `MATCH FULL` on the refund's till key would have required a till on every card refund, because `store_id` is
+        never null. Replaced with an all-or-nothing check.
+      - A cap on refunds per original tender that the specification never states. Removed; now OQ-023.
+      - A `Completed → Returned` sale edge with an invented event name. Replaced: the status now moves through the two
+        contracted edges.
+      - A store default disposition allowing four values where organization-model §3 allows two. Narrowed.
+      - A movement with no disposition, where `BE-36` requires the movement to name it. Added, proven by key.
+  (2) PL/pgSQL ends an `IF` condition at the first `THEN`, so `IF CASE … WHEN … THEN` did not parse. The test
+      template migration failed and no test ran. Fixed with parentheses. dbmate printed "Applied" for the file before
+      the error, so the mutation harness judges a broken migration by dbmate's failure message instead.
+  (3) The scratch development database still had the first draft applied. It was dropped and rebuilt from the
+      migrations (scratch cluster only), so `db/schema.sql` is generated from the committed migration.
+  (4) The mutation plan exposed seven guards that no test yet exercised. A test was added for each before the run:
+      - a refund to a declined card attempt, which needed a `declinedCardAttempts` option in the sale fixture;
+      - rewriting a refund's submitter;
+      - rewriting a refund's approver;
+      - a late approval without a reason;
+      - a cash refund row without its refund;
+      - lines claiming another sale than their document's.
+  Result: 229 tests passing on 4 consecutive runs, and 59 of 59 mutations detected. Decisions stated for the owner are
+  in D5 §8 and OQ-023. The most important: **no refund can be paid until the owner names the `submit to provider`
+  permission key.**

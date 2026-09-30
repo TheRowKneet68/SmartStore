@@ -519,6 +519,8 @@ export interface SalePlan {
   change: number;
   /** Leave card payments Pending (a timeout) instead of capturing them. */
   leaveCardPending?: boolean;
+  /** Card attempts declined before the tenders that settle the sale (PY-42: every attempt is its own row). */
+  declinedCardAttempts?: number;
   skipMovements?: boolean;
   skipChange?: boolean;
 }
@@ -623,6 +625,10 @@ export async function startCheckout(db: Db, t: TillWorld, operationId: string = 
 export async function submitSale(pool: pg.Pool, t: TillWorld, plan: SalePlan): Promise<{ saleId: string; checkoutId: string }> {
   const checkoutId = await startCheckout(pool, t, plan.operationId);
   let sequence = 0;
+  for (let i = 0; i < (plan.declinedCardAttempts ?? 0); i++) {
+    const id = await insertPayment(pool, t, checkoutId, ++sequence, { type: 'Card', amount: plan.totalDue });
+    await setPaymentStatus(pool, id, 'Declined');
+  }
   for (const tender of plan.tenders.filter((x) => x.type === 'Card')) {
     const id = await insertPayment(pool, t, checkoutId, ++sequence, tender);
     if (!plan.leaveCardPending) {
@@ -688,9 +694,227 @@ export async function submitSale(pool: pg.Pool, t: TillWorld, plan: SalePlan): P
   return { saleId, checkoutId };
 }
 
-/** Plan and submit, paying the exact total in cash. */
-export async function sell(pool: pg.Pool, t: TillWorld, requests: LineRequest[]): Promise<{ saleId: string; checkoutId: string }> {
+/** Plan and submit, paying the exact total in one tender (cash by default). */
+export async function sell(
+  pool: pg.Pool,
+  t: TillWorld,
+  requests: LineRequest[],
+  tender: 'Cash' | 'Card' = 'Cash',
+): Promise<{ saleId: string; checkoutId: string }> {
   const plan = await planSale(pool, t, requests, []);
-  plan.tenders = [{ type: 'Cash', amount: plan.totalDue, tendered: plan.totalDue }];
+  plan.tenders = [{ type: tender, amount: plan.totalDue, tendered: tender === 'Cash' ? plan.totalDue : undefined }];
   return submitSale(pool, t, plan);
+}
+
+// ---------------------------------------------------------------- returns and refunds (domain 5)
+
+export interface SoldLine {
+  id: string;
+  variant: string;
+  quantity: number;
+  settled: number;
+  tax: number;
+}
+
+export async function soldLines(db: Db, saleId: string): Promise<SoldLine[]> {
+  const { rows } = await db.query<{ id: string; variant_id: string; quantity: string; settled_amount: string; tax_amount: string }>(
+    'SELECT id, variant_id, quantity, settled_amount, tax_amount FROM sale_line WHERE sale_id = $1 ORDER BY line_number',
+    [saleId],
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    variant: r.variant_id,
+    quantity: Number(r.quantity),
+    settled: Number(r.settled_amount),
+    tax: Number(r.tax_amount),
+  }));
+}
+
+/** The captured tender of a single-tender sale. */
+export async function capturedPayment(db: Db, saleId: string): Promise<string> {
+  const { rows } = await db.query<{ id: string }>(
+    `SELECT p.id FROM payment p JOIN sale s ON s.checkout_id = p.checkout_id WHERE s.id = $1 AND p.status = 'Captured'`,
+    [saleId],
+  );
+  return rows[0]!.id;
+}
+
+export type Disposition = 'Sellable' | 'Quarantine' | 'Damaged' | 'Expired';
+
+export interface ReturnLineInput {
+  line: SoldLine;
+  quantity: number;
+  /** Sellable when omitted. */
+  disposition?: Disposition;
+  /** The till's sellable location when omitted. */
+  location?: string;
+}
+
+export interface CustomerReturn {
+  id: string;
+  store: string;
+  org: string;
+  sale: string;
+  createdBy: string;
+}
+
+export async function draftReturn(
+  db: Db,
+  t: TillWorld,
+  saleId: string,
+  lines: ReturnLineInput[],
+  operationId: string = randomUUID(),
+): Promise<CustomerReturn> {
+  const createdBy = actor();
+  const r = await db.query<{ id: string }>(
+    `INSERT INTO customer_return (store_id, organization_id, sale_id, client_operation_id, created_by, status_changed_by)
+     VALUES ($1, $2, $3, $4, $5, $5) RETURNING id`,
+    [t.store, t.org, saleId, operationId, createdBy],
+  );
+  const ret = { id: r.rows[0]!.id, store: t.store, org: t.org, sale: saleId, createdBy };
+  for (const l of lines) await addReturnLine(db, t, ret, l);
+  return ret;
+}
+
+export async function addReturnLine(
+  db: Db,
+  t: TillWorld,
+  r: CustomerReturn,
+  l: ReturnLineInput,
+  operationId: string = randomUUID(),
+): Promise<string> {
+  const x = await db.query<{ id: string }>(
+    `INSERT INTO customer_return_line (customer_return_id, store_id, organization_id, sale_id, sale_line_id, variant_id,
+       quantity, disposition, storage_location_id, client_operation_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
+    [r.id, t.store, t.org, r.sale, l.line.id, l.line.variant, l.quantity, l.disposition ?? 'Sellable', l.location ?? t.location,
+      operationId],
+  );
+  return x.rows[0]!.id;
+}
+
+/** The posting transaction: status Posted, one inventory transaction, one SALE_RETURN movement per line, sorted. */
+export async function postReturn(pool: pg.Pool, r: CustomerReturn, options: { skipMovements?: boolean; poster?: string } = {}): Promise<void> {
+  await inTransaction(pool, async (c) => {
+    const poster = options.poster ?? actor();
+    await c.query(`UPDATE customer_return SET status = 'Posted', posted_by = $2, status_changed_by = $2 WHERE id = $1`, [r.id, poster]);
+    if (options.skipMovements) return;
+    const tx = await c.query<{ id: string }>(
+      'INSERT INTO inventory_transaction (store_id, created_by) VALUES ($1, $2) RETURNING id',
+      [r.store, poster],
+    );
+    const lines = await c.query<{ id: string; variant_id: string; storage_location_id: string; quantity: string; disposition: string }>(
+      `SELECT id, variant_id, storage_location_id, quantity, disposition FROM customer_return_line
+       WHERE customer_return_id = $1 ORDER BY variant_id, storage_location_id, id`,
+      [r.id],
+    );
+    for (const l of lines.rows) {
+      await c.query(
+        `INSERT INTO inventory_movement (inventory_transaction_id, store_id, organization_id, variant_id, storage_location_id,
+           movement_type, direction, quantity, customer_return_id, customer_return_line_id, disposition)
+         VALUES ($1, $2, $3, $4, $5, 'SALE_RETURN', 'In', $6, $7, $8, $9)`,
+        [tx.rows[0]!.id, r.store, r.org, l.variant_id, l.storage_location_id, l.quantity, r.id, l.id, l.disposition],
+      );
+    }
+  });
+}
+
+/** Draft and post a return in one call: the whole legitimate path. */
+export async function returnGoods(pool: pg.Pool, t: TillWorld, saleId: string, lines: ReturnLineInput[]): Promise<CustomerReturn> {
+  const r = await draftReturn(pool, t, saleId, lines);
+  await postReturn(pool, r);
+  return r;
+}
+
+/**
+ * RR-06, RR-42: the tax on refunding `amount` of a line after `before` was refunded: the line's stored tax in proportion
+ * to the cumulative refunded amount, rounded half away from zero, less the tax already refunded.
+ */
+export function refundTax(line: SoldLine, amount: number, before = { amount: 0, tax: 0 }): number {
+  return Math.round((line.tax * (before.amount + amount)) / line.settled) - before.tax;
+}
+
+export interface RefundInput {
+  lines: { line: SoldLine; amount: number; tax?: number }[];
+  method?: 'OriginalTender' | 'Cash';
+  payment?: string;
+  returnId?: string;
+  reason?: string;
+  /** Name the till's drawer and shift (a drawer refund). True unless a card refund goes to the provider. */
+  till?: boolean;
+  operationId?: string;
+  /** Override the header totals, to prove they must equal the lines. */
+  amount?: number;
+}
+
+export async function draftRefund(db: Db, t: TillWorld, saleId: string, input: RefundInput): Promise<{ id: string; createdBy: string }> {
+  const createdBy = actor();
+  const lines = input.lines.map((l) => ({ ...l, tax: l.tax ?? refundTax(l.line, l.amount) }));
+  const till = input.till === false ? [null, null, null] : [t.terminal, t.drawer, t.shift];
+  const r = await db.query<{ id: string }>(
+    `INSERT INTO refund (store_id, organization_id, sale_id, customer_return_id, client_operation_id, method, payment_id,
+       pos_terminal_id, cash_drawer_id, cash_shift_id, amount, tax_amount, currency_code, reason_code_id, created_by,
+       status_changed_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $15) RETURNING id`,
+    [t.store, t.org, saleId, input.returnId ?? null, input.operationId ?? randomUUID(), input.method ?? 'Cash',
+      input.payment ?? null, ...till, input.amount ?? lines.reduce((s, l) => s + l.amount, 0),
+      lines.reduce((s, l) => s + l.tax, 0), TEST_CURRENCY, input.reason ?? null, createdBy],
+  );
+  for (const l of lines) {
+    await db.query(
+      'INSERT INTO refund_line (refund_id, store_id, sale_id, sale_line_id, amount, tax_amount) VALUES ($1, $2, $3, $4, $5, $6)',
+      [r.rows[0]!.id, t.store, saleId, l.line.id, l.amount, l.tax],
+    );
+  }
+  return { id: r.rows[0]!.id, createdBy };
+}
+
+/** Submit by one employee and approve by another (BI-26), as state-machines s22.7 requires. */
+export async function approveRefund(db: Db, id: string): Promise<void> {
+  const submitter = actor();
+  await db.query(`UPDATE refund SET status = 'PendingApproval', submitted_by = $2, status_changed_by = $2 WHERE id = $1`, [id, submitter]);
+  const approver = actor();
+  await db.query(`UPDATE refund SET status = 'Approved', approved_by = $2, status_changed_by = $2 WHERE id = $1`, [id, approver]);
+}
+
+/** Moves a refund along one edge; `cancelReason` is recorded with a cancellation (s22.7). */
+export async function setRefundStatus(db: Db, id: string, status: string, cancelReason: string | null = null): Promise<void> {
+  await db.query(
+    `UPDATE refund SET status = $2, status_changed_by = $3, cancel_reason_code_id = coalesce($4, cancel_reason_code_id)
+     WHERE id = $1`,
+    [id, status, actor(), cancelReason],
+  );
+}
+
+/** A drawer refund's payout transaction: hold, pay out of the drawer, complete, as one event (PY-27). */
+export async function payOutRefund(
+  pool: pg.Pool,
+  id: string,
+  options: { skipPayout?: boolean; payout?: number; skipComplete?: boolean } = {},
+): Promise<void> {
+  await inTransaction(pool, async (c) => {
+    await setRefundStatus(c, id, 'Processing');
+    const { rows } = await c.query<{ amount: string; cash_shift_id: string; cash_drawer_id: string; store_id: string }>(
+      'SELECT amount, cash_shift_id, cash_drawer_id, store_id FROM refund WHERE id = $1',
+      [id],
+    );
+    const r = rows[0]!;
+    if (!options.skipPayout) {
+      await c.query(
+        `INSERT INTO cash_transaction (cash_shift_id, cash_drawer_id, store_id, type, direction, amount, currency_code,
+           created_by, refund_id)
+         VALUES ($1, $2, $3, 'RefundFromDrawer', 'Out', $4, $5, $6, $7)`,
+        [r.cash_shift_id, r.cash_drawer_id, r.store_id, options.payout ?? Number(r.amount), TEST_CURRENCY, actor(), id],
+      );
+    }
+    if (!options.skipComplete) await setRefundStatus(c, id, 'Completed');
+  });
+}
+
+/** Draft, approve and pay out a drawer refund: the whole legitimate path. */
+export async function cashRefund(pool: pg.Pool, t: TillWorld, saleId: string, input: RefundInput): Promise<string> {
+  const { id } = await draftRefund(pool, t, saleId, input);
+  await approveRefund(pool, id);
+  await payOutRefund(pool, id);
+  return id;
 }

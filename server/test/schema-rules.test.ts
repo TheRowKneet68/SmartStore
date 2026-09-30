@@ -66,11 +66,18 @@ const SCOPE: Record<string, 'tenant' | 'organization' | 'store' | 'reference' | 
   sale: 'store',
   sale_line: 'store',
   shift_count: 'store',
+  // Domain 5. organization-model s8.2: returns and refunds are store documents.
+  customer_return: 'store',
+  customer_return_line: 'store',
+  refund: 'store',
+  refund_line: 'store',
 };
 
 /** Tables the runtime role may DELETE from, each with its authority. Nothing else may be deleted. */
 const DELETE_ALLOWED: Record<string, string> = {
   stock_adjustment_line: 'overview s3.6: draft document lines never submitted; the trigger allows Draft only',
+  customer_return_line: 'overview s3.6: draft document lines never posted; the trigger allows Draft only',
+  refund_line: 'overview s3.6: draft document lines never submitted; the trigger allows Draft only',
 };
 
 /** Tables whose rows are history: the application role may read and insert, never update or delete. */

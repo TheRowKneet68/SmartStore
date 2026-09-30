@@ -207,6 +207,9 @@ fallback is a design that holds either answer, not a guess at the answer.
   Change is recorded on the sale and as a `ChangeDisbursed` drawer row (`CD-18`, `RT-132`, `RT-135`). Expected cash =
   float + cash applied (`CD-06`'s terms), without subtracting change a second time. A cash refund will *reduce* expected
   cash (domain 5), and that sign is flagged here.
+- **2026-09-30, domain 5:** implemented as a subtraction. Cash-management §5 gives `RefundFromDrawer` the direction
+  `Out`, and `PY-27` says a refund missing from the drawer record leaves the count short; both contradict `CD-06`'s plus
+  sign. Tested: a 100 cash refund in a shift with a 1000 float and 300 of cash sales leaves 1200 expected.
 
 ### OQ-016 — Card-only tills: does every sale need a drawer and a shift?
 
@@ -265,6 +268,40 @@ fallback is a design that holds either answer, not a guess at the answer.
 - **Meanwhile:** the completion transaction leaves no record of its own (cash tenders, sale, lines, movements, change)
   when it fails, which is tested. Card attempts made before it remain, as `PY-38` and `PY-42` require, and are
   reconciled (`PY-40`).
+
+### OQ-023 — Returns and refunds: undecided permissions, skipped approval, settling, and the window's edges
+
+- **Unknown, and needed from the owner before Step 3 pays a refund:** §22.7 gives the permission `OPEN DECISION` to
+  five transitions. On the refund: `submit to provider` (`Approved → Processing`, the step that pays) and `cancel`. On
+  the return: `cancel`, `settle` and `close`. `SM-02d` forbids borrowing a neighbouring key, and architecture §8.4 says
+  an unkeyed transition refuses. So **no refund can be paid in v1, not even in cash, until the owner names the
+  `submit to provider` key.** This is the same kind of decision as OQ-018.
+- **Unknown, not blocking the schema:**
+  1. *Skipping approval.* State-machines §8 says approval "may be skipped where none is required", and the §12.2
+     diagram marks `PendingApproval` "(if required)". But §22.7 contracts only `Draft → PendingApproval → Approved`,
+     with approver ≠ issuer, and the `LargeRefund` threshold (approval-workflows §1, per store and per currency) has no
+     values. There is also no way out of `Draft` or `PendingApproval` except forward: no reject, no withdraw.
+     *Meanwhile:* every refund is approved by a second person, as OQ-013 does for adjustments. A skip edge and a
+     threshold setting are additive.
+  2. *Settling a return.* `Posted → Settled` needs "the refundable amount is zero, or the remainder is written off with
+     a reason". A return's refundable amount is not defined: presumably each line's settled amount prorated by the
+     quantity returned, but with what rounding? Where a write-off is recorded is not defined either. *Meanwhile:*
+     there is no settle or close edge, and a return rests at `Posted`. A refund for a return may pay only lines that
+     return took back, bounded by each line's settled amount (`RR-03`), not by the value of the quantity returned.
+  3. *The window's edges.* `RR-10` makes the window a store setting; `RT-150` and `EC-66` say "per store and per
+     category". `EC-66` says a late return is "Rejected … unless the store has extended it", where `RR-11` escalates it
+     to an approver with a reason. *Meanwhile:* one window per store, `RR-11`'s escalation, the window's last day
+     (sale business date + N days) inside it, and N taken from the settings version in force when the return is
+     posted.
+  4. *Refunding a service.* Nothing comes back, so a service line cannot be returned (its movement is refused,
+     `SS012`), and its refund is therefore a goodwill refund with a reason. Confirm that is intended.
+  5. *Refund tax rounding.* `RR-06` says "at the same proportion". The schema rounds the cumulative refunded tax of a
+     line half away from zero (overview §3.1), so partial refunds add up to exactly the tax charged. Confirm.
+  6. *A cap per tender.* `PY-22` bounds a refund per line and per sale. Nothing bounds the refunds sent back to one
+     original tender by what that tender paid: for example, a sale paid half cash and half card, refunded in full
+     to the card. *Meanwhile:* no such cap; the per-line and per-sale bounds hold.
+- **Why not answerable from `/docs`:** permission keys are the owner's to name; the rest is silent or contradictory.
+- **Blocked:** paying any refund in Step 3 (the first point). Nothing else.
 
 ## How to use this file
 
