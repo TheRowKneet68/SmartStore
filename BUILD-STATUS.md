@@ -58,6 +58,18 @@ schema; details in the domain documents:
 | Import jobs | `PR-51`..`PR-55`, data-import | D3 — v1 loads opening stock with an `OpeningBalance` adjustment (same movement type, reason and approval) |
 | Notifications | `IV-17` `NEGATIVE_STOCK`, `IV-59` `OUT_OF_STOCK`, `BE-30` | D3 — the conditions are queryable now; the outbox is not in the slice. `BI-36`(b) waits for it |
 | Resolve negatives by receiving | `IV-38`, `RT-069` | D3 — needs goods receipts |
+| Voiding a completed sale | `SP-52`..`SP-56`, `RT-138`, `RT-139` | D4 — the documents contradict each other (OQ-017); refused (`SS044`); returns are the v1 correction |
+| Suspended sales | `SP-44`..`SP-49`, `RT-141`, `RT-142`, `UX-23`..`UX-26` | D4 — the cart stays in the browser (owner speed requirement) |
+| Credit sales, zero-value payment | `SP-41`, `PY-01`, `PY-18`, `RT-134` | D4 — deferred with credit |
+| Stored-value, loyalty, wallet, bank-transfer tenders | `PY-29`..`PY-35` | D4 — v1 methods are Cash and Card |
+| Price overrides | `SP-22`..`SP-24` | D4 — below cost needs approval |
+| Cash rounding | `SP-25`, `SP-26` | D4 |
+| Weighed lines | `SP-16`..`SP-20`, `RT-127` | D4 (see weighed goods, D2) |
+| NoSale, pay-in/out, safe drops, cash adjustments | `RT-143`, `CD-15`..`CD-17` | D4 — v1 cash types are opening float, change, closing float |
+| Denomination counts | `CD-27`..`CD-29`, `UX-32` | D4 — counts are totals in v1 |
+| Shift reopen | `CD-26`, `SM-56` | D4 — permission `OPEN DECISION` (OQ-014) |
+| Customer management | `CU-02`..`CU-38` | D4 — only the walk-in record exists |
+| Device telemetry | `SM-60a`, `PT-04`, `HD-16` | D4 — terminal status is the lifecycle only |
 
 Design these so the schema can carry them without a rewrite. Do not build them.
 
@@ -129,9 +141,23 @@ Owner-approved with ADR-31 on 2026-09-30 (ADR-31 §13 has the full text):
     attribution (D-03), unit quantity kind frozen once used, service never stocked.
   - Batches deferred with procurement; the additive extension is designed (D3 §7). Six guards mutation-checked.
 
+- 2026-09-30 — **Domain 4 — Sale / Payment.** DESIGNED + IMPLEMENTED (two migrations) + **TESTED** (191 tests
+  passing on 5 consecutive runs). No application code. [D4 design](docs/database/D4-SALE-PAYMENT.md).
+  - Till and cash: `customer` (walk-in only), `pos_terminal`, `cash_drawer`, `cash_shift` (one open per drawer and
+    per employee per store, proven concurrently), `cash_transaction` (append-only), `shift_count`, payment methods.
+  - Sale and payment: `checkout` holds the payment attempts that `PY-38` takes before the sale exists; `payment`
+    (each attempt a row, terminal states frozen, `D-14`); `sale` born `Completed`; `sale_line` with the price
+    verified against price history at the server's quote time, and cost and tax rate verified against those in
+    force; the sale's `SALE` movements through the D3 write path; everything checked whole at commit.
+  - Last unit under `BlockNegative` via real checkouts: exactly one sale on 5 of 5 runs.
+  - Closed pending guards: organization currency and zone frozen after the first sale, tax mode frozen after a
+    sale, no deactivation with an open shift, sold variant's identity fixed. Five guards mutation-checked.
+  - **Owner decision needed before Step 3's card path: OQ-018** (payment submit, capture and void permission keys are
+    `OPEN DECISION`).
+
 ## In progress
 
-- Domain 4 (Sale / Payment, with the minimal Shift/Drawer and PosTerminal): design document and migration.
+- Domain 5 (Returns / Refunds): design document and migration.
 
 ## Owner actions pending
 
@@ -145,12 +171,11 @@ Until then, tests run on a scratch PostgreSQL 17.11 cluster and a portable Node 
 
 ## Next
 
-1. **Domain 4 — Sale / Payment.** Sale and lines (price, cost and tax snapshots, `ADR-08`), one-to-many payments
-   where each attempt is its own record and `Failed` is terminal (`D-14`), `ClientOperationId` idempotency (`SM-04`),
-   the minimal PosTerminal, CashDrawer and Shift a sale needs (`PT-01`, `BI-39`), and the sale's `SALE` movements
-   through the D3 write path.
-2. Then continue domain by domain — one at a time, with tests, committing after each passing step: 5 Returns /
-   Refunds, 6 Audit, 7 Employee / Role / Permission.
+1. **Domain 5 — Returns / Refunds.** Returns bounded per line by the sold quantity (`BI-06`, `BI-16`), refunds by the
+   settled amount (`BI-10`), both atomically through the `sale_line` counters; disposition on every line (`RR-17`);
+   the sale's status as a cache of its counters (`SP-66`).
+2. Then continue domain by domain — one at a time, with tests, committing after each passing step: 6 Audit,
+   7 Employee / Role / Permission.
 3. Then Step 3, implementation, in the order in the working agreements.
 
 Update this file after every step, including steps that failed and were abandoned.
@@ -204,3 +229,15 @@ Append-only. One dated line per step, including failed and abandoned attempts.
   Decided in design, stated for the owner: batches are deferred with procurement (they are created by goods receipts
   and keyed per supplier), with the extension designed in D3 §7; opening stock loads through an `OpeningBalance`
   adjustment until import jobs exist.
+- 2026-09-30 — Domain 4. Failed attempts, each fixed before commit:
+  (1) A cash-transaction foreign key listed three columns against a four-column key; caught on review before the
+  first run, fixed with a matching three-column key on `cash_shift`.
+  (2) The citation checker refused a comment citing `P1` (an architecture principle label, not a rule ID); the
+  replacement `RT-344` was then judged the wrong citation on reading it, and `RT-040` ("a client-supplied price is
+  ignored") was used.
+  (3) Two shift tests asserted the wrong thing: a zero-float and a missing-float case collided with the one-open-shift
+  index first. Rewritten on a second till so each asserts what it claims. And one more SQL-style quote in a test
+  name, caught before running.
+  All 191 tests passed on the first full run after those review fixes. Design decisions stated for the owner:
+  `checkout` (a structure PY-38's order requires; its name and statuses are this design's own), the quote-time price
+  check (RT-124 over architecture s10.3), and the nine open questions OQ-014..OQ-022.

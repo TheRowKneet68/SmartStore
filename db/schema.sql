@@ -235,6 +235,29 @@ COMMENT ON FUNCTION public.assert_adjustment_posting_complete() IS 'Cites: RT-48
 
 
 --
+-- Name: assert_checkout_outcome(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.assert_checkout_outcome() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  IF NEW.status = 'Completed' AND NOT EXISTS (SELECT 1 FROM sale WHERE checkout_id = NEW.id) THEN
+    RAISE EXCEPTION 'checkout % cannot complete without its sale', NEW.id USING ERRCODE = 'SS043';
+  END IF;
+  RETURN NULL;
+END
+$$;
+
+
+--
+-- Name: FUNCTION assert_checkout_outcome(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.assert_checkout_outcome() IS 'Cites: SP-01, PY-37. A checkout is Completed only by the sale that completes it.';
+
+
+--
 -- Name: assert_movement_adjustment_state(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -271,6 +294,47 @@ COMMENT ON FUNCTION public.assert_movement_adjustment_state() IS 'Cites: BI-27, 
 
 
 --
+-- Name: assert_movement_sale_state(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.assert_movement_sale_state() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+  v_completed_at timestamptz;
+  v_product      text;
+BEGIN
+  IF NEW.sale_id IS NULL THEN
+    RETURN NEW;
+  END IF;
+  IF NEW.movement_type = 'REVERSAL' THEN
+    RAISE EXCEPTION 'reversing a sale (a void) is not built in v1 (OQ-017)' USING ERRCODE = 'SS044';
+  END IF;
+  IF NEW.movement_type <> 'SALE' THEN
+    RAISE EXCEPTION 'a sale writes only SALE movements' USING ERRCODE = 'SS016';
+  END IF;
+  SELECT completed_at INTO v_completed_at FROM sale WHERE id = NEW.sale_id;
+  IF v_completed_at IS DISTINCT FROM now() THEN
+    RAISE EXCEPTION 'a sale moves stock only in its completion transaction' USING ERRCODE = 'SS036';
+  END IF;
+  -- Runs after tg_inventory_movement_apply (triggers fire in name order), so the resulting balance is known.
+  SELECT p.status INTO v_product FROM product_variant v JOIN product p ON p.id = v.product_id WHERE v.id = NEW.variant_id;
+  IF v_product = 'Discontinued' AND NEW.resulting_balance < 0 THEN
+    RAISE EXCEPTION 'a discontinued product sells only from stock on hand' USING ERRCODE = 'SS041';
+  END IF;
+  RETURN NEW;
+END
+$$;
+
+
+--
+-- Name: FUNCTION assert_movement_sale_state(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.assert_movement_sale_state() IS 'Cites: IV-15, SP-02, SM-11, PR-46, RT-031. A sale writes SALE movements only in its completion transaction, and a discontinued product only from stock actually on hand.';
+
+
+--
 -- Name: assert_new_variant_usable(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -300,6 +364,161 @@ $$;
 --
 
 COMMENT ON FUNCTION public.assert_new_variant_usable() IS 'Cites: RT-042, PR-34, PR-47, SM-13. At commit, a new variant of an archived product is refused, and a new variant of a released product carries a price in force.';
+
+
+--
+-- Name: assert_sale_complete(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.assert_sale_complete() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+  s          record;
+  v_lines    integer;
+  v_gross    bigint;
+  v_tax      bigint;
+  v_total    bigint;
+  v_settled  bigint;
+  v_unsettled integer;
+  v_captured bigint;
+  v_change   bigint;
+  v_disbursed bigint;
+BEGIN
+  SELECT * INTO s FROM sale WHERE id = NEW.id;
+
+  SELECT count(*), coalesce(sum(gross_amount), 0), coalesce(sum(tax_amount), 0), coalesce(sum(line_total), 0),
+         coalesce(sum(settled_amount), 0)
+    INTO v_lines, v_gross, v_tax, v_total, v_settled
+  FROM sale_line WHERE sale_id = s.id;
+  IF v_lines = 0 THEN
+    RAISE EXCEPTION 'sale % has no lines', s.id USING ERRCODE = 'SS034';
+  END IF;
+  IF EXISTS (SELECT 1 FROM sale_line WHERE sale_id = s.id AND line_total <>
+               CASE s.tax_mode WHEN 'Inclusive' THEN gross_amount ELSE gross_amount + tax_amount END) THEN
+    RAISE EXCEPTION 'a line total of sale % does not follow its tax mode', s.id USING ERRCODE = 'SS034';
+  END IF;
+  IF s.subtotal <> v_gross OR s.tax_total <> v_tax OR s.total_due <> v_total OR v_settled <> s.total_due THEN
+    RAISE EXCEPTION 'the totals of sale % are not the sums of its lines', s.id USING ERRCODE = 'SS034';
+  END IF;
+
+  SELECT count(*) FILTER (WHERE status IN ('Pending', 'Authorized')),
+         coalesce(sum(amount) FILTER (WHERE status = 'Captured'), 0),
+         coalesce(sum(tendered_amount - amount) FILTER (WHERE status = 'Captured' AND method_type = 'Cash'), 0)
+    INTO v_unsettled, v_captured, v_change
+  FROM payment WHERE checkout_id = s.checkout_id;
+  IF v_unsettled > 0 THEN
+    RAISE EXCEPTION 'sale % has a payment still pending or authorized', s.id USING ERRCODE = 'SS034';
+  END IF;
+  IF v_captured <> s.total_due OR s.change_given <> v_change THEN
+    RAISE EXCEPTION 'the captured payments of sale % do not settle it exactly', s.id USING ERRCODE = 'SS034';
+  END IF;
+
+  SELECT coalesce(sum(amount), 0) INTO v_disbursed FROM cash_transaction WHERE sale_id = s.id AND type = 'ChangeDisbursed';
+  IF v_disbursed <> s.change_given THEN
+    RAISE EXCEPTION 'the change of sale % is not recorded as a drawer disbursement', s.id USING ERRCODE = 'SS034';
+  END IF;
+
+  IF EXISTS (
+       SELECT 1 FROM sale_line l JOIN product_variant v ON v.id = l.variant_id JOIN unit u ON u.id = v.base_unit_id
+       WHERE l.sale_id = s.id AND u.quantity_kind <> 'Service'
+         AND l.quantity IS DISTINCT FROM (SELECT sum(m.quantity) FROM inventory_movement m
+                                          WHERE m.sale_line_id = l.id AND m.movement_type = 'SALE')) THEN
+    RAISE EXCEPTION 'a line of sale % did not move its stock', s.id USING ERRCODE = 'SS034';
+  END IF;
+  RETURN NULL;
+END
+$$;
+
+
+--
+-- Name: FUNCTION assert_sale_complete(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.assert_sale_complete() IS 'Cites: SP-02, SP-36, SP-40, BI-04, BI-18, RT-119, RT-133, RT-135, RT-136, RT-146, IV-15. At commit, a sale is whole: at least one line; totals are the sums of its lines and follow the tax mode; the settled amounts sum to the total due; no tender is left pending; captured tenders equal the total due; change equals cash tendered beyond cash applied and is disbursed from the drawer; and every stocked line moved exactly its quantity.';
+
+
+--
+-- Name: assert_shift_close_ready(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.assert_shift_close_ready() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+  v_count record;
+BEGIN
+  IF NEW.status = 'Closed' AND OLD.status IS DISTINCT FROM 'Closed' THEN
+    SELECT variance, acknowledged_by INTO v_count FROM shift_count
+    WHERE cash_shift_id = NEW.id ORDER BY pass_number DESC LIMIT 1;
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'shift % cannot close without a count', NEW.id USING ERRCODE = 'SS042';
+    END IF;
+    IF v_count.variance <> 0 AND v_count.acknowledged_by IS NULL THEN
+      RAISE EXCEPTION 'shift % has an unacknowledged variance of %', NEW.id, v_count.variance USING ERRCODE = 'SS042';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM cash_transaction WHERE cash_shift_id = NEW.id AND type = 'ClosingFloat') THEN
+      RAISE EXCEPTION 'shift % cannot close without a declared closing float', NEW.id USING ERRCODE = 'SS042';
+    END IF;
+  END IF;
+  RETURN NEW;
+END
+$$;
+
+
+--
+-- Name: FUNCTION assert_shift_close_ready(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.assert_shift_close_ready() IS 'Cites: CD-20, CD-23, CD-25, SM-55. A shift closes only from its latest count, with a zero or acknowledged variance, and with the closing float declared.';
+
+
+--
+-- Name: assert_shift_opening_float(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.assert_shift_opening_float() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  IF (SELECT count(*) FROM cash_transaction WHERE cash_shift_id = NEW.id AND type = 'OpeningFloat') <> 1 THEN
+    RAISE EXCEPTION 'shift % must be opened with exactly one counted opening float', NEW.id USING ERRCODE = 'SS042';
+  END IF;
+  RETURN NULL;
+END
+$$;
+
+
+--
+-- Name: FUNCTION assert_shift_opening_float(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.assert_shift_opening_float() IS 'Cites: CD-10, CD-11, CD-14, RT-005. At commit, a new shift has exactly one opening-float cash transaction, which may be zero; the float is never a field.';
+
+
+--
+-- Name: assert_terminal_sells_from_own_location(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.assert_terminal_sells_from_own_location() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  IF NOT EXISTS (
+       SELECT 1 FROM storage_location l JOIN warehouse w ON w.id = l.warehouse_id
+       WHERE l.id = NEW.sell_from_location_id AND l.is_sellable AND w.store_id = NEW.store_id) THEN
+    RAISE EXCEPTION 'terminal % must sell from a sellable location of its own store', NEW.id USING ERRCODE = 'SS032';
+  END IF;
+  RETURN NEW;
+END
+$$;
+
+
+--
+-- Name: FUNCTION assert_terminal_sells_from_own_location(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.assert_terminal_sells_from_own_location() IS 'Cites: WH-01, RT-004, MS-18, PT-02. A till sells only from a sellable location of its own store.';
 
 
 --
@@ -369,6 +588,73 @@ $_$;
 --
 
 COMMENT ON FUNCTION public.barcode_lookup_key(p_value text) IS 'Cites: PR-08, PR-12, RT-024, RT-490, UX-48. The exact-match key a scan is looked up by: an all-digit GTIN-length code is left-padded to 14 digits (padded, never trimmed), so a UPC-A and the same code read as EAN-13 are one key; anything else is itself. Scans and stored barcodes use this same function.';
+
+
+--
+-- Name: cash_shift_before_write(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.cash_shift_before_write() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    IF NOT EXISTS (SELECT 1 FROM pos_terminal WHERE id = NEW.pos_terminal_id AND status = 'Active') THEN
+      RAISE EXCEPTION 'terminal % is not in service', NEW.pos_terminal_id USING ERRCODE = 'SS025';
+    END IF;
+    RETURN NEW;
+  END IF;
+  IF NEW.status IS DISTINCT FROM OLD.status THEN
+    NEW.status_changed_at := now();
+    IF NEW.status = 'Closed' THEN
+      NEW.closed_at := now();
+    END IF;
+  END IF;
+  RETURN NEW;
+END
+$$;
+
+
+--
+-- Name: FUNCTION cash_shift_before_write(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.cash_shift_before_write() IS 'Cites: CD-10, CD-20, SM-03, RT-353. A shift opens only on a terminal in service; each transition, and the close, is stamped with server time.';
+
+
+--
+-- Name: checkout_before_write(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.checkout_before_write() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    IF NOT EXISTS (SELECT 1 FROM pos_terminal WHERE id = NEW.pos_terminal_id AND status = 'Active' AND mode <> 'Training') THEN
+      RAISE EXCEPTION 'terminal % is not in service for real sales', NEW.pos_terminal_id USING ERRCODE = 'SS025';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM cash_shift WHERE id = NEW.cash_shift_id AND status = 'Open') THEN
+      RAISE EXCEPTION 'shift % is not open', NEW.cash_shift_id USING ERRCODE = 'SS026';
+    END IF;
+    RETURN NEW;
+  END IF;
+  IF NEW.status IS DISTINCT FROM OLD.status THEN
+    IF OLD.status <> 'Open' THEN
+      RAISE EXCEPTION 'checkout % is % and cannot change', OLD.id, OLD.status USING ERRCODE = 'SS043';
+    END IF;
+    NEW.closed_at := now();
+  END IF;
+  RETURN NEW;
+END
+$$;
+
+
+--
+-- Name: FUNCTION checkout_before_write(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.checkout_before_write() IS 'Cites: PT-03, BI-39, SP-43, RT-353. A checkout starts only on a till in service and not in training, inside an open shift; once completed or abandoned it never changes.';
 
 
 --
@@ -455,6 +741,30 @@ COMMENT ON FUNCTION public.forbid_ledger_rewrite() IS 'Cites: BI-15, RT-059, AU-
 
 
 --
+-- Name: forbid_store_deactivation_with_open_shift(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.forbid_store_deactivation_with_open_shift() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  IF OLD.deactivated_by IS NULL AND NEW.deactivated_by IS NOT NULL
+     AND EXISTS (SELECT 1 FROM cash_shift WHERE store_id = NEW.id AND status <> 'Closed') THEN
+    RAISE EXCEPTION 'store % has an open shift; close it first', NEW.id USING ERRCODE = 'SS039';
+  END IF;
+  RETURN NEW;
+END
+$$;
+
+
+--
+-- Name: FUNCTION forbid_store_deactivation_with_open_shift(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.forbid_store_deactivation_with_open_shift() IS 'Cites: ORG-05, RT-445, EC-89. A store is not deactivated while any of its shifts is not closed.';
+
+
+--
 -- Name: forbid_store_deactivation_with_stock(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -480,6 +790,91 @@ $$;
 --
 
 COMMENT ON FUNCTION public.forbid_store_deactivation_with_stock() IS 'Cites: ORG-05, RT-445, RT-508, EC-39. A store is not deactivated while its own locations hold stock.';
+
+
+--
+-- Name: freeze_organization_money_settings(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.freeze_organization_money_settings() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+  v_first uuid;
+BEGIN
+  IF NEW.currency_code IS DISTINCT FROM OLD.currency_code OR NEW.time_zone IS DISTINCT FROM OLD.time_zone THEN
+    SELECT s.id INTO v_first FROM sale s JOIN store st ON st.id = s.store_id
+    WHERE st.organization_id = OLD.id ORDER BY s.completed_at LIMIT 1;
+    IF v_first IS NULL THEN
+      SELECT p.id INTO v_first FROM payment p WHERE p.organization_id = OLD.id ORDER BY p.created_at LIMIT 1;
+    END IF;
+    IF v_first IS NOT NULL THEN
+      RAISE EXCEPTION 'organization % has financial documents (first: %); its currency and business time zone are fixed',
+        OLD.id, v_first USING ERRCODE = 'SS037';
+    END IF;
+  END IF;
+  RETURN NEW;
+END
+$$;
+
+
+--
+-- Name: FUNCTION freeze_organization_money_settings(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.freeze_organization_money_settings() IS 'Cites: ORG-01, ORG-02, RT-504, RT-505. Once a financial document exists, the organization''s currency and business time zone cannot change; the refusal names the first document.';
+
+
+--
+-- Name: freeze_referenced_variant_name(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.freeze_referenced_variant_name() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  IF NEW.name IS DISTINCT FROM OLD.name AND EXISTS (SELECT 1 FROM sale_line WHERE variant_id = OLD.id) THEN
+    RAISE EXCEPTION 'variant % has been sold; a different variant is a new variant', OLD.id USING ERRCODE = 'SS040';
+  END IF;
+  RETURN NEW;
+END
+$$;
+
+
+--
+-- Name: FUNCTION freeze_referenced_variant_name(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.freeze_referenced_variant_name() IS 'Cites: PR-03, RT-030. A variant''s identity (its name, standing in for its option values) is fixed once a document references it; a new colour is a new variant.';
+
+
+--
+-- Name: freeze_tax_mode_after_sale(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.freeze_tax_mode_after_sale() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+  v_current text;
+BEGIN
+  IF EXISTS (SELECT 1 FROM sale WHERE store_id = NEW.store_id) THEN
+    SELECT tax_mode INTO v_current FROM store_setting_version
+    WHERE store_id = NEW.store_id ORDER BY effective_from DESC LIMIT 1;
+    IF NEW.tax_mode IS DISTINCT FROM v_current THEN
+      RAISE EXCEPTION 'store % has sales; its tax mode is fixed at %', NEW.store_id, v_current USING ERRCODE = 'SS038';
+    END IF;
+  END IF;
+  RETURN NEW;
+END
+$$;
+
+
+--
+-- Name: FUNCTION freeze_tax_mode_after_sale(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.freeze_tax_mode_after_sale() IS 'Cites: SP-33, PR-38, RT-046. Once a store has a sale, no settings version may change its tax mode.';
 
 
 --
@@ -598,6 +993,44 @@ $$;
 --
 
 COMMENT ON FUNCTION public.inventory_transaction_business_date() IS 'Cites: RT-234, RT-353, EC-68. The business date is computed by the server from its own clock in the store''s time zone (overview s3.3; OQ-007), never supplied by a client.';
+
+
+--
+-- Name: payment_before_write(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.payment_before_write() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    IF NOT EXISTS (SELECT 1 FROM checkout WHERE id = NEW.checkout_id AND status = 'Open') THEN
+      RAISE EXCEPTION 'checkout % is not open for payment', NEW.checkout_id USING ERRCODE = 'SS027';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM store_payment_method
+                   WHERE store_id = NEW.store_id AND payment_method_id = NEW.payment_method_id AND is_enabled) THEN
+      RAISE EXCEPTION 'payment method % is not enabled at store %', NEW.payment_method_id, NEW.store_id
+        USING ERRCODE = 'SS045';
+    END IF;
+    RETURN NEW;
+  END IF;
+  IF OLD.status IN ('Captured', 'Declined', 'Voided', 'Failed') THEN
+    RAISE EXCEPTION 'payment % is % and is never changed; a retry is a new payment', OLD.id, OLD.status
+      USING ERRCODE = 'SS035';
+  END IF;
+  IF NEW.status IS DISTINCT FROM OLD.status THEN
+    NEW.status_changed_at := now();
+  END IF;
+  RETURN NEW;
+END
+$$;
+
+
+--
+-- Name: FUNCTION payment_before_write(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.payment_before_write() IS 'Cites: PY-04, PY-12, PY-54, D-14, BI-09. An attempt is added only to an open checkout with a method enabled at the store; a payment in a terminal state is never modified again.';
 
 
 --
@@ -728,6 +1161,245 @@ COMMENT ON FUNCTION public.record_deactivation() IS 'Cites: BI-40, RT-506, RT-50
 
 
 --
+-- Name: resolve_price(uuid, uuid, timestamp with time zone); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.resolve_price(p_store_id uuid, p_variant_id uuid, p_at timestamp with time zone) RETURNS bigint
+    LANGUAGE sql STABLE
+    AS $$
+  SELECT COALESCE(
+    (SELECT sp.amount FROM store_variant_price sp
+     WHERE sp.store_id = p_store_id AND sp.variant_id = p_variant_id AND sp.effective_from <= p_at
+     ORDER BY sp.effective_from DESC LIMIT 1),
+    (SELECT CASE WHEN vp.currency_code = s.currency_code THEN vp.amount END
+     FROM variant_price vp, store s
+     WHERE s.id = p_store_id AND vp.variant_id = p_variant_id AND vp.effective_from <= p_at
+     ORDER BY vp.effective_from DESC LIMIT 1))
+$$;
+
+
+--
+-- Name: FUNCTION resolve_price(p_store_id uuid, p_variant_id uuid, p_at timestamp with time zone); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.resolve_price(p_store_id uuid, p_variant_id uuid, p_at timestamp with time zone) IS 'Cites: PR-30, PR-31, BI-30, RT-040, RT-041. The price of a variant at a store at an instant: the store price in force, else the organization default in force if it is in the store''s currency. The one resolution rule, used by the till''s scan and by the sale line''s check.';
+
+
+--
+-- Name: sale_before_insert(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.sale_before_insert() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+  v_version  record;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pos_terminal WHERE id = NEW.pos_terminal_id AND status = 'Active' AND mode <> 'Training') THEN
+    RAISE EXCEPTION 'terminal % may not complete a real sale', NEW.pos_terminal_id USING ERRCODE = 'SS025';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM cash_shift WHERE id = NEW.cash_shift_id AND status = 'Open') THEN
+    RAISE EXCEPTION 'shift % is not open', NEW.cash_shift_id USING ERRCODE = 'SS026';
+  END IF;
+
+  SELECT id, tax_mode INTO v_version FROM store_setting_version
+  WHERE store_id = NEW.store_id AND effective_from <= now() ORDER BY effective_from DESC LIMIT 1;
+  IF v_version.id IS DISTINCT FROM NEW.store_setting_version_id OR v_version.tax_mode IS DISTINCT FROM NEW.tax_mode THEN
+    RAISE EXCEPTION 'a sale is computed under the settings in force (%)', v_version.id USING ERRCODE = 'SS038';
+  END IF;
+  IF EXISTS (SELECT 1 FROM store_setting_version
+             WHERE store_id = NEW.store_id AND effective_from > now() AND tax_mode <> NEW.tax_mode) THEN
+    RAISE EXCEPTION 'store % has a tax-mode change scheduled; it cannot trade until that takes effect', NEW.store_id
+      USING ERRCODE = 'SS038';
+  END IF;
+
+  UPDATE checkout SET status = 'Completed' WHERE id = NEW.checkout_id AND status = 'Open';
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'checkout % is not open', NEW.checkout_id USING ERRCODE = 'SS027';
+  END IF;
+
+  NEW.document_number := allocate_document_number(NEW.store_id, 'Sale');
+  SELECT (now() AT TIME ZONE s.time_zone)::date INTO NEW.business_date FROM store s WHERE s.id = NEW.store_id;
+  RETURN NEW;
+END
+$$;
+
+
+--
+-- Name: FUNCTION sale_before_insert(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.sale_before_insert() IS 'Cites: SP-02, SP-05, PT-03, BI-39, BI-42, SP-33, REQ-AU-06, RT-234. The completion transaction''s header: a till in service and not in training, an open shift, the settings in force and never under a scheduled tax-mode change, the checkout closed into this sale, the number allocated and the business date computed by the server.';
+
+
+--
+-- Name: sale_line_before_insert(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.sale_line_before_insert() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+  v_completed_at timestamptz;
+  v_product      text;
+  v_archived     timestamptz;
+  v_category     uuid;
+  v_rate         uuid;
+  v_cost         bigint;
+BEGIN
+  SELECT completed_at INTO v_completed_at FROM sale WHERE id = NEW.sale_id;
+  IF v_completed_at IS DISTINCT FROM now() THEN
+    RAISE EXCEPTION 'lines are written only in the sale''s completion transaction' USING ERRCODE = 'SS036';
+  END IF;
+
+  SELECT p.status, v.archived_at, v.tax_category_id INTO v_product, v_archived, v_category
+  FROM product_variant v JOIN product p ON p.id = v.product_id WHERE v.id = NEW.variant_id;
+  IF v_product NOT IN ('Active', 'Discontinued') OR v_archived IS NOT NULL THEN
+    RAISE EXCEPTION 'variant % is not sellable (product %, archived %)', NEW.variant_id, v_product, v_archived IS NOT NULL
+      USING ERRCODE = 'SS028';
+  END IF;
+
+  SELECT id INTO v_rate FROM tax_rate
+  WHERE tax_category_id = v_category AND effective_from <= now() ORDER BY effective_from DESC LIMIT 1;
+  IF v_category IS NULL OR v_rate IS DISTINCT FROM NEW.tax_rate_id THEN
+    RAISE EXCEPTION 'variant % is unclassified for tax or not taxed at the rate in force', NEW.variant_id
+      USING ERRCODE = 'SS029';
+  END IF;
+
+  IF NEW.price_quoted_at > now()
+     OR resolve_price(NEW.store_id, NEW.variant_id, NEW.price_quoted_at) IS DISTINCT FROM NEW.unit_price THEN
+    RAISE EXCEPTION 'line price % is not the price in force when it was quoted', NEW.unit_price USING ERRCODE = 'SS030';
+  END IF;
+
+  SELECT amount INTO v_cost FROM variant_standard_cost
+  WHERE variant_id = NEW.variant_id AND effective_from <= now() ORDER BY effective_from DESC LIMIT 1;
+  IF v_cost IS DISTINCT FROM NEW.unit_cost THEN
+    RAISE EXCEPTION 'line cost must be the standard cost in force' USING ERRCODE = 'SS031';
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM storage_location l JOIN warehouse w ON w.id = l.warehouse_id
+                 WHERE l.id = NEW.storage_location_id AND l.is_sellable AND w.store_id = NEW.store_id) THEN
+    RAISE EXCEPTION 'location % is not a sellable location of this store', NEW.storage_location_id USING ERRCODE = 'SS032';
+  END IF;
+
+  IF NEW.entry_method = 'Scanned' AND NOT EXISTS (
+       SELECT 1 FROM product_barcode
+       WHERE organization_id = NEW.organization_id AND lookup_key = barcode_lookup_key(NEW.scanned_barcode)
+         AND archived_at IS NULL AND variant_id = NEW.variant_id) THEN
+    RAISE EXCEPTION 'barcode % does not identify variant %', NEW.scanned_barcode, NEW.variant_id USING ERRCODE = 'SS033';
+  END IF;
+  RETURN NEW;
+END
+$$;
+
+
+--
+-- Name: FUNCTION sale_line_before_insert(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.sale_line_before_insert() IS 'Cites: SP-06, SP-07, SP-09, BI-30, RT-124, RT-130, RT-489, RT-493, WH-01, RT-004, PR-48. The server''s authority over a line: written only in the completion transaction; the variant sellable; the tax rate the one in force for its category; the price the one in force when the server quoted it; the cost the standard cost in force; the location sellable and the store''s own; a scanned barcode that identifies the variant.';
+
+
+--
+-- Name: shift_count_before_write(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.shift_count_before_write() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM cash_shift WHERE id = NEW.cash_shift_id AND status = 'Reconciling') THEN
+    RAISE EXCEPTION 'shift % is not being counted', NEW.cash_shift_id USING ERRCODE = 'SS042';
+  END IF;
+  IF TG_OP = 'INSERT' THEN
+    NEW.pass_number := coalesce((SELECT max(pass_number) FROM shift_count WHERE cash_shift_id = NEW.cash_shift_id), 0) + 1;
+    NEW.expected_amount := shift_expected_cash(NEW.cash_shift_id);
+    RETURN NEW;
+  END IF;
+  IF OLD.acknowledged_by IS NOT NULL THEN
+    RAISE EXCEPTION 'count % is already acknowledged', OLD.id USING ERRCODE = 'SS001';
+  END IF;
+  IF NEW.acknowledged_by IS NOT NULL THEN
+    NEW.acknowledged_at := now();
+  END IF;
+  RETURN NEW;
+END
+$$;
+
+
+--
+-- Name: FUNCTION shift_count_before_write(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.shift_count_before_write() IS 'Cites: CD-21, CD-22, CD-23, RT-353. A count is taken only while the shift is reconciling; the server numbers the pass and computes the expected amount; an acknowledgement is written once, with server time.';
+
+
+--
+-- Name: shift_expected_cash(uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.shift_expected_cash(p_shift_id uuid) RETURNS bigint
+    LANGUAGE sql STABLE
+    AS $$
+  SELECT coalesce((SELECT sum(amount) FROM cash_transaction WHERE cash_shift_id = p_shift_id AND type = 'OpeningFloat'), 0)
+       + coalesce((SELECT sum(p.amount) FROM payment p JOIN checkout c ON c.id = p.checkout_id
+                   WHERE c.cash_shift_id = p_shift_id AND c.status = 'Completed'
+                     AND p.status = 'Captured' AND p.method_type = 'Cash'), 0)
+$$;
+
+
+--
+-- Name: FUNCTION shift_expected_cash(p_shift_id uuid); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.shift_expected_cash(p_shift_id uuid) IS 'Cites: CD-06, CD-08, CD-09, RT-135. What should be in the drawer, derived and never stored: the opening float plus the cash applied to the shift''s sales (net of change, which is why change is not subtracted again; OQ-015). Card is never in the drawer.';
+
+
+--
+-- Name: stamp_changed_at(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.stamp_changed_at() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  NEW.changed_at := now();
+  RETURN NEW;
+END
+$$;
+
+
+--
+-- Name: FUNCTION stamp_changed_at(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.stamp_changed_at() IS 'Cites: RT-353, PY-05. Stamps a configuration change with server time.';
+
+
+--
+-- Name: stamp_status_change(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.stamp_status_change() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  IF NEW.status IS DISTINCT FROM OLD.status THEN
+    NEW.status_changed_at := now();
+  END IF;
+  RETURN NEW;
+END
+$$;
+
+
+--
+-- Name: FUNCTION stamp_status_change(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.stamp_status_change() IS 'Cites: SM-03, RT-353. Stamps the entry into a new state with server time (overview s3.7).';
+
+
+--
 -- Name: stock_adjustment_before_write(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -844,6 +1516,154 @@ COMMENT ON TABLE public.brand IS 'Cites: RT-021, PR-01. An optional, organizatio
 
 
 --
+-- Name: cash_drawer; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.cash_drawer (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    store_id uuid NOT NULL,
+    pos_terminal_id uuid NOT NULL,
+    label public.nonblank_text NOT NULL,
+    currency_code text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: TABLE cash_drawer; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.cash_drawer IS 'Cites: CD-01, CD-05, CD-36, RT-005. The physical cash container at a terminal. Single-currency, in the store''s currency.';
+
+
+--
+-- Name: cash_shift; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.cash_shift (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    store_id uuid NOT NULL,
+    pos_terminal_id uuid NOT NULL,
+    cash_drawer_id uuid NOT NULL,
+    opened_by uuid NOT NULL,
+    opened_at timestamp with time zone DEFAULT now() NOT NULL,
+    closed_by uuid,
+    closed_at timestamp with time zone,
+    status text DEFAULT 'Open'::text NOT NULL,
+    status_changed_at timestamp with time zone DEFAULT now() NOT NULL,
+    status_changed_by uuid NOT NULL,
+    CONSTRAINT ck_cash_shift_closed CHECK (((closed_at IS NULL) = (closed_by IS NULL))),
+    CONSTRAINT ck_cash_shift_closed_when CHECK (((status = 'Closed'::text) = (closed_by IS NOT NULL))),
+    CONSTRAINT ck_cash_shift_status CHECK ((status = ANY (ARRAY['Open'::text, 'Reconciling'::text, 'Closed'::text, 'Reopened'::text])))
+);
+
+
+--
+-- Name: TABLE cash_shift; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.cash_shift IS 'Cites: CD-02, CD-03, CD-05, BI-39, RT-005, SM-55, SM-58. The till shift: a drawer''s money for one cashier''s session. It stores only who, when, where and its status; every amount is derived from its cash transactions and sales (cash-management s2).';
+
+
+--
+-- Name: CONSTRAINT ck_cash_shift_closed ON cash_shift; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_cash_shift_closed ON public.cash_shift IS 'Cites: CD-20, SM-03. A close records who and when together.';
+
+
+--
+-- Name: CONSTRAINT ck_cash_shift_closed_when ON cash_shift; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_cash_shift_closed_when ON public.cash_shift IS 'Cites: CD-20, SM-57. A shift records who closed it exactly when it is Closed.';
+
+
+--
+-- Name: CONSTRAINT ck_cash_shift_status ON cash_shift; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_cash_shift_status ON public.cash_shift IS 'Cites: SM-55, SM-56a, SM-58. The shift states of cash-management s2; there is no void state.';
+
+
+--
+-- Name: cash_transaction; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.cash_transaction (
+    seq bigint NOT NULL,
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    cash_shift_id uuid NOT NULL,
+    cash_drawer_id uuid NOT NULL,
+    store_id uuid NOT NULL,
+    type text NOT NULL,
+    direction text NOT NULL,
+    amount bigint NOT NULL,
+    currency_code text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    created_by uuid NOT NULL,
+    sale_id uuid,
+    CONSTRAINT ck_cash_transaction_amount CHECK (((amount > 0) OR ((amount = 0) AND (type = ANY (ARRAY['OpeningFloat'::text, 'ClosingFloat'::text]))))),
+    CONSTRAINT ck_cash_transaction_direction CHECK ((direction =
+CASE type
+    WHEN 'OpeningFloat'::text THEN 'In'::text
+    ELSE 'Out'::text
+END)),
+    CONSTRAINT ck_cash_transaction_sale CHECK (((type = 'ChangeDisbursed'::text) = (sale_id IS NOT NULL))),
+    CONSTRAINT ck_cash_transaction_type CHECK ((type = ANY (ARRAY['OpeningFloat'::text, 'ChangeDisbursed'::text, 'ClosingFloat'::text])))
+);
+
+
+--
+-- Name: TABLE cash_transaction; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.cash_transaction IS 'Cites: CD-11, CD-18, CD-19, RT-135. The drawer''s ledger: every cash movement is a row, never a field update. v1 writes the opening float, change given, and the closing float; the other types of cash-management s5 arrive with their flows.';
+
+
+--
+-- Name: CONSTRAINT ck_cash_transaction_amount ON cash_transaction; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_cash_transaction_amount ON public.cash_transaction IS 'Cites: CD-14, CD-18. A float may be zero (CD-14); change given is a positive disbursement.';
+
+
+--
+-- Name: CONSTRAINT ck_cash_transaction_direction ON cash_transaction; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_cash_transaction_direction ON public.cash_transaction IS 'Cites: CD-19, BI-05. Each type has its fixed direction; an amount is never signed.';
+
+
+--
+-- Name: CONSTRAINT ck_cash_transaction_sale ON cash_transaction; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_cash_transaction_sale ON public.cash_transaction IS 'Cites: CD-18. Change given, and only change given, names its sale.';
+
+
+--
+-- Name: CONSTRAINT ck_cash_transaction_type ON cash_transaction; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_cash_transaction_type ON public.cash_transaction IS 'Cites: CD-11, CD-18, CD-20. The cash transaction types v1 writes (cash-management s5).';
+
+
+--
+-- Name: cash_transaction_seq_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.cash_transaction ALTER COLUMN seq ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.cash_transaction_seq_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
 -- Name: category; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -883,6 +1703,49 @@ COMMENT ON CONSTRAINT ck_category_not_own_parent ON public.category IS 'Cites: R
 
 
 --
+-- Name: checkout; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.checkout (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    store_id uuid NOT NULL,
+    pos_terminal_id uuid NOT NULL,
+    cash_drawer_id uuid NOT NULL,
+    cash_shift_id uuid NOT NULL,
+    client_operation_id uuid NOT NULL,
+    currency_code text NOT NULL,
+    status text DEFAULT 'Open'::text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    created_by uuid NOT NULL,
+    closed_at timestamp with time zone,
+    correlation_id uuid,
+    CONSTRAINT ck_checkout_closed CHECK (((status = 'Open'::text) = (closed_at IS NULL))),
+    CONSTRAINT ck_checkout_status CHECK ((status = ANY (ARRAY['Open'::text, 'Completed'::text, 'Abandoned'::text])))
+);
+
+
+--
+-- Name: TABLE checkout; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.checkout IS 'Cites: PY-37, PY-38, PY-42, PY-54, SP-43, SP-01. The settlement of one cart at one till: it holds every payment attempt, which PY-38 takes before the sale commits, and completes into at most one sale. It is not a sale: it has no number, no lines and no ledger effect (SP-01). An abandoned checkout''s captured payments are money taken for nothing and are reconciled (PY-37, PY-40).';
+
+
+--
+-- Name: CONSTRAINT ck_checkout_closed ON checkout; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_checkout_closed ON public.checkout IS 'Cites: SM-03, RT-353. A checkout records when it closed, exactly when it closed.';
+
+
+--
+-- Name: CONSTRAINT ck_checkout_status ON checkout; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_checkout_status ON public.checkout IS 'Cites: SP-43, PY-17. A checkout is open until it completes into a sale or is abandoned with the cart.';
+
+
+--
 -- Name: currency; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -914,6 +1777,26 @@ COMMENT ON CONSTRAINT ck_currency_code ON public.currency IS 'Cites: BI-01. A cu
 --
 
 COMMENT ON CONSTRAINT ck_currency_exponent ON public.currency IS 'Cites: ADR-04, BI-01. Zero- and three-decimal currencies are representable; 10^exponent must fit in a bigint amount.';
+
+
+--
+-- Name: customer; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.customer (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    organization_id uuid NOT NULL,
+    is_walk_in boolean NOT NULL,
+    display_name public.nonblank_text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: TABLE customer; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.customer IS 'Cites: CU-01, RT-001. A customer. v1 builds only the identity a sale needs: a walk-in is a customer record, never a null. Named customers, accounts, credit and loyalty are deferred.';
 
 
 --
@@ -985,10 +1868,13 @@ END) STORED,
     stock_adjustment_id uuid,
     stock_adjustment_line_id uuid,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
+    sale_id uuid,
+    sale_line_id uuid,
     CONSTRAINT ck_inventory_movement_adjustment_pair CHECK (((stock_adjustment_id IS NULL) = (stock_adjustment_line_id IS NULL))),
-    CONSTRAINT ck_inventory_movement_one_cause CHECK ((num_nonnulls(stock_adjustment_line_id) = 1)),
+    CONSTRAINT ck_inventory_movement_one_cause CHECK ((num_nonnulls(stock_adjustment_line_id, sale_line_id) = 1)),
     CONSTRAINT ck_inventory_movement_positive CHECK ((quantity > (0)::numeric)),
-    CONSTRAINT ck_inventory_movement_reversal CHECK (((movement_type = 'REVERSAL'::text) = (reverses_movement_id IS NOT NULL)))
+    CONSTRAINT ck_inventory_movement_reversal CHECK (((movement_type = 'REVERSAL'::text) = (reverses_movement_id IS NOT NULL))),
+    CONSTRAINT ck_inventory_movement_sale_pair CHECK (((sale_id IS NULL) = (sale_line_id IS NULL)))
 );
 
 
@@ -1017,7 +1903,7 @@ COMMENT ON CONSTRAINT ck_inventory_movement_adjustment_pair ON public.inventory_
 -- Name: CONSTRAINT ck_inventory_movement_one_cause ON inventory_movement; Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON CONSTRAINT ck_inventory_movement_one_cause ON public.inventory_movement IS 'Cites: BI-03, RT-060, IV-14. Exactly one causing document line. Later domains add their line columns to this count.';
+COMMENT ON CONSTRAINT ck_inventory_movement_one_cause ON public.inventory_movement IS 'Cites: BI-03, RT-060, IV-14. Exactly one causing document line: an adjustment line or a sale line. Later domains add their line columns to this count.';
 
 
 --
@@ -1032,6 +1918,13 @@ COMMENT ON CONSTRAINT ck_inventory_movement_positive ON public.inventory_movemen
 --
 
 COMMENT ON CONSTRAINT ck_inventory_movement_reversal ON public.inventory_movement IS 'Cites: IV-12, BI-15. A REVERSAL, and only a REVERSAL, references the movement it reverses.';
+
+
+--
+-- Name: CONSTRAINT ck_inventory_movement_sale_pair ON inventory_movement; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_inventory_movement_sale_pair ON public.inventory_movement IS 'Cites: BI-03. A sale line is always named with its sale.';
 
 
 --
@@ -1133,6 +2026,151 @@ COMMENT ON TABLE public.organization IS 'Cites: RT-506, ORG-03, BI-40. The tenan
 --
 
 COMMENT ON CONSTRAINT ck_organization_deactivation ON public.organization IS 'Cites: RT-506, BI-40. A deactivation records who and when together.';
+
+
+--
+-- Name: payment; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.payment (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    checkout_id uuid NOT NULL,
+    store_id uuid NOT NULL,
+    organization_id uuid NOT NULL,
+    payment_method_id uuid NOT NULL,
+    method_type text NOT NULL,
+    currency_code text NOT NULL,
+    amount bigint NOT NULL,
+    tendered_amount bigint,
+    sequence_number integer NOT NULL,
+    status text DEFAULT 'Pending'::text NOT NULL,
+    provider_transaction_reference text,
+    provider_outcome text,
+    provider_raw_code text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    created_by uuid NOT NULL,
+    status_changed_at timestamp with time zone DEFAULT now() NOT NULL,
+    status_changed_by uuid NOT NULL,
+    correlation_id uuid,
+    CONSTRAINT ck_payment_positive CHECK ((amount > 0)),
+    CONSTRAINT ck_payment_provider_outcome CHECK ((provider_outcome = ANY (ARRAY['Approved'::text, 'Declined'::text, 'Pending'::text, 'Failed'::text, 'Errored'::text, 'Timeout'::text]))),
+    CONSTRAINT ck_payment_sequence CHECK ((sequence_number >= 1)),
+    CONSTRAINT ck_payment_status CHECK ((status = ANY (ARRAY['Pending'::text, 'Authorized'::text, 'Captured'::text, 'Declined'::text, 'Voided'::text, 'Failed'::text]))),
+    CONSTRAINT ck_payment_tendered CHECK ((((method_type = 'Cash'::text) AND (tendered_amount IS NOT NULL) AND (tendered_amount >= amount)) OR ((method_type <> 'Cash'::text) AND (tendered_amount IS NULL))))
+);
+
+
+--
+-- Name: TABLE payment; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.payment IS 'Cites: PY-02, PY-12, PY-42, PY-46, PY-54, D-14, ADR-09. One payment attempt: the amount applied to the sale, never the amount handed over. Every attempt is its own row; a retry is a new row, and Captured, Declined, Voided and Failed are terminal for the row.';
+
+
+--
+-- Name: CONSTRAINT ck_payment_positive ON payment; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_payment_positive ON public.payment IS 'Cites: PY-02, SP-39. A tender applies a positive amount. The zero-value payment of a credit sale (PY-01) arrives with credit.';
+
+
+--
+-- Name: CONSTRAINT ck_payment_provider_outcome ON payment; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_payment_provider_outcome ON public.payment IS 'Cites: PY-10, PY-11. The provider''s response normalised to six outcomes; the raw code is kept beside it.';
+
+
+--
+-- Name: CONSTRAINT ck_payment_sequence ON payment; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_payment_sequence ON public.payment IS 'Cites: PY-20. Settlement order starts at 1.';
+
+
+--
+-- Name: CONSTRAINT ck_payment_status ON payment; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_payment_status ON public.payment IS 'Cites: SM-51, SM-52, SM-53, PY-54. The payment states of payment-domain s4. Timeout is not a state; Refunded belongs to the refund.';
+
+
+--
+-- Name: CONSTRAINT ck_payment_tendered ON payment; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_payment_tendered ON public.payment IS 'Cites: PY-19, CD-07, RT-132. Cash records what was handed over beside what was applied, and the difference is change; any other method is never overpaid.';
+
+
+--
+-- Name: payment_method; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.payment_method (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    organization_id uuid NOT NULL,
+    code public.nonblank_text NOT NULL,
+    name public.nonblank_text NOT NULL,
+    method_type text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_payment_method_type CHECK ((method_type = ANY (ARRAY['Cash'::text, 'Card'::text])))
+);
+
+
+--
+-- Name: TABLE payment_method; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.payment_method IS 'Cites: PY-03, PY-04, ADR-09. A typed payment method; the type decides the settlement logic. v1 supports Cash and Card; stored-value, credit and wallet types arrive with their balances (PY-29).';
+
+
+--
+-- Name: CONSTRAINT ck_payment_method_type ON payment_method; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_payment_method_type ON public.payment_method IS 'Cites: PY-03, ADR-09. The method types v1 settles: cash in the drawer, and card through the provider abstraction.';
+
+
+--
+-- Name: pos_terminal; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.pos_terminal (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    store_id uuid NOT NULL,
+    organization_id uuid NOT NULL,
+    code public.nonblank_text NOT NULL,
+    label public.nonblank_text NOT NULL,
+    mode text DEFAULT 'Standard'::text NOT NULL,
+    status text DEFAULT 'Registered'::text NOT NULL,
+    sell_from_location_id uuid NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    status_changed_at timestamp with time zone DEFAULT now() NOT NULL,
+    status_changed_by uuid NOT NULL,
+    CONSTRAINT ck_pos_terminal_mode CHECK ((mode = ANY (ARRAY['Standard'::text, 'Training'::text, 'Maintenance'::text]))),
+    CONSTRAINT ck_pos_terminal_status CHECK ((status = ANY (ARRAY['Registered'::text, 'Active'::text, 'Disabled'::text, 'Retired'::text])))
+);
+
+
+--
+-- Name: TABLE pos_terminal; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.pos_terminal IS 'Cites: PT-01, PT-02, PT-03, RT-122, RT-423, SM-59. A registered till bound to exactly one store. Its mode (Standard, Training, Maintenance) is configuration, and its status is the device lifecycle; the two are separate axes (ADR-27).';
+
+
+--
+-- Name: CONSTRAINT ck_pos_terminal_mode ON pos_terminal; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_pos_terminal_mode ON public.pos_terminal IS 'Cites: PT-03, SM-59, RT-423. The three modes; a mode is a field, not a lifecycle step.';
+
+
+--
+-- Name: CONSTRAINT ck_pos_terminal_status ON pos_terminal; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_pos_terminal_status ON public.pos_terminal IS 'Cites: SM-60, HD-08. The stored device states a till uses in v1. Degraded and Offline are health telemetry (SM-61) and arrive with device monitoring.';
 
 
 --
@@ -1299,12 +2337,252 @@ COMMENT ON CONSTRAINT ck_reason_code_archival ON public.reason_code IS 'Cites: B
 
 
 --
+-- Name: sale; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.sale (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    store_id uuid NOT NULL,
+    organization_id uuid NOT NULL,
+    checkout_id uuid NOT NULL,
+    pos_terminal_id uuid NOT NULL,
+    cash_drawer_id uuid NOT NULL,
+    cash_shift_id uuid NOT NULL,
+    client_operation_id uuid NOT NULL,
+    employee_id uuid NOT NULL,
+    customer_id uuid NOT NULL,
+    document_number bigint NOT NULL,
+    business_date date NOT NULL,
+    completed_at timestamp with time zone DEFAULT now() NOT NULL,
+    status text DEFAULT 'Completed'::text NOT NULL,
+    store_setting_version_id uuid NOT NULL,
+    tax_mode text NOT NULL,
+    currency_code text NOT NULL,
+    subtotal bigint NOT NULL,
+    tax_total bigint NOT NULL,
+    total_due bigint NOT NULL,
+    total_tendered bigint NOT NULL,
+    change_given bigint NOT NULL,
+    receipt_status text,
+    correlation_id uuid,
+    CONSTRAINT ck_sale_amounts CHECK (((subtotal >= 0) AND (tax_total >= 0) AND (total_due >= 0) AND (change_given >= 0))),
+    CONSTRAINT ck_sale_receipt CHECK ((receipt_status = ANY (ARRAY['Printed'::text, 'Failed'::text, 'Reprinted'::text]))),
+    CONSTRAINT ck_sale_status CHECK ((status = ANY (ARRAY['Completed'::text, 'PartiallyReturned'::text, 'Returned'::text, 'Voided'::text]))),
+    CONSTRAINT ck_sale_tax_mode CHECK ((tax_mode = ANY (ARRAY['Inclusive'::text, 'Exclusive'::text]))),
+    CONSTRAINT ck_sale_tendered CHECK ((total_tendered = total_due))
+);
+
+
+--
+-- Name: TABLE sale; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.sale IS 'Cites: SP-01, SP-02, RT-118, RT-119, RT-122, RT-123, BI-08. A completed customer transaction. It is created Completed by the completion transaction, never exists as a draft, and is never edited; later changes are compensating documents.';
+
+
+--
+-- Name: CONSTRAINT ck_sale_amounts ON sale; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_sale_amounts ON public.sale IS 'Cites: RT-131, BI-19. No total of a sale is negative.';
+
+
+--
+-- Name: CONSTRAINT ck_sale_receipt ON sale; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_sale_receipt ON public.sale IS 'Cites: SP-58, RT-140. Whether the receipt printed, failed and was queued, or was reprinted.';
+
+
+--
+-- Name: CONSTRAINT ck_sale_status ON sale; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_sale_status ON public.sale IS 'Cites: SM-32, SM-35, SM-36. The sale states of sales-pos-domain s13; there is no draft, pending or cancelled sale.';
+
+
+--
+-- Name: CONSTRAINT ck_sale_tax_mode ON sale; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_sale_tax_mode ON public.sale IS 'Cites: SP-33, PR-38. The tax mode the sale was computed in, snapshotted (TaxModeAtSale).';
+
+
+--
+-- Name: CONSTRAINT ck_sale_tendered ON sale; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_sale_tendered ON public.sale IS 'Cites: SP-40, PY-16, RT-133. The applied tenders equal the total due; an underpaid credit sale (SP-41) arrives with credit.';
+
+
+--
+-- Name: sale_line; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.sale_line (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    sale_id uuid NOT NULL,
+    store_id uuid NOT NULL,
+    organization_id uuid NOT NULL,
+    line_number integer NOT NULL,
+    variant_id uuid NOT NULL,
+    description public.nonblank_text NOT NULL,
+    unit_name public.nonblank_text NOT NULL,
+    quantity numeric(18,4) NOT NULL,
+    unit_price bigint NOT NULL,
+    price_quoted_at timestamp with time zone NOT NULL,
+    gross_amount bigint NOT NULL,
+    tax_rate_id uuid NOT NULL,
+    tax_amount bigint NOT NULL,
+    line_total bigint NOT NULL,
+    settled_amount bigint NOT NULL,
+    unit_cost bigint,
+    storage_location_id uuid NOT NULL,
+    entry_method text NOT NULL,
+    scanned_barcode text,
+    returned_quantity numeric(18,4) DEFAULT 0 NOT NULL,
+    refunded_amount bigint DEFAULT 0 NOT NULL,
+    CONSTRAINT ck_sale_line_cost CHECK ((unit_cost >= 0)),
+    CONSTRAINT ck_sale_line_entry CHECK ((((entry_method = 'Scanned'::text) AND (scanned_barcode IS NOT NULL)) OR ((entry_method = 'Selected'::text) AND (scanned_barcode IS NULL)))),
+    CONSTRAINT ck_sale_line_gross CHECK (((gross_amount)::numeric = round((quantity * (unit_price)::numeric)))),
+    CONSTRAINT ck_sale_line_number CHECK ((line_number >= 1)),
+    CONSTRAINT ck_sale_line_price CHECK ((unit_price > 0)),
+    CONSTRAINT ck_sale_line_quantity CHECK ((quantity > (0)::numeric)),
+    CONSTRAINT ck_sale_line_refunded CHECK (((refunded_amount >= 0) AND (refunded_amount <= settled_amount))),
+    CONSTRAINT ck_sale_line_returned CHECK (((returned_quantity >= (0)::numeric) AND (returned_quantity <= quantity))),
+    CONSTRAINT ck_sale_line_settled CHECK (((settled_amount >= 0) AND (settled_amount <= line_total))),
+    CONSTRAINT ck_sale_line_tax CHECK (((tax_amount >= 0) AND (line_total >= 0)))
+);
+
+
+--
+-- Name: TABLE sale_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.sale_line IS 'Cites: SP-06, SP-07, SP-13, RT-021, RT-124, RT-146, BE-43. One line of a sale, every display value and money figure snapshotted: description, unit, quoted price, tax rate and tax, cost at sale, and the settled amount. The returned and refunded counters are the truth the sale''s status caches (SP-66).';
+
+
+--
+-- Name: CONSTRAINT ck_sale_line_cost ON sale_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_sale_line_cost ON public.sale_line IS 'Cites: SP-07, BI-01. A recorded cost is never negative; null means no standard cost was defined.';
+
+
+--
+-- Name: CONSTRAINT ck_sale_line_entry ON sale_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_sale_line_entry ON public.sale_line IS 'Cites: RT-489, PR-11. A scanned line keeps the barcode read; a search-only selection is recorded as explicit.';
+
+
+--
+-- Name: CONSTRAINT ck_sale_line_gross ON sale_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_sale_line_gross ON public.sale_line IS 'Cites: BI-01, BI-11. The line amount is quantity times price, computed at full precision and rounded half-up once (overview s3.1).';
+
+
+--
+-- Name: CONSTRAINT ck_sale_line_number ON sale_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_sale_line_number ON public.sale_line IS 'Cites: SP-06. Lines are numbered from 1.';
+
+
+--
+-- Name: CONSTRAINT ck_sale_line_price ON sale_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_sale_line_price ON public.sale_line IS 'Cites: PR-34, RT-042. A price is positive.';
+
+
+--
+-- Name: CONSTRAINT ck_sale_line_quantity ON sale_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_sale_line_quantity ON public.sale_line IS 'Cites: SP-15, BI-05. A sale quantity is positive; minus one is a return, never a negative line.';
+
+
+--
+-- Name: CONSTRAINT ck_sale_line_refunded ON sale_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_sale_line_refunded ON public.sale_line IS 'Cites: BI-10, RT-145, RT-147. The refunded amount never exceeds what the line settled.';
+
+
+--
+-- Name: CONSTRAINT ck_sale_line_returned ON sale_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_sale_line_returned ON public.sale_line IS 'Cites: BI-06, BI-16, RT-148. The returned quantity never exceeds the sold quantity: the bound is the counter itself.';
+
+
+--
+-- Name: CONSTRAINT ck_sale_line_settled ON sale_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_sale_line_settled ON public.sale_line IS 'Cites: RT-146, RT-147. The settled amount, stored at completion, is at most the line total; refunds are bounded by it.';
+
+
+--
+-- Name: CONSTRAINT ck_sale_line_tax ON sale_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_sale_line_tax ON public.sale_line IS 'Cites: RT-131, BI-19. A line''s tax and total are never negative.';
+
+
+--
 -- Name: schema_migrations; Type: TABLE; Schema: public; Owner: -
 --
 
 CREATE TABLE public.schema_migrations (
     version character varying NOT NULL
 );
+
+
+--
+-- Name: shift_count; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.shift_count (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    cash_shift_id uuid NOT NULL,
+    store_id uuid NOT NULL,
+    organization_id uuid NOT NULL,
+    pass_number integer NOT NULL,
+    counted_amount bigint NOT NULL,
+    expected_amount bigint NOT NULL,
+    variance bigint GENERATED ALWAYS AS ((counted_amount - expected_amount)) STORED,
+    counted_at timestamp with time zone DEFAULT now() NOT NULL,
+    counted_by uuid NOT NULL,
+    reason_code_id uuid,
+    acknowledged_at timestamp with time zone,
+    acknowledged_by uuid,
+    CONSTRAINT ck_shift_count_acknowledgement CHECK ((((acknowledged_by IS NULL) AND (acknowledged_at IS NULL) AND (reason_code_id IS NULL)) OR ((acknowledged_by IS NOT NULL) AND (acknowledged_at IS NOT NULL) AND (reason_code_id IS NOT NULL)))),
+    CONSTRAINT ck_shift_count_counted CHECK ((counted_amount >= 0))
+);
+
+
+--
+-- Name: TABLE shift_count; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.shift_count IS 'Cites: CD-20, CD-21, CD-22, CD-23, SM-57. One blind counting pass of a reconciling shift. The expected amount is computed by the server at the count, and the variance is derived; neither is entered. A recount is a new pass, and earlier passes stand as history.';
+
+
+--
+-- Name: CONSTRAINT ck_shift_count_acknowledgement ON shift_count; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_shift_count_acknowledgement ON public.shift_count IS 'Cites: CD-23, CD-24. An acknowledgement records who, when and why together; a variance is acknowledged, never adjusted away.';
+
+
+--
+-- Name: CONSTRAINT ck_shift_count_counted ON shift_count; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_shift_count_counted ON public.shift_count IS 'Cites: CD-04. A counted amount is an observation of cash, never negative.';
 
 
 --
@@ -1636,6 +2914,26 @@ COMMENT ON CONSTRAINT ck_store_deactivation ON public.store IS 'Cites: ORG-05, R
 
 
 --
+-- Name: store_payment_method; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.store_payment_method (
+    store_id uuid NOT NULL,
+    payment_method_id uuid NOT NULL,
+    is_enabled boolean NOT NULL,
+    changed_at timestamp with time zone DEFAULT now() NOT NULL,
+    changed_by uuid NOT NULL
+);
+
+
+--
+-- Name: TABLE store_payment_method; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.store_payment_method IS 'Cites: PY-04, PY-05. Whether a method may be used at a store. Enablement is prospective: disabling stops new use and historical payments render unchanged.';
+
+
+--
 -- Name: store_setting_version; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1953,6 +3251,30 @@ ALTER TABLE ONLY public.brand
 
 
 --
+-- Name: cash_drawer pk_cash_drawer; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cash_drawer
+    ADD CONSTRAINT pk_cash_drawer PRIMARY KEY (id);
+
+
+--
+-- Name: cash_shift pk_cash_shift; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cash_shift
+    ADD CONSTRAINT pk_cash_shift PRIMARY KEY (id);
+
+
+--
+-- Name: cash_transaction pk_cash_transaction; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cash_transaction
+    ADD CONSTRAINT pk_cash_transaction PRIMARY KEY (id);
+
+
+--
 -- Name: category pk_category; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1961,11 +3283,27 @@ ALTER TABLE ONLY public.category
 
 
 --
+-- Name: checkout pk_checkout; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.checkout
+    ADD CONSTRAINT pk_checkout PRIMARY KEY (id);
+
+
+--
 -- Name: currency pk_currency; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.currency
     ADD CONSTRAINT pk_currency PRIMARY KEY (code);
+
+
+--
+-- Name: customer pk_customer; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.customer
+    ADD CONSTRAINT pk_customer PRIMARY KEY (id);
 
 
 --
@@ -2017,6 +3355,30 @@ ALTER TABLE ONLY public.organization
 
 
 --
+-- Name: payment pk_payment; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.payment
+    ADD CONSTRAINT pk_payment PRIMARY KEY (id);
+
+
+--
+-- Name: payment_method pk_payment_method; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.payment_method
+    ADD CONSTRAINT pk_payment_method PRIMARY KEY (id);
+
+
+--
+-- Name: pos_terminal pk_pos_terminal; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.pos_terminal
+    ADD CONSTRAINT pk_pos_terminal PRIMARY KEY (id);
+
+
+--
 -- Name: product pk_product; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2046,6 +3408,30 @@ ALTER TABLE ONLY public.product_variant
 
 ALTER TABLE ONLY public.reason_code
     ADD CONSTRAINT pk_reason_code PRIMARY KEY (id);
+
+
+--
+-- Name: sale pk_sale; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sale
+    ADD CONSTRAINT pk_sale PRIMARY KEY (id);
+
+
+--
+-- Name: sale_line pk_sale_line; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sale_line
+    ADD CONSTRAINT pk_sale_line PRIMARY KEY (id);
+
+
+--
+-- Name: shift_count pk_shift_count; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.shift_count
+    ADD CONSTRAINT pk_shift_count PRIMARY KEY (id);
 
 
 --
@@ -2110,6 +3496,14 @@ ALTER TABLE ONLY public.storage_location_attribution
 
 ALTER TABLE ONLY public.store
     ADD CONSTRAINT pk_store PRIMARY KEY (id);
+
+
+--
+-- Name: store_payment_method pk_store_payment_method; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.store_payment_method
+    ADD CONSTRAINT pk_store_payment_method PRIMARY KEY (store_id, payment_method_id);
 
 
 --
@@ -2200,6 +3594,96 @@ COMMENT ON CONSTRAINT uq_brand_id_organization ON public.brand IS 'Cites: RT-001
 
 
 --
+-- Name: cash_drawer uq_cash_drawer_identity; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cash_drawer
+    ADD CONSTRAINT uq_cash_drawer_identity UNIQUE (id, pos_terminal_id, store_id);
+
+
+--
+-- Name: CONSTRAINT uq_cash_drawer_identity ON cash_drawer; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_cash_drawer_identity ON public.cash_drawer IS 'Cites: RT-122, BI-14. Lets a shift prove, by foreign key, that its drawer belongs to its terminal and store.';
+
+
+--
+-- Name: cash_drawer uq_cash_drawer_one_per_terminal; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cash_drawer
+    ADD CONSTRAINT uq_cash_drawer_one_per_terminal UNIQUE (pos_terminal_id);
+
+
+--
+-- Name: CONSTRAINT uq_cash_drawer_one_per_terminal ON cash_drawer; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_cash_drawer_one_per_terminal ON public.cash_drawer IS 'Cites: CD-34. At most one drawer per terminal in v1 (organization-model s1: PosTerminal to CashDrawer is 1 to 0..1).';
+
+
+--
+-- Name: cash_shift uq_cash_shift_drawer_store; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cash_shift
+    ADD CONSTRAINT uq_cash_shift_drawer_store UNIQUE (id, cash_drawer_id, store_id);
+
+
+--
+-- Name: CONSTRAINT uq_cash_shift_drawer_store ON cash_shift; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_cash_shift_drawer_store ON public.cash_shift IS 'Cites: CD-19, BI-14. Lets a cash transaction prove, by foreign key, that its drawer and store are its shift''s.';
+
+
+--
+-- Name: cash_shift uq_cash_shift_id_store; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cash_shift
+    ADD CONSTRAINT uq_cash_shift_id_store UNIQUE (id, store_id);
+
+
+--
+-- Name: CONSTRAINT uq_cash_shift_id_store ON cash_shift; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_cash_shift_id_store ON public.cash_shift IS 'Cites: CD-20, BI-14. Lets a count prove, by foreign key, that it counts a shift of its own store.';
+
+
+--
+-- Name: cash_shift uq_cash_shift_identity; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cash_shift
+    ADD CONSTRAINT uq_cash_shift_identity UNIQUE (id, cash_drawer_id, pos_terminal_id, store_id);
+
+
+--
+-- Name: CONSTRAINT uq_cash_shift_identity ON cash_shift; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_cash_shift_identity ON public.cash_shift IS 'Cites: RT-122, PY-46. Lets a checkout or sale prove, by foreign key, that its shift, drawer, terminal and store agree.';
+
+
+--
+-- Name: cash_transaction uq_cash_transaction_seq; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cash_transaction
+    ADD CONSTRAINT uq_cash_transaction_seq UNIQUE (seq);
+
+
+--
+-- Name: CONSTRAINT uq_cash_transaction_seq ON cash_transaction; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_cash_transaction_seq ON public.cash_transaction IS 'Cites: CD-19. A total order over the drawer ledger.';
+
+
+--
 -- Name: category uq_category_id_organization; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2212,6 +3696,66 @@ ALTER TABLE ONLY public.category
 --
 
 COMMENT ON CONSTRAINT uq_category_id_organization ON public.category IS 'Cites: RT-001, BI-14. Lets a child category or product prove, by foreign key, that the category is in its own organization.';
+
+
+--
+-- Name: checkout uq_checkout_id_store; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.checkout
+    ADD CONSTRAINT uq_checkout_id_store UNIQUE (id, store_id);
+
+
+--
+-- Name: CONSTRAINT uq_checkout_id_store ON checkout; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_checkout_id_store ON public.checkout IS 'Cites: RT-001, BI-14. Lets a payment prove, by foreign key, that it settles a checkout of its own store.';
+
+
+--
+-- Name: checkout uq_checkout_identity; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.checkout
+    ADD CONSTRAINT uq_checkout_identity UNIQUE (id, cash_shift_id, cash_drawer_id, pos_terminal_id, store_id, client_operation_id);
+
+
+--
+-- Name: CONSTRAINT uq_checkout_identity ON checkout; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_checkout_identity ON public.checkout IS 'Cites: RT-122, RT-123. Lets a sale prove, by foreign key, that its shift, drawer, terminal, store and operation id are its checkout''s.';
+
+
+--
+-- Name: checkout uq_checkout_operation; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.checkout
+    ADD CONSTRAINT uq_checkout_operation UNIQUE (pos_terminal_id, client_operation_id);
+
+
+--
+-- Name: CONSTRAINT uq_checkout_operation ON checkout; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_checkout_operation ON public.checkout IS 'Cites: BI-28, PY-39, RT-121, SM-04. The cart''s client operation id is unique per terminal, so a retried commit finds the same checkout.';
+
+
+--
+-- Name: customer uq_customer_id_organization; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.customer
+    ADD CONSTRAINT uq_customer_id_organization UNIQUE (id, organization_id);
+
+
+--
+-- Name: CONSTRAINT uq_customer_id_organization ON customer; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_customer_id_organization ON public.customer IS 'Cites: RT-001, BI-14. Lets a sale prove, by foreign key, that its customer is in its own organization.';
 
 
 --
@@ -2242,6 +3786,21 @@ ALTER TABLE ONLY public.inventory_movement
 --
 
 COMMENT ON CONSTRAINT uq_inventory_movement_id_adjustment_line ON public.inventory_movement IS 'Cites: BI-03. Lets a reversal prove, by foreign key, that it answers to the same adjustment line as the movement it reverses.';
+
+
+--
+-- Name: inventory_movement uq_inventory_movement_id_sale_line; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.inventory_movement
+    ADD CONSTRAINT uq_inventory_movement_id_sale_line UNIQUE (id, sale_line_id);
+
+
+--
+-- Name: CONSTRAINT uq_inventory_movement_id_sale_line ON inventory_movement; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_inventory_movement_id_sale_line ON public.inventory_movement IS 'Cites: BI-03. Lets a reversal prove, by foreign key, that it answers to the same sale line as the movement it reverses.';
 
 
 --
@@ -2287,6 +3846,111 @@ ALTER TABLE ONLY public.inventory_transaction
 --
 
 COMMENT ON CONSTRAINT uq_inventory_transaction_id_store ON public.inventory_transaction IS 'Cites: MS-16, BI-14. Lets a movement prove, by foreign key, that it is attributed to its transaction''s store.';
+
+
+--
+-- Name: payment_method uq_payment_method_code; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.payment_method
+    ADD CONSTRAINT uq_payment_method_code UNIQUE (organization_id, code);
+
+
+--
+-- Name: CONSTRAINT uq_payment_method_code ON payment_method; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_payment_method_code ON public.payment_method IS 'Cites: PY-04. A method code identifies one method within its organization.';
+
+
+--
+-- Name: payment_method uq_payment_method_id_organization; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.payment_method
+    ADD CONSTRAINT uq_payment_method_id_organization UNIQUE (id, organization_id);
+
+
+--
+-- Name: CONSTRAINT uq_payment_method_id_organization ON payment_method; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_payment_method_id_organization ON public.payment_method IS 'Cites: PY-03, BI-14. Lets a payment prove, by foreign key, that its method is in its own organization.';
+
+
+--
+-- Name: payment_method uq_payment_method_type; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.payment_method
+    ADD CONSTRAINT uq_payment_method_type UNIQUE (id, method_type);
+
+
+--
+-- Name: CONSTRAINT uq_payment_method_type ON payment_method; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_payment_method_type ON public.payment_method IS 'Cites: PY-03, CD-09. Lets a payment prove, by foreign key, which type of method it used.';
+
+
+--
+-- Name: payment uq_payment_provider_reference; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.payment
+    ADD CONSTRAINT uq_payment_provider_reference UNIQUE (provider_transaction_reference);
+
+
+--
+-- Name: CONSTRAINT uq_payment_provider_reference ON payment; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_payment_provider_reference ON public.payment IS 'Cites: PY-15, RT-480. A provider transaction is recorded once, so a duplicate callback is idempotent.';
+
+
+--
+-- Name: payment uq_payment_sequence; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.payment
+    ADD CONSTRAINT uq_payment_sequence UNIQUE (checkout_id, sequence_number);
+
+
+--
+-- Name: CONSTRAINT uq_payment_sequence ON payment; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_payment_sequence ON public.payment IS 'Cites: PY-20. Payments on a checkout settle in a recorded, deterministic order.';
+
+
+--
+-- Name: pos_terminal uq_pos_terminal_code; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.pos_terminal
+    ADD CONSTRAINT uq_pos_terminal_code UNIQUE (store_id, code);
+
+
+--
+-- Name: CONSTRAINT uq_pos_terminal_code ON pos_terminal; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_pos_terminal_code ON public.pos_terminal IS 'Cites: PT-01. A terminal code identifies one till within its store.';
+
+
+--
+-- Name: pos_terminal uq_pos_terminal_id_store; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.pos_terminal
+    ADD CONSTRAINT uq_pos_terminal_id_store UNIQUE (id, store_id);
+
+
+--
+-- Name: CONSTRAINT uq_pos_terminal_id_store ON pos_terminal; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_pos_terminal_id_store ON public.pos_terminal IS 'Cites: PT-02, BI-14. Lets a drawer, shift or sale prove, by foreign key, that it uses a terminal of its own store.';
 
 
 --
@@ -2347,6 +4011,126 @@ ALTER TABLE ONLY public.reason_code
 --
 
 COMMENT ON CONSTRAINT uq_reason_code_id_organization ON public.reason_code IS 'Cites: RT-001, BI-14. Lets a document prove, by foreign key, that its reason is in its own organization.';
+
+
+--
+-- Name: sale uq_sale_checkout; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sale
+    ADD CONSTRAINT uq_sale_checkout UNIQUE (checkout_id);
+
+
+--
+-- Name: CONSTRAINT uq_sale_checkout ON sale; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_sale_checkout ON public.sale IS 'Cites: BI-28, PY-39. A checkout completes into at most one sale.';
+
+
+--
+-- Name: sale uq_sale_id_shift; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sale
+    ADD CONSTRAINT uq_sale_id_shift UNIQUE (id, cash_shift_id);
+
+
+--
+-- Name: CONSTRAINT uq_sale_id_shift ON sale; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_sale_id_shift ON public.sale IS 'Cites: CD-18, CD-19. Lets the change disbursement prove, by foreign key, that it is in the sale''s shift.';
+
+
+--
+-- Name: sale uq_sale_id_store; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sale
+    ADD CONSTRAINT uq_sale_id_store UNIQUE (id, store_id);
+
+
+--
+-- Name: CONSTRAINT uq_sale_id_store ON sale; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_sale_id_store ON public.sale IS 'Cites: RT-001, BI-14. Lets a line or movement prove, by foreign key, that it belongs to the sale''s store.';
+
+
+--
+-- Name: sale_line uq_sale_line_identity; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sale_line
+    ADD CONSTRAINT uq_sale_line_identity UNIQUE (id, sale_id, variant_id, storage_location_id);
+
+
+--
+-- Name: CONSTRAINT uq_sale_line_identity ON sale_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_sale_line_identity ON public.sale_line IS 'Cites: BI-03, RT-060. Lets a movement prove, by foreign key, that it applies this line''s variant at this line''s location.';
+
+
+--
+-- Name: sale_line uq_sale_line_number; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sale_line
+    ADD CONSTRAINT uq_sale_line_number UNIQUE (sale_id, line_number);
+
+
+--
+-- Name: CONSTRAINT uq_sale_line_number ON sale_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_sale_line_number ON public.sale_line IS 'Cites: SP-06. Line numbers are unique within a sale.';
+
+
+--
+-- Name: sale uq_sale_number; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sale
+    ADD CONSTRAINT uq_sale_number UNIQUE (store_id, document_number);
+
+
+--
+-- Name: CONSTRAINT uq_sale_number ON sale; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_sale_number ON public.sale IS 'Cites: BI-42, RT-479, SP-05. The sale number is unique per store and never reused.';
+
+
+--
+-- Name: sale uq_sale_operation; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sale
+    ADD CONSTRAINT uq_sale_operation UNIQUE (pos_terminal_id, client_operation_id);
+
+
+--
+-- Name: CONSTRAINT uq_sale_operation ON sale; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_sale_operation ON public.sale IS 'Cites: BI-28, PY-39, RT-121, EC-05. A commit retried with the same operation id creates no second sale.';
+
+
+--
+-- Name: shift_count uq_shift_count_pass; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.shift_count
+    ADD CONSTRAINT uq_shift_count_pass UNIQUE (cash_shift_id, pass_number);
+
+
+--
+-- Name: CONSTRAINT uq_shift_count_pass ON shift_count; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_shift_count_pass ON public.shift_count IS 'Cites: SM-57. Passes are numbered; a new count never overwrites an old one.';
 
 
 --
@@ -2545,6 +4329,21 @@ COMMENT ON CONSTRAINT uq_store_setting_version_effective ON public.store_setting
 
 
 --
+-- Name: store_setting_version uq_store_setting_version_id_store; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.store_setting_version
+    ADD CONSTRAINT uq_store_setting_version_id_store UNIQUE (id, store_id);
+
+
+--
+-- Name: CONSTRAINT uq_store_setting_version_id_store ON store_setting_version; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_store_setting_version_id_store ON public.store_setting_version IS 'Cites: REQ-AU-06, SP-33. Lets a sale prove, by foreign key, that its settings snapshot is its own store''s.';
+
+
+--
 -- Name: store_variant_price uq_store_variant_price_effective; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2602,6 +4401,21 @@ ALTER TABLE ONLY public.tax_rate
 --
 
 COMMENT ON CONSTRAINT uq_tax_rate_effective ON public.tax_rate IS 'Cites: PR-37, BI-18. One version takes effect at an instant, so the rate in force is unambiguous (jurisdiction selection: OQ-012).';
+
+
+--
+-- Name: tax_rate uq_tax_rate_id_organization; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.tax_rate
+    ADD CONSTRAINT uq_tax_rate_id_organization UNIQUE (id, organization_id);
+
+
+--
+-- Name: CONSTRAINT uq_tax_rate_id_organization ON tax_rate; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_tax_rate_id_organization ON public.tax_rate IS 'Cites: BI-18, RT-001. Lets a sale line prove, by foreign key, that its tax rate is in its own organization.';
 
 
 --
@@ -2709,6 +4523,20 @@ COMMENT ON INDEX public.ix_category_parent IS 'Cites: PR-04, RT-026. Walks the t
 
 
 --
+-- Name: ix_payment_checkout; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_payment_checkout ON public.payment USING btree (checkout_id);
+
+
+--
+-- Name: INDEX ix_payment_checkout; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.ix_payment_checkout IS 'Cites: PY-16, SP-40. Finds a checkout''s tenders when completing and reconciling.';
+
+
+--
 -- Name: ix_product_barcode_variant; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -2748,6 +4576,34 @@ CREATE INDEX ix_product_variant_product ON public.product_variant USING btree (p
 --
 
 COMMENT ON INDEX public.ix_product_variant_product IS 'Cites: RT-022. Finds a product''s variants.';
+
+
+--
+-- Name: ix_sale_business_date; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_sale_business_date ON public.sale USING btree (store_id, business_date);
+
+
+--
+-- Name: INDEX ix_sale_business_date; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.ix_sale_business_date IS 'Cites: RP-14, MS-04. Store-scoped sales by business date, for lists and reports.';
+
+
+--
+-- Name: ix_sale_shift; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_sale_shift ON public.sale USING btree (cash_shift_id);
+
+
+--
+-- Name: INDEX ix_sale_shift; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.ix_sale_shift IS 'Cites: CD-06, RT-135. Finds a shift''s sales to compute its expected cash.';
 
 
 --
@@ -2821,6 +4677,62 @@ COMMENT ON INDEX public.uq_brand_name IS 'Cites: RT-021. A brand name is unique 
 
 
 --
+-- Name: uq_cash_shift_open_per_drawer; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_cash_shift_open_per_drawer ON public.cash_shift USING btree (cash_drawer_id) WHERE (status = ANY (ARRAY['Open'::text, 'Reconciling'::text]));
+
+
+--
+-- Name: INDEX uq_cash_shift_open_per_drawer; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.uq_cash_shift_open_per_drawer IS 'Cites: CD-01, CD-03, BI-39. At most one open shift per drawer: a uniqueness constraint, not a check-then-act.';
+
+
+--
+-- Name: uq_cash_shift_open_per_employee; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_cash_shift_open_per_employee ON public.cash_shift USING btree (store_id, opened_by) WHERE (status = ANY (ARRAY['Open'::text, 'Reconciling'::text]));
+
+
+--
+-- Name: INDEX uq_cash_shift_open_per_employee; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.uq_cash_shift_open_per_employee IS 'Cites: CD-03, BI-39. At most one open shift per employee per store.';
+
+
+--
+-- Name: uq_cash_transaction_change_once; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_cash_transaction_change_once ON public.cash_transaction USING btree (sale_id) WHERE (type = 'ChangeDisbursed'::text);
+
+
+--
+-- Name: INDEX uq_cash_transaction_change_once; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.uq_cash_transaction_change_once IS 'Cites: CD-18, BI-28. A sale disburses its change once.';
+
+
+--
+-- Name: uq_customer_one_walk_in; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_customer_one_walk_in ON public.customer USING btree (organization_id) WHERE is_walk_in;
+
+
+--
+-- Name: INDEX uq_customer_one_walk_in; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.uq_customer_one_walk_in IS 'Cites: CU-01. One shared walk-in record per organization.';
+
+
+--
 -- Name: uq_inventory_movement_adjustment_line_once; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -2832,6 +4744,20 @@ CREATE UNIQUE INDEX uq_inventory_movement_adjustment_line_once ON public.invento
 --
 
 COMMENT ON INDEX public.uq_inventory_movement_adjustment_line_once IS 'Cites: BI-28, RT-486. An adjustment line is applied at most once; posting cannot be repeated.';
+
+
+--
+-- Name: uq_inventory_movement_sale_line_once; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_inventory_movement_sale_line_once ON public.inventory_movement USING btree (sale_line_id) WHERE (movement_type <> 'REVERSAL'::text);
+
+
+--
+-- Name: INDEX uq_inventory_movement_sale_line_once; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.uq_inventory_movement_sale_line_once IS 'Cites: BI-28, RT-121. A sale line moves its stock at most once.';
 
 
 --
@@ -2877,6 +4803,90 @@ COMMENT ON INDEX public.uq_storage_location_one_default IS 'Cites: MS-17, RT-057
 
 
 --
+-- Name: cash_shift tg_cash_shift_before_write; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_cash_shift_before_write BEFORE INSERT OR UPDATE ON public.cash_shift FOR EACH ROW EXECUTE FUNCTION public.cash_shift_before_write();
+
+
+--
+-- Name: TRIGGER tg_cash_shift_before_write ON cash_shift; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_cash_shift_before_write ON public.cash_shift IS 'Cites: CD-10, SM-03. Opening check and transition stamps.';
+
+
+--
+-- Name: cash_shift tg_cash_shift_close_ready; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_cash_shift_close_ready BEFORE UPDATE OF status ON public.cash_shift FOR EACH ROW EXECUTE FUNCTION public.assert_shift_close_ready();
+
+
+--
+-- Name: TRIGGER tg_cash_shift_close_ready ON cash_shift; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_cash_shift_close_ready ON public.cash_shift IS 'Cites: CD-25. A non-zero variance blocks the close until acknowledged.';
+
+
+--
+-- Name: cash_shift tg_cash_shift_opening_float; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE CONSTRAINT TRIGGER tg_cash_shift_opening_float AFTER INSERT ON public.cash_shift DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.assert_shift_opening_float();
+
+
+--
+-- Name: TRIGGER tg_cash_shift_opening_float ON cash_shift; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_cash_shift_opening_float ON public.cash_shift IS 'Cites: CD-11. The shift and its opening float are created together.';
+
+
+--
+-- Name: cash_shift tg_cash_shift_state_machine; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_cash_shift_state_machine BEFORE INSERT OR UPDATE OF status ON public.cash_shift FOR EACH ROW EXECUTE FUNCTION public.enforce_state_transition('Shift', 'status');
+
+
+--
+-- Name: TRIGGER tg_cash_shift_state_machine ON cash_shift; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_cash_shift_state_machine ON public.cash_shift IS 'Cites: SM-55, SM-56, SM-02. A shift is created Open and moves only along the edges of state-machines s22.11.';
+
+
+--
+-- Name: cash_transaction tg_cash_transaction_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_cash_transaction_immutable BEFORE DELETE OR UPDATE ON public.cash_transaction FOR EACH ROW EXECUTE FUNCTION public.forbid_ledger_rewrite();
+
+
+--
+-- Name: TRIGGER tg_cash_transaction_immutable ON cash_transaction; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_cash_transaction_immutable ON public.cash_transaction IS 'Cites: CD-19, BI-08. A cash movement is never updated or deleted, whatever the role.';
+
+
+--
+-- Name: cash_transaction tg_cash_transaction_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_cash_transaction_no_truncate BEFORE TRUNCATE ON public.cash_transaction FOR EACH STATEMENT EXECUTE FUNCTION public.forbid_ledger_rewrite();
+
+
+--
+-- Name: TRIGGER tg_cash_transaction_no_truncate ON cash_transaction; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_cash_transaction_no_truncate ON public.cash_transaction IS 'Cites: CD-19, AU-32. The drawer ledger cannot be emptied in bulk.';
+
+
+--
 -- Name: category tg_category_archival; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -2902,6 +4912,34 @@ CREATE TRIGGER tg_category_no_cycle BEFORE UPDATE OF parent_id ON public.categor
 --
 
 COMMENT ON TRIGGER tg_category_no_cycle ON public.category IS 'Cites: RT-026, EC-42. Keeps the category tree acyclic when a category is moved.';
+
+
+--
+-- Name: checkout tg_checkout_before_write; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_checkout_before_write BEFORE INSERT OR UPDATE ON public.checkout FOR EACH ROW EXECUTE FUNCTION public.checkout_before_write();
+
+
+--
+-- Name: TRIGGER tg_checkout_before_write ON checkout; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_checkout_before_write ON public.checkout IS 'Cites: PT-03, BI-39. Checkout start conditions and one-way closing.';
+
+
+--
+-- Name: checkout tg_checkout_outcome; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE CONSTRAINT TRIGGER tg_checkout_outcome AFTER UPDATE OF status ON public.checkout DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.assert_checkout_outcome();
+
+
+--
+-- Name: TRIGGER tg_checkout_outcome ON checkout; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_checkout_outcome ON public.checkout IS 'Cites: SP-01. Checked at commit.';
 
 
 --
@@ -2975,6 +5013,20 @@ COMMENT ON TRIGGER tg_inventory_movement_no_truncate ON public.inventory_movemen
 
 
 --
+-- Name: inventory_movement tg_inventory_movement_sale_state; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_inventory_movement_sale_state BEFORE INSERT ON public.inventory_movement FOR EACH ROW EXECUTE FUNCTION public.assert_movement_sale_state();
+
+
+--
+-- Name: TRIGGER tg_inventory_movement_sale_state ON inventory_movement; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_inventory_movement_sale_state ON public.inventory_movement IS 'Cites: IV-15, SM-11. Fires after the apply trigger, by name order.';
+
+
+--
 -- Name: inventory_transaction tg_inventory_transaction_business_date; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -3028,6 +5080,90 @@ CREATE TRIGGER tg_organization_deactivation BEFORE UPDATE ON public.organization
 --
 
 COMMENT ON TRIGGER tg_organization_deactivation ON public.organization IS 'Cites: RT-506, BI-40. Records an organization''s deactivation once, with server time.';
+
+
+--
+-- Name: organization tg_organization_money_settings; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_organization_money_settings BEFORE UPDATE OF currency_code, time_zone ON public.organization FOR EACH ROW EXECUTE FUNCTION public.freeze_organization_money_settings();
+
+
+--
+-- Name: TRIGGER tg_organization_money_settings ON organization; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_organization_money_settings ON public.organization IS 'Cites: ORG-01, ORG-02. Closes the domain 1 pending guard.';
+
+
+--
+-- Name: payment tg_payment_before_write; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_payment_before_write BEFORE INSERT OR UPDATE ON public.payment FOR EACH ROW EXECUTE FUNCTION public.payment_before_write();
+
+
+--
+-- Name: TRIGGER tg_payment_before_write ON payment; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_payment_before_write ON public.payment IS 'Cites: PY-12, PY-54, D-14. Terminal payments are frozen.';
+
+
+--
+-- Name: payment tg_payment_state_machine; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_payment_state_machine BEFORE INSERT OR UPDATE OF status ON public.payment FOR EACH ROW EXECUTE FUNCTION public.enforce_state_transition('Payment', 'status');
+
+
+--
+-- Name: TRIGGER tg_payment_state_machine ON payment; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_payment_state_machine ON public.payment IS 'Cites: PY-12, PY-13, PY-54, SM-51. A payment is created Pending and moves only along the edges of state-machines s22.10.';
+
+
+--
+-- Name: pos_terminal tg_pos_terminal_location; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_pos_terminal_location BEFORE INSERT OR UPDATE OF sell_from_location_id ON public.pos_terminal FOR EACH ROW EXECUTE FUNCTION public.assert_terminal_sells_from_own_location();
+
+
+--
+-- Name: TRIGGER tg_pos_terminal_location ON pos_terminal; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_pos_terminal_location ON public.pos_terminal IS 'Cites: WH-01, RT-004. Checks the till''s sell-from location.';
+
+
+--
+-- Name: pos_terminal tg_pos_terminal_state_machine; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_pos_terminal_state_machine BEFORE INSERT OR UPDATE OF status ON public.pos_terminal FOR EACH ROW EXECUTE FUNCTION public.enforce_state_transition('Device', 'status');
+
+
+--
+-- Name: TRIGGER tg_pos_terminal_state_machine ON pos_terminal; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_pos_terminal_state_machine ON public.pos_terminal IS 'Cites: SM-60, HD-08, SM-02. A terminal is registered, activated, disabled and retired only along the Device edges of state-machines s22.12.';
+
+
+--
+-- Name: pos_terminal tg_pos_terminal_status_stamp; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_pos_terminal_status_stamp BEFORE UPDATE OF status ON public.pos_terminal FOR EACH ROW EXECUTE FUNCTION public.stamp_status_change();
+
+
+--
+-- Name: TRIGGER tg_pos_terminal_status_stamp ON pos_terminal; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_pos_terminal_status_stamp ON public.pos_terminal IS 'Cites: SM-03. Server time for each terminal status change.';
 
 
 --
@@ -3101,6 +5237,20 @@ COMMENT ON TRIGGER tg_product_variant_archival ON public.product_variant IS 'Cit
 
 
 --
+-- Name: product_variant tg_product_variant_name; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_product_variant_name BEFORE UPDATE OF name ON public.product_variant FOR EACH ROW EXECUTE FUNCTION public.freeze_referenced_variant_name();
+
+
+--
+-- Name: TRIGGER tg_product_variant_name ON product_variant; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_product_variant_name ON public.product_variant IS 'Cites: PR-03. Closes the domain 2 pending guard.';
+
+
+--
 -- Name: product_variant tg_product_variant_usable; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -3126,6 +5276,76 @@ CREATE TRIGGER tg_reason_code_archival BEFORE UPDATE ON public.reason_code FOR E
 --
 
 COMMENT ON TRIGGER tg_reason_code_archival ON public.reason_code IS 'Cites: BI-40. Records a reason code''s archival once, with server time; an archived code takes no new documents.';
+
+
+--
+-- Name: sale tg_sale_before_insert; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_sale_before_insert BEFORE INSERT ON public.sale FOR EACH ROW EXECUTE FUNCTION public.sale_before_insert();
+
+
+--
+-- Name: TRIGGER tg_sale_before_insert ON sale; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_sale_before_insert ON public.sale IS 'Cites: SP-02, RT-118. Completion checks and server-assigned fields.';
+
+
+--
+-- Name: sale tg_sale_complete; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE CONSTRAINT TRIGGER tg_sale_complete AFTER INSERT ON public.sale DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.assert_sale_complete();
+
+
+--
+-- Name: TRIGGER tg_sale_complete ON sale; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_sale_complete ON public.sale IS 'Cites: SP-02, RT-119. The completion transaction is checked whole, at commit.';
+
+
+--
+-- Name: sale_line tg_sale_line_before_insert; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_sale_line_before_insert BEFORE INSERT ON public.sale_line FOR EACH ROW EXECUTE FUNCTION public.sale_line_before_insert();
+
+
+--
+-- Name: TRIGGER tg_sale_line_before_insert ON sale_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_sale_line_before_insert ON public.sale_line IS 'Cites: BI-30, RT-040. A client-supplied price, cost or rate is checked against the server''s own records; a client price is never taken on trust.';
+
+
+--
+-- Name: sale tg_sale_state_machine; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_sale_state_machine BEFORE INSERT OR UPDATE OF status ON public.sale FOR EACH ROW EXECUTE FUNCTION public.enforce_state_transition('Sale', 'status');
+
+
+--
+-- Name: TRIGGER tg_sale_state_machine ON sale; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_sale_state_machine ON public.sale IS 'Cites: SP-01, SM-33, RT-118. A sale is created Completed, and only Completed.';
+
+
+--
+-- Name: shift_count tg_shift_count_before_write; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_shift_count_before_write BEFORE INSERT OR UPDATE ON public.shift_count FOR EACH ROW EXECUTE FUNCTION public.shift_count_before_write();
+
+
+--
+-- Name: TRIGGER tg_shift_count_before_write ON shift_count; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_shift_count_before_write ON public.shift_count IS 'Cites: CD-21, CD-22. Server-computed expected amount and pass number.';
 
 
 --
@@ -3199,6 +5419,20 @@ COMMENT ON TRIGGER tg_store_deactivation ON public.store IS 'Cites: RT-508, ORG-
 
 
 --
+-- Name: store tg_store_deactivation_open_shift; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_store_deactivation_open_shift BEFORE UPDATE OF deactivated_by ON public.store FOR EACH ROW EXECUTE FUNCTION public.forbid_store_deactivation_with_open_shift();
+
+
+--
+-- Name: TRIGGER tg_store_deactivation_open_shift ON store; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_store_deactivation_open_shift ON public.store IS 'Cites: ORG-05, EC-89. Closes the domain 1 pending guard for shifts.';
+
+
+--
 -- Name: store tg_store_deactivation_stock; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -3210,6 +5444,34 @@ CREATE TRIGGER tg_store_deactivation_stock BEFORE UPDATE OF deactivated_by ON pu
 --
 
 COMMENT ON TRIGGER tg_store_deactivation_stock ON public.store IS 'Cites: ORG-05, RT-445. Closes the domain 1 pending guard for stock.';
+
+
+--
+-- Name: store_payment_method tg_store_payment_method_stamp; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_store_payment_method_stamp BEFORE UPDATE ON public.store_payment_method FOR EACH ROW EXECUTE FUNCTION public.stamp_changed_at();
+
+
+--
+-- Name: TRIGGER tg_store_payment_method_stamp ON store_payment_method; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_store_payment_method_stamp ON public.store_payment_method IS 'Cites: PY-05. Server time for each enablement change.';
+
+
+--
+-- Name: store_setting_version tg_store_setting_version_tax_mode; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_store_setting_version_tax_mode BEFORE INSERT ON public.store_setting_version FOR EACH ROW EXECUTE FUNCTION public.freeze_tax_mode_after_sale();
+
+
+--
+-- Name: TRIGGER tg_store_setting_version_tax_mode ON store_setting_version; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_store_setting_version_tax_mode ON public.store_setting_version IS 'Cites: SP-33, PR-38. Closes the domain 1 pending guard.';
 
 
 --
@@ -3256,6 +5518,96 @@ COMMENT ON CONSTRAINT fk_brand_organization ON public.brand IS 'Cites: RT-021. B
 
 
 --
+-- Name: cash_drawer fk_cash_drawer_currency; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cash_drawer
+    ADD CONSTRAINT fk_cash_drawer_currency FOREIGN KEY (store_id, currency_code) REFERENCES public.store(id, currency_code);
+
+
+--
+-- Name: CONSTRAINT fk_cash_drawer_currency ON cash_drawer; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_cash_drawer_currency ON public.cash_drawer IS 'Cites: CD-36, BI-01. A drawer holds one currency, the store''s.';
+
+
+--
+-- Name: cash_drawer fk_cash_drawer_terminal; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cash_drawer
+    ADD CONSTRAINT fk_cash_drawer_terminal FOREIGN KEY (pos_terminal_id, store_id) REFERENCES public.pos_terminal(id, store_id);
+
+
+--
+-- Name: CONSTRAINT fk_cash_drawer_terminal ON cash_drawer; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_cash_drawer_terminal ON public.cash_drawer IS 'Cites: CD-01, RT-005. A drawer belongs to one terminal of its store.';
+
+
+--
+-- Name: cash_shift fk_cash_shift_drawer; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cash_shift
+    ADD CONSTRAINT fk_cash_shift_drawer FOREIGN KEY (cash_drawer_id, pos_terminal_id, store_id) REFERENCES public.cash_drawer(id, pos_terminal_id, store_id);
+
+
+--
+-- Name: CONSTRAINT fk_cash_shift_drawer ON cash_shift; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_cash_shift_drawer ON public.cash_shift IS 'Cites: CD-05, RT-005, RT-122. A cash shift needs a drawer, and the drawer belongs to the shift''s terminal and store. A terminal without a drawer has no cash shift.';
+
+
+--
+-- Name: cash_transaction fk_cash_transaction_currency; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cash_transaction
+    ADD CONSTRAINT fk_cash_transaction_currency FOREIGN KEY (store_id, currency_code) REFERENCES public.store(id, currency_code);
+
+
+--
+-- Name: CONSTRAINT fk_cash_transaction_currency ON cash_transaction; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_cash_transaction_currency ON public.cash_transaction IS 'Cites: CD-36, BI-01. Cash is in the store''s currency, as integer minor units.';
+
+
+--
+-- Name: cash_transaction fk_cash_transaction_sale; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cash_transaction
+    ADD CONSTRAINT fk_cash_transaction_sale FOREIGN KEY (sale_id, cash_shift_id) REFERENCES public.sale(id, cash_shift_id);
+
+
+--
+-- Name: CONSTRAINT fk_cash_transaction_sale ON cash_transaction; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_cash_transaction_sale ON public.cash_transaction IS 'Cites: CD-18, RT-135. Change given belongs to one sale in the same shift.';
+
+
+--
+-- Name: cash_transaction fk_cash_transaction_shift; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cash_transaction
+    ADD CONSTRAINT fk_cash_transaction_shift FOREIGN KEY (cash_shift_id, cash_drawer_id, store_id) REFERENCES public.cash_shift(id, cash_drawer_id, store_id);
+
+
+--
+-- Name: CONSTRAINT fk_cash_transaction_shift ON cash_transaction; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_cash_transaction_shift ON public.cash_transaction IS 'Cites: CD-19, PY-46. A cash movement belongs to one shift, and its drawer and store are the shift''s.';
+
+
+--
 -- Name: category fk_category_organization; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3283,6 +5635,51 @@ ALTER TABLE ONLY public.category
 --
 
 COMMENT ON CONSTRAINT fk_category_parent ON public.category IS 'Cites: PR-04, RT-026. At most one parent, in the same organization.';
+
+
+--
+-- Name: checkout fk_checkout_currency; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.checkout
+    ADD CONSTRAINT fk_checkout_currency FOREIGN KEY (store_id, currency_code) REFERENCES public.store(id, currency_code);
+
+
+--
+-- Name: CONSTRAINT fk_checkout_currency ON checkout; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_checkout_currency ON public.checkout IS 'Cites: PY-52, BI-01. A checkout settles in the store''s single currency.';
+
+
+--
+-- Name: checkout fk_checkout_shift; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.checkout
+    ADD CONSTRAINT fk_checkout_shift FOREIGN KEY (cash_shift_id, cash_drawer_id, pos_terminal_id, store_id) REFERENCES public.cash_shift(id, cash_drawer_id, pos_terminal_id, store_id);
+
+
+--
+-- Name: CONSTRAINT fk_checkout_shift ON checkout; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_checkout_shift ON public.checkout IS 'Cites: PY-46, RT-122, BI-39. A checkout happens in one open shift, whose drawer, terminal and store it shares.';
+
+
+--
+-- Name: customer fk_customer_organization; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.customer
+    ADD CONSTRAINT fk_customer_organization FOREIGN KEY (organization_id) REFERENCES public.organization(id);
+
+
+--
+-- Name: CONSTRAINT fk_customer_organization ON customer; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_customer_organization ON public.customer IS 'Cites: CU-01, CU-06. Customers are organization-global (organization-model s8.1).';
 
 
 --
@@ -3391,6 +5788,51 @@ COMMENT ON CONSTRAINT fk_inventory_movement_reverses_same_adjustment_line ON pub
 
 
 --
+-- Name: inventory_movement fk_inventory_movement_reverses_same_sale_line; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.inventory_movement
+    ADD CONSTRAINT fk_inventory_movement_reverses_same_sale_line FOREIGN KEY (reverses_movement_id, sale_line_id) REFERENCES public.inventory_movement(id, sale_line_id);
+
+
+--
+-- Name: CONSTRAINT fk_inventory_movement_reverses_same_sale_line ON inventory_movement; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_inventory_movement_reverses_same_sale_line ON public.inventory_movement IS 'Cites: BI-03, IV-12, SP-53. A reversal of a sale movement names the same sale line.';
+
+
+--
+-- Name: inventory_movement fk_inventory_movement_sale_line; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.inventory_movement
+    ADD CONSTRAINT fk_inventory_movement_sale_line FOREIGN KEY (sale_line_id, sale_id, variant_id, storage_location_id) REFERENCES public.sale_line(id, sale_id, variant_id, storage_location_id);
+
+
+--
+-- Name: CONSTRAINT fk_inventory_movement_sale_line ON inventory_movement; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_inventory_movement_sale_line ON public.inventory_movement IS 'Cites: BI-03, RT-060, IV-15. The causing sale line, with its variant and location proven to match.';
+
+
+--
+-- Name: inventory_movement fk_inventory_movement_sale_store; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.inventory_movement
+    ADD CONSTRAINT fk_inventory_movement_sale_store FOREIGN KEY (sale_id, store_id) REFERENCES public.sale(id, store_id);
+
+
+--
+-- Name: CONSTRAINT fk_inventory_movement_sale_store ON inventory_movement; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_inventory_movement_sale_store ON public.inventory_movement IS 'Cites: MS-16, BI-14. A sale''s movements are attributed to the sale''s store.';
+
+
+--
 -- Name: inventory_movement fk_inventory_movement_store; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3478,6 +5920,126 @@ ALTER TABLE ONLY public.organization
 --
 
 COMMENT ON CONSTRAINT fk_organization_currency ON public.organization IS 'Cites: ORG-01, RT-504. The organization currency.';
+
+
+--
+-- Name: payment fk_payment_checkout; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.payment
+    ADD CONSTRAINT fk_payment_checkout FOREIGN KEY (checkout_id, store_id) REFERENCES public.checkout(id, store_id);
+
+
+--
+-- Name: CONSTRAINT fk_payment_checkout ON payment; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_payment_checkout ON public.payment IS 'Cites: PY-46, PY-54, RT-122. An attempt belongs to one checkout, so to its terminal, drawer, shift and store.';
+
+
+--
+-- Name: payment fk_payment_currency; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.payment
+    ADD CONSTRAINT fk_payment_currency FOREIGN KEY (store_id, currency_code) REFERENCES public.store(id, currency_code);
+
+
+--
+-- Name: CONSTRAINT fk_payment_currency ON payment; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_payment_currency ON public.payment IS 'Cites: PY-52, BI-01. A payment is in the store''s currency, as integer minor units.';
+
+
+--
+-- Name: payment fk_payment_method; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.payment
+    ADD CONSTRAINT fk_payment_method FOREIGN KEY (payment_method_id, organization_id) REFERENCES public.payment_method(id, organization_id);
+
+
+--
+-- Name: CONSTRAINT fk_payment_method ON payment; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_payment_method ON public.payment IS 'Cites: PY-03, PY-04. A payment uses a method of its own organization.';
+
+
+--
+-- Name: payment_method fk_payment_method_organization; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.payment_method
+    ADD CONSTRAINT fk_payment_method_organization FOREIGN KEY (organization_id) REFERENCES public.organization(id);
+
+
+--
+-- Name: CONSTRAINT fk_payment_method_organization ON payment_method; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_payment_method_organization ON public.payment_method IS 'Cites: PY-03. Methods are configured per organization.';
+
+
+--
+-- Name: payment fk_payment_method_type; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.payment
+    ADD CONSTRAINT fk_payment_method_type FOREIGN KEY (payment_method_id, method_type) REFERENCES public.payment_method(id, method_type);
+
+
+--
+-- Name: CONSTRAINT fk_payment_method_type ON payment; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_payment_method_type ON public.payment IS 'Cites: PY-03, CD-09. The payment carries its method''s type, proven by foreign key, so cash is recognisable without a join.';
+
+
+--
+-- Name: payment fk_payment_store; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.payment
+    ADD CONSTRAINT fk_payment_store FOREIGN KEY (store_id, organization_id) REFERENCES public.store(id, organization_id);
+
+
+--
+-- Name: CONSTRAINT fk_payment_store ON payment; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_payment_store ON public.payment IS 'Cites: RT-001, BI-14. A payment is in its store''s organization.';
+
+
+--
+-- Name: pos_terminal fk_pos_terminal_location; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.pos_terminal
+    ADD CONSTRAINT fk_pos_terminal_location FOREIGN KEY (sell_from_location_id, organization_id) REFERENCES public.storage_location(id, organization_id);
+
+
+--
+-- Name: CONSTRAINT fk_pos_terminal_location ON pos_terminal; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_pos_terminal_location ON public.pos_terminal IS 'Cites: WH-01, RT-004. The sellable location this till sells from, in its own organization (which location a till sells from: OQ-019).';
+
+
+--
+-- Name: pos_terminal fk_pos_terminal_store; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.pos_terminal
+    ADD CONSTRAINT fk_pos_terminal_store FOREIGN KEY (store_id, organization_id) REFERENCES public.store(id, organization_id);
+
+
+--
+-- Name: CONSTRAINT fk_pos_terminal_store ON pos_terminal; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_pos_terminal_store ON public.pos_terminal IS 'Cites: PT-02, RT-001. A terminal belongs to one store, always; the application cannot move it.';
 
 
 --
@@ -3583,6 +6145,186 @@ ALTER TABLE ONLY public.reason_code
 --
 
 COMMENT ON CONSTRAINT fk_reason_code_organization ON public.reason_code IS 'Cites: BI-25. Reason codes are per organization.';
+
+
+--
+-- Name: sale fk_sale_checkout; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sale
+    ADD CONSTRAINT fk_sale_checkout FOREIGN KEY (checkout_id, cash_shift_id, cash_drawer_id, pos_terminal_id, store_id, client_operation_id) REFERENCES public.checkout(id, cash_shift_id, cash_drawer_id, pos_terminal_id, store_id, client_operation_id);
+
+
+--
+-- Name: CONSTRAINT fk_sale_checkout ON sale; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_sale_checkout ON public.sale IS 'Cites: RT-122, RT-123, PT-01, BI-39. A sale is its checkout completed: the same shift, drawer, terminal, store and client operation id.';
+
+
+--
+-- Name: sale fk_sale_currency; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sale
+    ADD CONSTRAINT fk_sale_currency FOREIGN KEY (store_id, currency_code) REFERENCES public.store(id, currency_code);
+
+
+--
+-- Name: CONSTRAINT fk_sale_currency ON sale; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_sale_currency ON public.sale IS 'Cites: BI-01, PY-52. A sale is in the store''s currency, as integer minor units.';
+
+
+--
+-- Name: sale fk_sale_customer; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sale
+    ADD CONSTRAINT fk_sale_customer FOREIGN KEY (customer_id, organization_id) REFERENCES public.customer(id, organization_id);
+
+
+--
+-- Name: CONSTRAINT fk_sale_customer ON sale; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_sale_customer ON public.sale IS 'Cites: CU-01. Never null: a walk-in is a customer record of the same organization.';
+
+
+--
+-- Name: sale_line fk_sale_line_location; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sale_line
+    ADD CONSTRAINT fk_sale_line_location FOREIGN KEY (storage_location_id, organization_id) REFERENCES public.storage_location(id, organization_id);
+
+
+--
+-- Name: CONSTRAINT fk_sale_line_location ON sale_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_sale_line_location ON public.sale_line IS 'Cites: WH-01, IV-01. The location the stock is sold from.';
+
+
+--
+-- Name: sale_line fk_sale_line_sale; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sale_line
+    ADD CONSTRAINT fk_sale_line_sale FOREIGN KEY (sale_id, store_id) REFERENCES public.sale(id, store_id);
+
+
+--
+-- Name: CONSTRAINT fk_sale_line_sale ON sale_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_sale_line_sale ON public.sale_line IS 'Cites: RT-001, SP-02. A line belongs to one sale and carries its store.';
+
+
+--
+-- Name: sale_line fk_sale_line_tax_rate; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sale_line
+    ADD CONSTRAINT fk_sale_line_tax_rate FOREIGN KEY (tax_rate_id, organization_id) REFERENCES public.tax_rate(id, organization_id);
+
+
+--
+-- Name: CONSTRAINT fk_sale_line_tax_rate ON sale_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_sale_line_tax_rate ON public.sale_line IS 'Cites: BI-18, RT-130. The tax rate version the line was taxed at; rate versions are immutable, so this is the snapshot.';
+
+
+--
+-- Name: sale_line fk_sale_line_variant; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sale_line
+    ADD CONSTRAINT fk_sale_line_variant FOREIGN KEY (variant_id, organization_id) REFERENCES public.product_variant(id, organization_id);
+
+
+--
+-- Name: CONSTRAINT fk_sale_line_variant ON sale_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_sale_line_variant ON public.sale_line IS 'Cites: PR-01, RT-021. Only a variant is sold, never a product.';
+
+
+--
+-- Name: sale fk_sale_settings; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sale
+    ADD CONSTRAINT fk_sale_settings FOREIGN KEY (store_setting_version_id, store_id) REFERENCES public.store_setting_version(id, store_id);
+
+
+--
+-- Name: CONSTRAINT fk_sale_settings ON sale; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_sale_settings ON public.sale IS 'Cites: REQ-AU-06, SP-33. The store settings version the totals were computed under; versions are immutable, so the reference is the snapshot.';
+
+
+--
+-- Name: sale fk_sale_store; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sale
+    ADD CONSTRAINT fk_sale_store FOREIGN KEY (store_id, organization_id) REFERENCES public.store(id, organization_id);
+
+
+--
+-- Name: CONSTRAINT fk_sale_store ON sale; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_sale_store ON public.sale IS 'Cites: RT-001, ORG-04, RT-507. A sale belongs to a store; there is no sale without one.';
+
+
+--
+-- Name: shift_count fk_shift_count_reason; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.shift_count
+    ADD CONSTRAINT fk_shift_count_reason FOREIGN KEY (reason_code_id, organization_id) REFERENCES public.reason_code(id, organization_id);
+
+
+--
+-- Name: CONSTRAINT fk_shift_count_reason ON shift_count; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_shift_count_reason ON public.shift_count IS 'Cites: CD-23, BI-25. An acknowledged variance carries a reason code of the organization.';
+
+
+--
+-- Name: shift_count fk_shift_count_shift; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.shift_count
+    ADD CONSTRAINT fk_shift_count_shift FOREIGN KEY (cash_shift_id, store_id) REFERENCES public.cash_shift(id, store_id);
+
+
+--
+-- Name: CONSTRAINT fk_shift_count_shift ON shift_count; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_shift_count_shift ON public.shift_count IS 'Cites: CD-20. A count counts one shift of its store.';
+
+
+--
+-- Name: shift_count fk_shift_count_store; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.shift_count
+    ADD CONSTRAINT fk_shift_count_store FOREIGN KEY (store_id, organization_id) REFERENCES public.store(id, organization_id);
+
+
+--
+-- Name: CONSTRAINT fk_shift_count_store ON shift_count; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_shift_count_store ON public.shift_count IS 'Cites: RT-001. A count is in its store''s organization.';
 
 
 --
@@ -3841,6 +6583,36 @@ COMMENT ON CONSTRAINT fk_store_organization ON public.store IS 'Cites: RT-001, R
 
 
 --
+-- Name: store_payment_method fk_store_payment_method_method; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.store_payment_method
+    ADD CONSTRAINT fk_store_payment_method_method FOREIGN KEY (payment_method_id) REFERENCES public.payment_method(id);
+
+
+--
+-- Name: CONSTRAINT fk_store_payment_method_method ON store_payment_method; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_store_payment_method_method ON public.store_payment_method IS 'Cites: PY-04. Of a configured method.';
+
+
+--
+-- Name: store_payment_method fk_store_payment_method_store; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.store_payment_method
+    ADD CONSTRAINT fk_store_payment_method_store FOREIGN KEY (store_id) REFERENCES public.store(id);
+
+
+--
+-- Name: CONSTRAINT fk_store_payment_method_store ON store_payment_method; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_store_payment_method_store ON public.store_payment_method IS 'Cites: PY-04, RT-001. Enablement is per store.';
+
+
+--
 -- Name: store_setting_version fk_store_setting_version_store; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4050,4 +6822,6 @@ INSERT INTO public.schema_migrations (version) VALUES
     ('20260930120000'),
     ('20260930130000'),
     ('20260930140000'),
-    ('20260930150000');
+    ('20260930150000'),
+    ('20260930160000'),
+    ('20260930161000');

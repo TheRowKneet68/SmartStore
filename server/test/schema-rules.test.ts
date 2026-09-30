@@ -52,6 +52,20 @@ const SCOPE: Record<string, 'tenant' | 'organization' | 'store' | 'reference' | 
   inventory_movement: 'store', // MS-16: every movement is attributed to the store that is its reason
   // MS-17, D-03: a stock item is a variant at a location and never a store's; its store is its location's.
   stock_balance: 'organization',
+  // Domain 4. organization-model s8.1: customers and payment methods are organization-global; s8.2: terminals,
+  // drawers, shifts, cash transactions, sales and payments are store-scoped.
+  customer: 'organization',
+  pos_terminal: 'store',
+  cash_drawer: 'store',
+  cash_shift: 'store',
+  cash_transaction: 'store',
+  payment_method: 'organization',
+  store_payment_method: 'store',
+  checkout: 'store',
+  payment: 'store',
+  sale: 'store',
+  sale_line: 'store',
+  shift_count: 'store',
 };
 
 /** Tables the runtime role may DELETE from, each with its authority. Nothing else may be deleted. */
@@ -69,6 +83,8 @@ const APPEND_ONLY = [
   'variant_standard_cost',
   'inventory_transaction',
   'inventory_movement',
+  'cash_transaction',
+  'sale_line',
 ];
 
 let db: TestDb;

@@ -152,6 +152,14 @@ constraint, and a test then asserts that no column named `*_by` lacks one.
 | `reason_code` | `archived_by` | Domain 3 |
 | `stock_adjustment` | `created_by`, `submitted_by`, `approved_by`, `status_changed_by` | Domain 3 |
 | `inventory_transaction` | `created_by` | Domain 3 |
+| `pos_terminal` | `status_changed_by` | Domain 4 |
+| `cash_shift` | `opened_by`, `closed_by`, `status_changed_by` | Domain 4 |
+| `cash_transaction` | `created_by` | Domain 4 |
+| `store_payment_method` | `changed_by` | Domain 4 |
+| `checkout` | `created_by` | Domain 4 |
+| `payment` | `created_by`, `status_changed_by` | Domain 4 |
+| `sale` | `employee_id` (named for the spec's `EmployeeId`; domain 7's test must include it) | Domain 4 |
+| `shift_count` | `counted_by`, `acknowledged_by` | Domain 4 |
 
 Creation of master data (organization, store, warehouse, location) is attributed by its audit event (domain 6), not
 by a `created_by` column. An organization is necessarily created before any of its employees exists, so a
@@ -246,6 +254,27 @@ standard leaves to implementations and PostgreSQL does not use:
 | `SS022` | Posting or reversal did not write exactly its movements | `assert_adjustment_posting_complete()` |
 | `SS023` | A Transit location is reached only by transfer movements | `apply_inventory_movement()` |
 | `SS024` | An archived reason code takes no new documents | `stock_adjustment_before_write()` |
+| `SS025` | The till is not in service, or is in training, for a real sale | `checkout_before_write()`, `sale_before_insert()`, `cash_shift_before_write()` |
+| `SS026` | The shift is not open | `checkout_before_write()`, `sale_before_insert()` |
+| `SS027` | The checkout is not open | `payment_before_write()`, `sale_before_insert()` |
+| `SS028` | The variant is not sellable (product status or archived variant) | `sale_line_before_insert()` |
+| `SS029` | The variant is unclassified for tax, or not taxed at the rate in force | `sale_line_before_insert()` |
+| `SS030` | The line price is not the price in force when the server quoted it | `sale_line_before_insert()` |
+| `SS031` | The line cost is not the standard cost in force | `sale_line_before_insert()` |
+| `SS032` | The location is not a sellable location of the store | `sale_line_before_insert()`, `assert_terminal_sells_from_own_location()` |
+| `SS033` | The scanned barcode does not identify the variant | `sale_line_before_insert()` |
+| `SS034` | The sale is not whole at commit (lines, totals, tenders, change or stock) | `assert_sale_complete()` |
+| `SS035` | A payment in a terminal state is never changed | `payment_before_write()` |
+| `SS036` | Written only in the sale's completion transaction | `sale_line_before_insert()`, `assert_movement_sale_state()` |
+| `SS037` | The organization's currency and time zone are fixed once a financial document exists | `freeze_organization_money_settings()` |
+| `SS038` | Tax mode or settings snapshot conflict (fixed once sold; not the version in force; a scheduled change) | `sale_before_insert()`, `freeze_tax_mode_after_sale()` |
+| `SS039` | A store with an open shift cannot be deactivated | `forbid_store_deactivation_with_open_shift()` |
+| `SS040` | A sold variant's name is fixed | `freeze_referenced_variant_name()` |
+| `SS041` | A discontinued product sells only from stock on hand | `assert_movement_sale_state()` |
+| `SS042` | Shift opening float, counting or close precondition not met | `assert_shift_opening_float()`, `shift_count_before_write()`, `assert_shift_close_ready()` |
+| `SS043` | A checkout closes once, and completes only with its sale | `checkout_before_write()`, `assert_checkout_outcome()` |
+| `SS044` | Voiding a sale is not built in v1 (OQ-017) | `assert_movement_sale_state()` |
+| `SS045` | The payment method is not enabled at the store | `payment_before_write()` |
 
 ## 16. What every domain delivers
 

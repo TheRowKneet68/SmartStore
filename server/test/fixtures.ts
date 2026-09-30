@@ -392,3 +392,305 @@ export async function onHand(db: Db, variant: string, location: string): Promise
   );
   return rows[0] ? Number(rows[0].on_hand) : undefined;
 }
+
+// ---------------------------------------------------------------- the till (domain 4)
+
+/** A TEST-ONLY tax rate; no real jurisdiction's rate is asserted anywhere (D-12, GAP-044). */
+export async function insertTaxRate(db: Db, organizationId: string, taxCategoryId: string, percent = '10.0000'): Promise<string> {
+  const { rows } = await db.query<{ id: string }>(
+    `INSERT INTO tax_rate (organization_id, tax_category_id, jurisdiction, rate_percent, created_by)
+     VALUES ($1, $2, 'TEST-ONLY', $3, $4) RETURNING id`,
+    [organizationId, taxCategoryId, percent, actor()],
+  );
+  return rows[0]!.id;
+}
+
+export interface TillWorld extends StockWorld {
+  customer: string;
+  terminal: string;
+  drawer: string;
+  shift: string;
+  cashier: string;
+  cash: string;
+  card: string;
+  product: string;
+}
+
+export async function openShift(pool: pg.Pool, t: Pick<TillWorld, 'store' | 'terminal' | 'drawer'>, float = 1000): Promise<{ shift: string; cashier: string }> {
+  const cashier = actor();
+  const shift = await inTransaction(pool, async (c) => {
+    const s = await c.query<{ id: string }>(
+      `INSERT INTO cash_shift (store_id, pos_terminal_id, cash_drawer_id, opened_by, status_changed_by)
+       VALUES ($1, $2, $3, $4, $4) RETURNING id`,
+      [t.store, t.terminal, t.drawer, cashier],
+    );
+    await c.query(
+      `INSERT INTO cash_transaction (cash_shift_id, cash_drawer_id, store_id, type, direction, amount, currency_code, created_by)
+       VALUES ($1, $2, $3, 'OpeningFloat', 'In', $4, $5, $6)`,
+      [s.rows[0]!.id, t.drawer, t.store, float, TEST_CURRENCY, cashier],
+    );
+    return s.rows[0]!.id;
+  });
+  return { shift, cashier };
+}
+
+/** A store ready to trade: stock on hand, a walk-in, Cash and Card enabled, an active till with a drawer and an open shift. */
+export async function tillWorld(pool: pg.Pool, options: { policy?: Policy; stock?: number } = {}): Promise<TillWorld> {
+  const w = await stockWorld(pool, options.policy ?? 'AllowNegative');
+  const v = await pool.query<{ product_id: string; tax_category_id: string }>(
+    'SELECT product_id, tax_category_id FROM product_variant WHERE id = $1',
+    [w.variant],
+  );
+  await insertTaxRate(pool, w.org, v.rows[0]!.tax_category_id);
+  if ((options.stock ?? 10) > 0) {
+    await adjust(pool, w, [{ variant: w.variant, location: w.location, type: 'OPENING_BALANCE', quantity: options.stock ?? 10 }], 'OpeningBalance');
+  }
+  const customer = await pool.query<{ id: string }>(
+    `INSERT INTO customer (organization_id, is_walk_in, display_name) VALUES ($1, true, 'Walk-in') RETURNING id`,
+    [w.org],
+  );
+  const method = async (code: string, type: string) => {
+    const m = await pool.query<{ id: string }>(
+      `INSERT INTO payment_method (organization_id, code, name, method_type) VALUES ($1, $2, $2, $3) RETURNING id`,
+      [w.org, code, type],
+    );
+    await pool.query(
+      `INSERT INTO store_payment_method (store_id, payment_method_id, is_enabled, changed_by) VALUES ($1, $2, true, $3)`,
+      [w.store, m.rows[0]!.id, actor()],
+    );
+    return m.rows[0]!.id;
+  };
+  const cash = await method('CASH', 'Cash');
+  const card = await method('CARD', 'Card');
+  const terminal = await pool.query<{ id: string }>(
+    `INSERT INTO pos_terminal (store_id, organization_id, code, label, sell_from_location_id, status_changed_by)
+     VALUES ($1, $2, $3, 'Till 1', $4, $5) RETURNING id`,
+    [w.store, w.org, `T-${randomUUID()}`, w.location, actor()],
+  );
+  await pool.query(`UPDATE pos_terminal SET status = 'Active', status_changed_by = $2 WHERE id = $1`, [terminal.rows[0]!.id, actor()]);
+  const drawer = await pool.query<{ id: string }>(
+    `INSERT INTO cash_drawer (store_id, pos_terminal_id, label, currency_code) VALUES ($1, $2, 'Drawer 1', $3) RETURNING id`,
+    [w.store, terminal.rows[0]!.id, TEST_CURRENCY],
+  );
+  const t = { store: w.store, terminal: terminal.rows[0]!.id, drawer: drawer.rows[0]!.id };
+  const { shift, cashier } = await openShift(pool, t);
+  return { ...w, ...t, customer: customer.rows[0]!.id, shift, cashier, cash, card, product: v.rows[0]!.product_id };
+}
+
+export interface LineRequest {
+  variant: string;
+  quantity: number;
+  scanned?: string;
+}
+
+export interface TenderInput {
+  type: 'Cash' | 'Card';
+  amount: number;
+  tendered?: number;
+}
+
+export interface PlannedLine {
+  variant: string;
+  quantity: number;
+  unitPrice: number;
+  quotedAt: string;
+  taxRateId: string;
+  taxAmount: number;
+  gross: number;
+  lineTotal: number;
+  settled: number;
+  unitCost: number | null;
+  location: string;
+  scanned: string | null;
+  description: string;
+  unitName: string;
+  stocked: boolean;
+}
+
+export interface SalePlan {
+  operationId: string;
+  lines: PlannedLine[];
+  tenders: TenderInput[];
+  settingsVersion: string;
+  taxMode: string;
+  subtotal: number;
+  taxTotal: number;
+  totalDue: number;
+  change: number;
+  /** Leave card payments Pending (a timeout) instead of capturing them. */
+  leaveCardPending?: boolean;
+  skipMovements?: boolean;
+  skipChange?: boolean;
+}
+
+/**
+ * Plans a sale the way the server will: the price in force when quoted, the rate and standard cost in force, and
+ * totals in the store's tax mode (inclusive tax is extracted from the gross, PR-39). Tests may tamper with the plan
+ * before submitting it, to prove the database refuses the tampering.
+ */
+export async function planSale(pool: pg.Pool, t: TillWorld, requests: LineRequest[], tenders: TenderInput[]): Promise<SalePlan> {
+  const settings = await pool.query<{ id: string; tax_mode: string }>(
+    `SELECT id, tax_mode FROM store_setting_version WHERE store_id = $1 AND effective_from <= now()
+     ORDER BY effective_from DESC LIMIT 1`,
+    [t.store],
+  );
+  const lines: PlannedLine[] = [];
+  for (const r of requests) {
+    const q = await pool.query<{
+      at: Date; price: string; rate_id: string; rate: string; cost: string | null; kind: string; description: string; unit_name: string;
+    }>(
+      `SELECT now() AS at, resolve_price($1, v.id, now()) AS price, r.id AS rate_id, r.rate_percent AS rate,
+              (SELECT amount FROM variant_standard_cost c WHERE c.variant_id = v.id AND c.effective_from <= now()
+               ORDER BY c.effective_from DESC LIMIT 1) AS cost,
+              u.quantity_kind AS kind, p.name AS description, u.name AS unit_name
+       FROM product_variant v JOIN product p ON p.id = v.product_id JOIN unit u ON u.id = v.base_unit_id
+       LEFT JOIN LATERAL (SELECT id, rate_percent FROM tax_rate WHERE tax_category_id = v.tax_category_id
+                          AND effective_from <= now() ORDER BY effective_from DESC LIMIT 1) r ON true
+       WHERE v.id = $2`,
+      [t.store, r.variant],
+    );
+    const row = q.rows[0]!;
+    const unitPrice = Number(row.price);
+    const gross = Math.round(r.quantity * unitPrice);
+    const rate = Number(row.rate ?? 0);
+    const inclusive = settings.rows[0]!.tax_mode === 'Inclusive';
+    const taxAmount = inclusive ? gross - Math.round(gross / (1 + rate / 100)) : Math.round((gross * rate) / 100);
+    const lineTotal = inclusive ? gross : gross + taxAmount;
+    lines.push({
+      variant: r.variant,
+      quantity: r.quantity,
+      unitPrice,
+      quotedAt: row.at.toISOString(),
+      taxRateId: row.rate_id,
+      taxAmount,
+      gross,
+      lineTotal,
+      settled: lineTotal,
+      unitCost: row.cost === null ? null : Number(row.cost),
+      location: t.location,
+      scanned: r.scanned ?? null,
+      description: row.description,
+      unitName: row.unit_name,
+      stocked: row.kind !== 'Service',
+    });
+  }
+  const subtotal = lines.reduce((s, l) => s + l.gross, 0);
+  const taxTotal = lines.reduce((s, l) => s + l.taxAmount, 0);
+  const totalDue = lines.reduce((s, l) => s + l.lineTotal, 0);
+  const change = tenders.filter((x) => x.type === 'Cash').reduce((s, x) => s + ((x.tendered ?? x.amount) - x.amount), 0);
+  return {
+    operationId: randomUUID(),
+    lines,
+    tenders,
+    settingsVersion: settings.rows[0]!.id,
+    taxMode: settings.rows[0]!.tax_mode,
+    subtotal,
+    taxTotal,
+    totalDue,
+    change,
+  };
+}
+
+async function insertPayment(db: Db, t: TillWorld, checkout: string, sequence: number, tender: TenderInput): Promise<string> {
+  const p = await db.query<{ id: string }>(
+    `INSERT INTO payment (checkout_id, store_id, organization_id, payment_method_id, method_type, currency_code, amount,
+       tendered_amount, sequence_number, created_by, status_changed_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10) RETURNING id`,
+    [checkout, t.store, t.org, tender.type === 'Cash' ? t.cash : t.card, tender.type, TEST_CURRENCY, tender.amount,
+      tender.type === 'Cash' ? (tender.tendered ?? tender.amount) : null, sequence, t.cashier],
+  );
+  return p.rows[0]!.id;
+}
+
+export async function setPaymentStatus(db: Db, payment: string, status: string): Promise<void> {
+  await db.query('UPDATE payment SET status = $2, status_changed_by = $3 WHERE id = $1', [payment, status, actor()]);
+}
+
+export async function startCheckout(db: Db, t: TillWorld, operationId: string = randomUUID()): Promise<string> {
+  const c = await db.query<{ id: string }>(
+    `INSERT INTO checkout (store_id, pos_terminal_id, cash_drawer_id, cash_shift_id, client_operation_id, currency_code, created_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+    [t.store, t.terminal, t.drawer, t.shift, operationId, TEST_CURRENCY, t.cashier],
+  );
+  return c.rows[0]!.id;
+}
+
+/**
+ * Runs the completion order of PY-38: card tenders are authorised and captured first, each in its own transaction as
+ * a provider round trip would be; then one transaction writes the cash tenders, the sale, its lines, its movements
+ * and its change.
+ */
+export async function submitSale(pool: pg.Pool, t: TillWorld, plan: SalePlan): Promise<{ saleId: string; checkoutId: string }> {
+  const checkoutId = await startCheckout(pool, t, plan.operationId);
+  let sequence = 0;
+  for (const tender of plan.tenders.filter((x) => x.type === 'Card')) {
+    const id = await insertPayment(pool, t, checkoutId, ++sequence, tender);
+    if (!plan.leaveCardPending) {
+      await setPaymentStatus(pool, id, 'Authorized');
+      await setPaymentStatus(pool, id, 'Captured');
+    }
+  }
+  const saleId = await inTransaction(pool, async (c) => {
+    for (const tender of plan.tenders.filter((x) => x.type === 'Cash')) {
+      const id = await insertPayment(c, t, checkoutId, ++sequence, tender);
+      await setPaymentStatus(c, id, 'Authorized');
+      await setPaymentStatus(c, id, 'Captured');
+    }
+    const s = await c.query<{ id: string }>(
+      `INSERT INTO sale (store_id, organization_id, checkout_id, pos_terminal_id, cash_drawer_id, cash_shift_id,
+         client_operation_id, employee_id, customer_id, store_setting_version_id, tax_mode, currency_code, subtotal,
+         tax_total, total_due, total_tendered, change_given)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $15, $16) RETURNING id`,
+      [t.store, t.org, checkoutId, t.terminal, t.drawer, t.shift, plan.operationId, t.cashier, t.customer,
+        plan.settingsVersion, plan.taxMode, TEST_CURRENCY, plan.subtotal, plan.taxTotal, plan.totalDue, plan.change],
+    );
+    const sale = s.rows[0]!.id;
+    const lineIds: string[] = [];
+    for (const [i, l] of plan.lines.entries()) {
+      const r = await c.query<{ id: string }>(
+        `INSERT INTO sale_line (sale_id, store_id, organization_id, line_number, variant_id, description, unit_name,
+           quantity, unit_price, price_quoted_at, gross_amount, tax_rate_id, tax_amount, line_total, settled_amount,
+           unit_cost, storage_location_id, entry_method, scanned_barcode)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19) RETURNING id`,
+        [sale, t.store, t.org, i + 1, l.variant, l.description, l.unitName, l.quantity, l.unitPrice, l.quotedAt, l.gross,
+          l.taxRateId, l.taxAmount, l.lineTotal, l.settled, l.unitCost, l.location, l.scanned ? 'Scanned' : 'Selected', l.scanned],
+      );
+      lineIds.push(r.rows[0]!.id);
+    }
+    if (!plan.skipMovements) {
+      const tx = await c.query<{ id: string }>(
+        'INSERT INTO inventory_transaction (store_id, created_by) VALUES ($1, $2) RETURNING id',
+        [t.store, t.cashier],
+      );
+      const stocked = plan.lines
+        .map((l, i) => ({ l, id: lineIds[i]! }))
+        .filter((x) => x.l.stocked)
+        .sort((a, b) => (a.l.variant + a.l.location).localeCompare(b.l.variant + b.l.location));
+      for (const { l, id } of stocked) {
+        await c.query(
+          `INSERT INTO inventory_movement (inventory_transaction_id, store_id, organization_id, variant_id,
+             storage_location_id, movement_type, direction, quantity, sale_id, sale_line_id)
+           VALUES ($1, $2, $3, $4, $5, 'SALE', 'Out', $6, $7, $8)`,
+          [tx.rows[0]!.id, t.store, t.org, l.variant, l.location, l.quantity, sale, id],
+        );
+      }
+    }
+    if (plan.change > 0 && !plan.skipChange) {
+      await c.query(
+        `INSERT INTO cash_transaction (cash_shift_id, cash_drawer_id, store_id, type, direction, amount, currency_code,
+           created_by, sale_id)
+         VALUES ($1, $2, $3, 'ChangeDisbursed', 'Out', $4, $5, $6, $7)`,
+        [t.shift, t.drawer, t.store, plan.change, TEST_CURRENCY, t.cashier, sale],
+      );
+    }
+    return sale;
+  });
+  return { saleId, checkoutId };
+}
+
+/** Plan and submit, paying the exact total in cash. */
+export async function sell(pool: pg.Pool, t: TillWorld, requests: LineRequest[]): Promise<{ saleId: string; checkoutId: string }> {
+  const plan = await planSale(pool, t, requests, []);
+  plan.tenders = [{ type: 'Cash', amount: plan.totalDue, tendered: plan.totalDue }];
+  return submitSale(pool, t, plan);
+}

@@ -188,6 +188,84 @@ fallback is a design that holds either answer, not a guess at the answer.
   below-threshold skip edge (`Draft → Approved` or an automatic approve) and a reject edge are each one row in
   `state_machine_edge`, plus a threshold setting.
 
+### OQ-014 — Shift: `Reconciling → Open` and `Closed → Reopened`
+
+- **Unknown:** `state-machines.md` §12's diagram draws a `Reconciling → Open` loop that the §22.11 contract does not
+  list, and the contract's `Closed → Reopened` edge has an `OPEN DECISION` permission (`GAP-036`).
+- **Blocked:** abandoning a count back to trading, and reopening a closed shift (`CD-26`).
+- **Meanwhile:** both are refused (`SS004`); the architecture's fallback for an unkeyed transition is to refuse.
+
+### OQ-015 — Cash drawer arithmetic: change and cash refunds
+
+- **Unknown:** `CD-06`'s expected-amount formula counts cash *applied* (which is already net of change) and has no
+  change term, but `CD-07` says "£13 was applied, so the drawer received £13 and disbursed £7", which does not add up if
+  both are drawer terms. `CD-18` also says change is a drawer disbursement "or the expected count cannot be computed".
+  Separately, `CD-06` *adds* "cash refunds paid from this drawer", which reduce the drawer.
+- **Why not answerable from `/docs`:** the formulas contradict each other.
+- **Blocked:** nothing in v1 sales. The refund term matters in domain 5.
+- **Meanwhile:** a payment's amount is what was applied (`SP-39`, `PY-02`), and cash also records the tendered amount.
+  Change is recorded on the sale and as a `ChangeDisbursed` drawer row (`CD-18`, `RT-132`, `RT-135`). Expected cash =
+  float + cash applied (`CD-06`'s terms), without subtracting change a second time. A cash refund will *reduce* expected
+  cash (domain 5), and that sign is flagged here.
+
+### OQ-016 — Card-only tills: does every sale need a drawer and a shift?
+
+- **Unknown:** `RT-122` (MUST) says every sale resolves a terminal, a drawer, a shift and an employee, "a sale with no
+  shift attribution is impossible by constraint". But `CD-05` says card-only terminals are normal and a terminal
+  without a drawer has no cash shift.
+- **Blocked:** card-only tills.
+- **Meanwhile:** `RT-122` is enforced: a till that sells has a drawer and an open shift.
+
+### OQ-017 — Voiding a completed sale
+
+- **Unknown:** sales-pos §1 and `SP-52` make a completed-sale void a `SaleVoid` document under
+  `Sale.Void.Posted.Approve` with a different approver, reversing movements and refunding payments (`SP-53`, `SP-54`).
+  But §22.6 gives the `Completed → Voided` edge the permission `Sale.Void`, says it has "no stock, no money", and
+  allows it only before a receipt prints (`SM-34`).
+- **Blocked:** sale voids.
+- **Meanwhile:** voids are not built. A reversal movement on a sale is refused (`SS044`), and the sale's status is not
+  updatable by the application. Returns (domain 5) are the v1 correction.
+
+### OQ-018 — Payment transition permissions (needed before the till takes a card)
+
+- **Unknown:** §22.10 gives `(creation) → Pending` (submit), `Authorized → Captured` (capture) and `→ Voided` (void)
+  the permission `OPEN DECISION`. `GAP-036` lists them; `SM-02d` forbids deriving them from a neighbouring key.
+- **Why not answerable from `/docs`:** naming a permission key is the owner's decision.
+- **Blocked:** Step 3 cannot authorise a card payment's submit, capture or void; the architecture's fallback is to
+  refuse. Cash capture inside the completion transaction can be read as a side effect of `Sale.Create` (§22.6 lists
+  "payment captured" among its effects), but the submit edge that creates the payment is also unkeyed.
+- **Meanwhile:** the schema carries the machine unchanged. **The owner needs to name these keys before the card path
+  is built.**
+
+### OQ-019 — Which location a till sells from
+
+- **Unknown:** a sale line draws from a sellable location (`WH-01`), but no rule says which one when a store has
+  several.
+- **Meanwhile:** each till is configured with a `sell_from_location_id`, which must be a sellable location of its own
+  store. A line may use any sellable location of the store.
+
+### OQ-020 — Shift variance tolerance and the second-approver threshold
+
+- **Unknown:** `CD-23`: "variance within tolerance closes automatically; beyond it needs acknowledgement … and, beyond
+  a higher threshold, a different approver". No tolerance or higher threshold is specified or configured.
+- **Meanwhile:** the tolerance is zero, so any non-zero variance needs an acknowledgement with a reason. The
+  second-approver threshold is not enforced until one is configured.
+
+### OQ-021 — What `Maintenance` mode does to a sale
+
+- **Unknown:** `PT-03` restricts `Training` (no real sale, no stock, no tender). `RT-423` says "a separate service
+  state is what refuses a sale". Nothing says whether `Maintenance` mode refuses a sale.
+- **Meanwhile:** only `Training` blocks by mode, and the device status must be `Active`.
+
+### OQ-022 — `RT-119`'s "no payment record" against `PY-38`'s order
+
+- **Unknown:** `RT-119`'s acceptance says a fault in completion leaves "no payment record". But `PY-38` captures a card
+  *before* the commit, and `PY-42` records every attempt, so a card payment record legitimately exists before
+  completion.
+- **Meanwhile:** the completion transaction leaves no record of its own (cash tenders, sale, lines, movements, change)
+  when it fails, which is tested. Card attempts made before it remain, as `PY-38` and `PY-42` require, and are
+  reconciled (`PY-40`).
+
 ## How to use this file
 
 - Add an entry the moment you hit something the specification does not answer. Then continue with a different task.
