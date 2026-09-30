@@ -8,8 +8,9 @@
 ([Constitution §35](SMARTSTORE-CONSTITUTION.md)). Schema, entities, keys, constraints, indexes, and the migrations
 that create them.
 
-**No Phase 3 artifact has been created yet.** The backend language/framework is not chosen; it must be chosen by an
-ADR the owner approves. PostgreSQL is fixed per `ADR-03`.
+**Stack chosen:** [ADR-31](docs/architecture/ADR-31-V1-STACK-AND-TOOLING.md), approved by the owner on 2026-09-30 —
+Node 26, TypeScript, Fastify 5, `pg` (no ORM), dbmate (plain-SQL, forward-only migrations), Vitest against a real
+PostgreSQL, React + Vite. PostgreSQL is fixed per `ADR-03`. **No migration and no application code exists yet.**
 
 Phase 2 documentation is closed. All thirteen entry criteria (C-01..C-13) are met or decided
 ([PHASE-3-ENTRY-CRITERIA.md](docs/architecture/PHASE-3-ENTRY-CRITERIA.md) §6), and no genuine Phase 3 blockers
@@ -39,21 +40,51 @@ remain. The last one, `CON-03`, was closed by owner decision **D-14**.
 
 Design these so the schema can carry them without a rewrite. Do not build them.
 
+Test gates deferred with them (`TEST-STRATEGY.md` §1, ADR-31 §7): idempotency of offline apply (`OF-22/23`) waits for
+offline sync; atomic bounded redemptions (`PY-31`, `BI-19`, `BI-06`) wait for credit and loyalty. Online idempotency
+(`SM-04`) is tested in v1.
+
+## Working agreements
+
+Owner-approved with ADR-31 on 2026-09-30 (ADR-31 §13 has the full text):
+
+1. Step 2 designs all seven domains, in the owner's order, before any application code. Actor foreign keys in
+   domains 3 to 6 are added in domain 7. Step 3 implements in dependency order 1, 7, 6, 2, 3, 4, 5.
+2. A sale requires a shift (`BI-39`), so a minimal Shift/Drawer belongs to the Sale/Payment domain. Nothing else from
+   Cash.
+3. Movement types come from `inventory-domain.md` (includes `OPENING_BALANCE`), not the shorter list in
+   PHASE-2-ARCHITECTURE §9.3.
+4. Card payments are an interface plus a simulated gateway; a real acquirer is the owner's call. Tax rates are data;
+   fixtures are labelled TEST-ONLY.
+5. Work is on branch `v1-build`; commit after each passing step; remind the owner to push at the end of each domain.
+6. Migrations are forward-only.
+
 ## Done
 
-None. Phase 3 work has not started.
+- 2026-09-30 — ADR-31 (stack and tooling) written and approved by the owner.
 
 ## In progress
 
-None.
+- Tooling scaffold: package.json, dbmate, Vitest harness, `scripts/db-setup.ps1`, `.gitignore`.
+- `docs/database/CONVENTIONS.md`, then Domain 1 (Organization / Store / Warehouse).
 
 ## Next
 
-1. **Stack ADR.** Write the ADR choosing the backend language/framework, and get it **approved by the owner**
-   before building anything. PostgreSQL per `ADR-03`; money as integer minor units end to end per `ADR-04`.
-2. **Database design for Organization / Store / Warehouse.** First module. Cite the `RT-xxx` rows and rule IDs that
-   require each table. Note `D-03`: attribution is an explicit `(StorageLocation, Store)` table; physical stock
-   stays variant + location, with no single `StoreId` on the location.
-3. Then continue module by module — one at a time, with tests, committing after each passing step.
+1. **Domain 1 — Organization / Store / Warehouse.** Cite the `RT-xxx` rows and rule IDs that require each table.
+   Note `D-03`: attribution is an explicit `(StorageLocation, Store)` table; physical stock stays variant +
+   location, with no single `StoreId` on the location.
+2. Then continue domain by domain — one at a time, with tests, committing after each passing step: 2 Product /
+   Barcode / Unit, 3 Inventory ledger / Batch, 4 Sale / Payment, 5 Returns / Refunds, 6 Audit, 7 Employee / Role /
+   Permission.
+3. Then Step 3, implementation, in the order in the working agreements.
 
 Update this file after every step, including steps that failed and were abandoned.
+
+## Log
+
+Append-only. One dated line per step, including failed and abandoned attempts.
+
+- 2026-09-30 — ADR-31 proposed, then approved by the owner ("approved which makes my project latency low use it";
+  read as: approved as proposed, lowest-latency option where a choice existed — Fastify, Node 26). The installed
+  Node is v25.8.2, which is end of life and outside Vitest 5's declared `engines`; the owner has to upgrade it
+  (`winget upgrade OpenJS.NodeJS`).
