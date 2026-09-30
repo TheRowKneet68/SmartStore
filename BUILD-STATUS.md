@@ -74,10 +74,20 @@ Owner-approved with ADR-31 on 2026-09-30 (ADR-31 §13 has the full text):
   - `docs/database/CONVENTIONS.md`: naming, keys, time, money, quantity, vocabularies, scoping, deletion, grants,
     citations, migrations.
   - `d0` foundation migration: the `nonblank_text` domain.
+- 2026-09-30 — **Domain 1 — Organization / Store / Warehouse.** DESIGNED + IMPLEMENTED (migration) + **TESTED**
+  (57 tests passing). No application code. [D1 design](docs/database/D1-ORGANIZATION-STORE-WAREHOUSE.md).
+  - Tables: `currency`, `organization`, `store`, `store_setting_version` (append-only, `REQ-AU-06`), `warehouse`,
+    `storage_location`, `storage_location_attribution` (D-03), `document_type`, `document_number_sequence` +
+    `allocate_document_number()` (`BI-42`).
+  - Schema-wide tests added: every table's scope classified (`RT-001`), no float columns (`BI-01`), runtime role
+    has no `DELETE` anywhere, append-only tables have no `UPDATE`, `created_at` is always server time (`RT-353`),
+    no cascading foreign keys (`AU-32`).
+  - Mutation-checked: three guards removed one at a time, each test went red.
+  - Guards that depend on later tables are registered in CONVENTIONS §12 and D1 §6, not stubbed.
 
 ## In progress
 
-- Domain 1 (Organization / Store / Warehouse): design document and migration.
+- Domain 2 (Product / Barcode / Unit): design document and migration.
 
 ## Owner actions pending
 
@@ -91,12 +101,10 @@ Until then, tests run on a scratch PostgreSQL 17.11 cluster and a portable Node 
 
 ## Next
 
-1. **Domain 1 — Organization / Store / Warehouse.** Cite the `RT-xxx` rows and rule IDs that require each table.
-   Note `D-03`: attribution is an explicit `(StorageLocation, Store)` table; physical stock stays variant +
-   location, with no single `StoreId` on the location.
-2. Then continue domain by domain — one at a time, with tests, committing after each passing step: 2 Product /
-   Barcode / Unit, 3 Inventory ledger / Batch, 4 Sale / Payment, 5 Returns / Refunds, 6 Audit, 7 Employee / Role /
-   Permission.
+1. **Domain 2 — Product / Barcode / Unit.** Barcode lookup is an exact match on a unique index (`PR-08`, `PR-12`,
+   `UX-48`) and is the scan path for the ~100 ms budget.
+2. Then continue domain by domain — one at a time, with tests, committing after each passing step: 3 Inventory
+   ledger / Batch, 4 Sale / Payment, 5 Returns / Refunds, 6 Audit, 7 Employee / Role / Permission.
 3. Then Step 3, implementation, in the order in the working agreements.
 
 Update this file after every step, including steps that failed and were abandoned.
@@ -120,3 +128,12 @@ Append-only. One dated line per step, including failed and abandoned attempts.
   (4) Vitest 5.0.3 was published today, so the new 7-day release-age rule excludes it; pinned 5.0.1.
   The scratch cluster first ran with `fsync` and `synchronous_commit` off. It was restarted with defaults before any
   measurement, so later timings are not flattered.
+- 2026-09-30 — Domain 1. Two failed attempts, each fixed:
+  (1) The new schema-wide test caught a real defect in the draft migration: `GRANT INSERT ON currency` was
+  table-level, which let the application supply `created_at`. Changed to a column-level grant before commit. The
+  migration had only been applied to throwaway test databases.
+  (2) The first mutation check reported the central-not-sellable test as vacuous. It was the harness that was wrong:
+  the mutated migration still had the constraint's `COMMENT`, so it failed to apply and no test ran. Redone properly,
+  the test goes red. The migration file was restored byte for byte after each mutation.
+  Also: the untracked `docs.zip` present at session start is gone from the working tree. This session's commands did
+  not delete it (the one `Remove-Item` attempted was blocked, and it targeted a scratch file). Flagged to the owner.

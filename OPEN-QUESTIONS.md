@@ -55,9 +55,12 @@ fallback is a design that holds either answer, not a guess at the answer.
 - **Why not answerable from `/docs`:** `state-machines.md` lists no machine for any of them, yet overview §3.7 says
   every lifecycle transition is listed and an unlisted one is a bug. The rules say only that a store is "deactivated"
   (`ORG-05`, `RT-445`, `RT-508`), an organization is "deactivated" (`ORG-03`, `RT-506`), and `BI-40` says "archived".
+  For a warehouse nothing is said. For a location, only that `IsSellable` can be turned off and that it is never
+  deleted while it holds stock or a movement (`WH-03`).
 - **Blocked:** nothing in the schema.
-- **Meanwhile:** domain 1 records the *fact* (`deactivated_at`, `deactivated_by`) and invents no state names or
-  transitions. No reactivation path is built.
+- **Meanwhile:** domain 1 records the *fact* for organization and store (`deactivated_at`, `deactivated_by`, written
+  once, server time) and invents no state names or transitions. No reactivation path is built. A warehouse has no
+  deactivation; a location has only `is_sellable`.
 
 ### OQ-002 — Where the "BlockNegative for warehouses" default lives
 
@@ -105,6 +108,29 @@ fallback is a design that holds either answer, not a guess at the answer.
 - **Meanwhile:** the `currency` table ships with no rows. Test fixtures use the ISO 4217 test code `XTS` and are
   labelled TEST-ONLY. The exponent is data and is never assumed to be 2 (overview §3.1). ISO 4217 is outside `/docs`,
   so any real currency's exponent is **UNVERIFIED** until checked against the standard.
+
+### OQ-007 — Which time zone defines the business date: the organization's or the store's
+
+- **Unknown:** overview §3.3 says the business date is a calendar date "in the store's configured time zone", and
+  organization-model §3 says reports group by business date "in the *store's* zone". But `ORG-02` makes the
+  **organization's** "business time zone" immutable once financial documents exist, and `RT-505`'s acceptance says
+  "the business date follows the organization zone rather than the server or the terminal". No rule protects the
+  store's zone the way `ORG-02` protects the organization's.
+- **Why not answerable from `/docs`:** the documents contradict each other. Overview §3 says it wins any conflict, so
+  the store's zone governs, but then the protection `ORG-02` intends would sit on the wrong zone.
+- **Blocked:** nothing in v1, which has one store onboarded with the organization's zone.
+- **Meanwhile:** the business date is computed in the **store's** zone (overview §3, the declared tie-breaker). The
+  organization zone is guarded by `ORG-02` as written. A store's time zone is set at creation and the application
+  role cannot change it: no store time-zone edit is built until this is answered. Also recorded against `GAP-041`.
+
+### OQ-008 — Warehouse and location code uniqueness
+
+- **Unknown:** no rule says warehouse or storage-location codes are unique, or in what scope.
+- **Why not answerable from `/docs`:** the entities are specified with a "code" but no uniqueness rule.
+- **Blocked:** nothing.
+- **Meanwhile:** a code is unique where it is used to find the thing: store and warehouse codes per organization,
+  location codes per warehouse. This is a data-integrity choice, not business behaviour, and it is listed as such in
+  the domain 1 design so it can be reversed.
 
 ## How to use this file
 

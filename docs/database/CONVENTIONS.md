@@ -51,9 +51,11 @@ domain document), [PHASE-2-ARCHITECTURE.md](../architecture/PHASE-2-ARCHITECTURE
 ## 4. Money
 
 - Money is `bigint` **integer minor units** (`ADR-04`, `ADR-06`). Never `numeric`, `real` or `double precision`.
-- Every table with a money column also has `currency_code char(3) NOT NULL REFERENCES currency(code)`. **Source:**
-  overview §3.1, "every monetary amount carries an explicit currency code". A child row repeats its parent's currency
-  through a **composite foreign key** `(parent_id, currency_code)`, so a line can never disagree with its document.
+- Every table with a money column also has `currency_code text NOT NULL REFERENCES currency(code)`. **Source:**
+  overview §3.1, "every monetary amount carries an explicit currency code"; `BI-01`, "a recorded currency minor-unit
+  exponent". A child row repeats its parent's currency through a **composite foreign key**
+  `(parent_id, currency_code)`, so a line can never disagree with its document. (`text` with a `CHECK`, never
+  `char(n)`, whose blank-padding makes comparisons surprising.)
 - `currency.minor_unit_exponent` records how many decimal places the currency has. It is never assumed to be 2
   (overview §3.1).
 - A money column has a `CHECK (col >= 0)` unless its meaning is a signed effect, in which case the domain document says
@@ -134,18 +136,40 @@ constraint, and a test then asserts that no column named `*_by` lacks one.
 
 | Table | Column | Added in |
 |---|---|---|
-| *(the register is filled in by each domain document)* | | |
+| `organization` | `deactivated_by` | Domain 1 |
+| `store` | `deactivated_by` | Domain 1 |
+| `store_setting_version` | `created_by` | Domain 1 |
+| `storage_location_attribution` | `created_by` | Domain 1 |
+
+Creation of master data (organization, store, warehouse, location) is attributed by its audit event (domain 6), not
+by a `created_by` column. An organization is necessarily created before any of its employees exists, so a
+`created_by` there could not be a foreign key. The other master data follows the same pattern for consistency.
+Onboarding order is therefore organization, then its first employee, then store and settings, so the first
+`store_setting_version.created_by` has an employee to name.
 
 ## 12. Guards that depend on tables designed later
 
-Two immutabilities are defined by the *existence of documents* that a later domain creates:
-`ORG-01`/`ORG-02` (the organization's currency and time zone are immutable once a financial document exists) and
-`SP-33`/`PR-38` (a store's tax mode is immutable once a sale exists).
+Some rules are defined by the *existence of rows* that a later domain creates: `ORG-01`/`ORG-02` (the organization's
+currency and time zone are immutable once a financial document exists), `SP-33`/`PR-38` (a store's tax mode is
+immutable once a sale exists), `ORG-05` (a store is not deactivated while it holds stock or has an open shift).
 
-Domain 1 creates the guard triggers, keyed on two predicate functions, `organization_has_financial_history(uuid)` and
-`store_has_sales(uuid)`, which return `false` because no document table exists yet. **Every later migration that adds
-a financial document table replaces the function with a version that includes it, and adds a test that the guard then
-blocks the change.** A guard whose predicate has not been extended is reported as unproven, not as passing.
+**The guard is created by the migration that creates the first table whose rows can trigger it, and that domain's
+tests prove it.** No placeholder guard is created early: a guard that cannot fire cannot be tested, and an untested
+guard would read as enforcement (`P10`). Until the guarded tables exist, the rule cannot be violated, because the
+rows that would violate it cannot exist.
+
+Each domain document lists the guards it leaves pending, and the domain that closes one says so. The register:
+
+| Rule | Guard | Created by |
+|---|---|---|
+| `ORG-01`, `RT-504` | Organization currency unchangeable once a financial document exists | The first migration creating a financial-document table |
+| `ORG-02`, `RT-505` | Organization time zone unchangeable once a financial document exists | Same |
+| `SP-33`, `PR-38`, `RT-046` | No settings version may change a store's tax mode once the store has a sale | Domain 4 |
+| `ORG-05`, `RT-445`, `RT-508`, `EC-39` | A store is not deactivated while it holds stock | Domain 3 |
+| `ORG-05`, `RT-445`, `EC-89` | A store is not deactivated while it has an open shift | Domain 4 |
+| `WH-01`, `RT-004`, `MS-18` | Stock is sold only from a sellable location | Domains 3 and 4 |
+| `WH-02` | A central-warehouse location never goes negative | Domain 3 |
+| `MS-16`, `MS-19`, `D-03` | A movement's store is the location's warehouse store, or a store attributed to the central location | Domain 3 |
 
 ## 13. Citations
 
@@ -177,7 +201,20 @@ matrix without running `measure-c06.ps1` (CLAUDE.md).
 - Nothing in a migration hardcodes an answer to an open decision (`PHASE-2-ARCHITECTURE` §30.5 rule 4). Rates,
   thresholds and policies are rows, not constants.
 
-## 15. What every domain delivers
+## 15. Error codes raised by the schema
+
+A guard raises a SQLSTATE the application can map to a specific message (`UX-55`, `UX-56`); tests assert codes, never
+message text. Standard codes are used where PostgreSQL raises them itself: `23502` not null, `23503` foreign key,
+`23505` unique, `23514` check, `42501` insufficient privilege. SmartStore's own codes use class `SS`, which the SQL
+standard leaves to implementations and PostgreSQL does not use:
+
+| Code | Meaning | Raised by |
+|---|---|---|
+| `SS001` | A recorded fact (who and when) cannot be rewritten | `record_deactivation()` |
+| `SS002` | A warehouse must have its Default storage location | `assert_warehouse_has_default_location()` |
+| `SS003` | A document-number counter cannot move backwards | `forbid_document_number_decrease()` |
+
+## 16. What every domain delivers
 
 1. `docs/database/D<N>-<domain>.md`: tables, columns, constraints, each cited to `RT-xxx` rows and rule IDs; the
    decisions taken; the open questions; what is deferred; and which tests prove which claim.

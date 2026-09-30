@@ -7,6 +7,8 @@ export interface TestDb {
   owner: pg.Pool;
   /** Connected as smartstore_app: the runtime role. Use it to prove what the application can and cannot do. */
   app: pg.Pool;
+  /** Connection string for the runtime role, for tests that need their own pool (for example, wider concurrency). */
+  appUrl: string;
   name: string;
   drop(): Promise<void>;
 }
@@ -40,6 +42,7 @@ export async function createTestDb(): Promise<TestDb> {
   return {
     owner,
     app,
+    appUrl: urlFor(appUrl, name),
     name,
     async drop() {
       await owner.end();
