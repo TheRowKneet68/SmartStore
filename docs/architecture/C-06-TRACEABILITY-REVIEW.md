@@ -1312,19 +1312,21 @@ substitute for the per-rule reasoning, which is lost for Batches 1, 2, 3a, 3b, 4
 | `CD-35` | docs/product/cash-management.md | RT-528 | new row drafted by this review | `CD-35` |
 | `CD-37` | docs/product/cash-management.md | RT-529 | new row drafted by this review | `CD-37` |
 
-Rules enumerated above: **282**.
+Rules enumerated above: **279**, plus 3 rows that are section references rather than rule ids
+(`overview 3`, `overview 3.1`, `overview 3.3`, cited by `RT-457` and two neighbours). Those 3 are not
+part of the 1161 and are excluded from every count below.
 
 ### Reconciliation against the 342
 
 | | Count |
 |---|---|
 | Rules dispositioned by the review | 342 |
-| Rules cited by a row drafted by this review (Appendix A) | 282 |
-| Rules mapped entirely into pre-existing rows | 60 |
+| Rules cited by a row drafted by this review (Appendix A) | 279 |
+| Rules mapped entirely into pre-existing rows | 63 |
 | &nbsp;&nbsp;- of those, identifiable from the superseded Batch 5b draft | 14 |
-| &nbsp;&nbsp;- **identities not reconstructable** | 46 |
+| &nbsp;&nbsp;- **identities not reconstructable** | 49 |
 
-So 46 of the 342 rules cannot be named. Their final homes are recorded in §26.2 and their
+So 49 of the 342 rules cannot be named. Their final homes are recorded in §26.2 and their
 citations are present, but which batch adjudicated them, and why, is **original reasoning lost; not reconstructed**.
 
 This is the honest limit of the rebuild. The traceability work itself is unaffected: every one of the
