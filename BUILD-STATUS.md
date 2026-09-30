@@ -62,11 +62,32 @@ Owner-approved with ADR-31 on 2026-09-30 (ADR-31 §13 has the full text):
 ## Done
 
 - 2026-09-30 — ADR-31 (stack and tooling) written and approved by the owner.
+- 2026-09-30 — Tooling scaffold. **TESTED** (2 tests passing; environment in ADR-31 §14):
+  - npm workspaces (`server`); dependencies pinned exactly, `min-release-age=7`, `engine-strict`.
+  - dbmate migrations in `db/migrations/`, forward-only; `db/schema.sql` generated.
+  - Vitest harness: one template database migrated per run, a private clone per test file, pools as both roles.
+  - `server/test/citations.test.ts`: every table, constraint, index, function, trigger and domain must carry a
+    `Cites:` comment whose IDs appear in `/docs`; a self-test proves the checker flags violations.
+  - `scripts/db-setup.ps1` + `db-bootstrap.sql`: creates `smartstore_owner` and `smartstore_app` and the dev database,
+    and writes `.env`. Tested on a scratch cluster: fresh run, refusal when `.env` exists, `-ResetPasswords`, and both
+    URLs log in under `scram-sha-256`.
+  - `docs/database/CONVENTIONS.md`: naming, keys, time, money, quantity, vocabularies, scoping, deletion, grants,
+    citations, migrations.
+  - `d0` foundation migration: the `nonblank_text` domain.
 
 ## In progress
 
-- Tooling scaffold: package.json, dbmate, Vitest harness, `scripts/db-setup.ps1`, `.gitignore`.
-- `docs/database/CONVENTIONS.md`, then Domain 1 (Organization / Store / Warehouse).
+- Domain 1 (Organization / Store / Warehouse): design document and migration.
+
+## Owner actions pending
+
+1. Upgrade Node: `winget upgrade OpenJS.NodeJS` (installed 25.8.2 is end of life; 26 is the approved runtime).
+2. Run `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\db-setup.ps1` once. It asks for the `postgres`
+   password locally and writes `.env`. Then `npm ci`, `npm run db:migrate`, `npm test`.
+3. Push `v1-build` at the end of each domain.
+
+Until then, tests run on a scratch PostgreSQL 17.11 cluster and a portable Node 26 in the session scratch directory
+(ADR-31 §14). Nothing on the owner's PostgreSQL service is touched.
 
 ## Next
 
@@ -88,3 +109,14 @@ Append-only. One dated line per step, including failed and abandoned attempts.
   read as: approved as proposed, lowest-latency option where a choice existed — Fastify, Node 26). The installed
   Node is v25.8.2, which is end of life and outside Vitest 5's declared `engines`; the owner has to upgrade it
   (`winget upgrade OpenJS.NodeJS`).
+- 2026-09-30 — Tooling scaffold. Four failed attempts, each fixed and kept here:
+  (1) `pg_ctl start` through the tool shell hung, because the server inherited the tool's output pipes. Fixed by
+  starting `postgres.exe` detached with redirected output.
+  (2) `dbmate --strict migrate` failed with "flag provided but not defined": in dbmate 2.36.0 `--strict` belongs to
+  `migrate`. Corrected to `migrate --strict` (ADR-31 §14).
+  (3) The first citation test failed because the foundation migration has no tables and the test demanded at least
+  one. The test was wrong. It now checks that a migration is recorded, and a self-test plants violations to prove the
+  checker is not vacuous.
+  (4) Vitest 5.0.3 was published today, so the new 7-day release-age rule excludes it; pinned 5.0.1.
+  The scratch cluster first ran with `fsync` and `synchronous_commit` off. It was restarted with defaults before any
+  measurement, so later timings are not flattered.

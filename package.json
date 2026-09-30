@@ -1,0 +1,23 @@
+{
+  "name": "smartstore",
+  "private": true,
+  "version": "0.0.0",
+  "description": "SmartStore v1. Stack and tooling: docs/architecture/ADR-31-V1-STACK-AND-TOOLING.md",
+  "type": "module",
+  "engines": {
+    "node": "^24.0.0 || >=26.0.0"
+  },
+  "workspaces": [
+    "server"
+  ],
+  "scripts": {
+    "db:new": "dbmate --migrations-dir db/migrations new",
+    "db:migrate": "dbmate -e MIGRATION_DATABASE_URL --migrations-dir db/migrations --schema-file db/schema.sql migrate --strict",
+    "db:status": "dbmate -e MIGRATION_DATABASE_URL --migrations-dir db/migrations status",
+    "typecheck": "npm run typecheck --workspace server",
+    "test": "npm test --workspace server"
+  },
+  "devDependencies": {
+    "dbmate": "2.36.0"
+  }
+}

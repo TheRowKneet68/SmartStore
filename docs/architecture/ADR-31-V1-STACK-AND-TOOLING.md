@@ -285,3 +285,22 @@ The working defaults put to the owner with this ADR were not objected to and are
 5. Work happens on branch `v1-build`, with a commit after each passing step and a push reminder at the end of each
    domain.
 6. Migrations are forward-only.
+
+## 14. Implementation notes — 2026-09-30
+
+**Append-only record of what scaffolding found.** Sections 1 to 13 are unchanged. Nothing here changes the owner's
+decision; each entry is either a version pin or a correction of a fact in the proposal.
+
+| Item | Proposal said | What was done, and why |
+|---|---|---|
+| Supply-chain rule | Not addressed | `.npmrc` sets `min-release-age=7`: npm installs no package version published less than 7 days earlier. The repository's semgrep hook flagged its absence. It is a hardening measure, not a licence or latency matter |
+| Vitest | 5.0.3 | **5.0.1**. 5.0.3 was published 2026-09-30, inside the 7-day window. The same major; the `engines` range is unchanged |
+| Type packages | Not listed | `@types/node` 24.13.6 and `@types/pg` 8.23.1, both MIT per npm metadata; development only. `@types/node` 26 is not yet 7 days old. Nothing in the harness uses a Node 26-only API |
+| dbmate `--strict` | Listed as a global option (§4.1) | In dbmate 2.36.0 `--strict` is an option of the `migrate` command: `dbmate … migrate --strict`. The global position fails with "flag provided but not defined". Corrected in `package.json` and the test harness |
+| dbmate `.env` | Not stated | dbmate reads `.env` from its working directory by default, so `npm run db:migrate` at the repository root picks up `MIGRATION_DATABASE_URL` from it |
+| `schema.sql` | "A one-file view of the whole schema" | dbmate dumps without owners and **without privileges**, so `GRANT`s appear only in the migrations. Recorded in `docs/database/CONVENTIONS.md` §14 |
+
+**Where this was run.** Node 26.10.0, a portable copy checked against nodejs.org's published SHA-256 and run from the
+session scratch directory, because the installed Node is 25.8.2. PostgreSQL 17.11: a scratch cluster on
+`127.0.0.1:54329`, started from the installed PostgreSQL 17 binaries, with `scram-sha-256` enforced for both
+smartstore roles. The owner's `postgresql-x64-17` service was not touched and its superuser password was not needed.

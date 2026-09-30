@@ -1,3 +1,14 @@
 *.bak
 *.tmp
 research.zip
+
+# Secrets: never commit. .env holds database passwords; .env.example is the template.
+.env
+.env.*
+!.env.example
+
+# Node and build output
+node_modules/
+dist/
+coverage/
+*.log
