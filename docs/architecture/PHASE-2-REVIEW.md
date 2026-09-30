@@ -102,3 +102,44 @@ Phase 3 may not start while C-06 stands (see PHASE-3-ENTRY-CRITERIA.md and GAP-0
   solved one — the external log shipper decision is Phase 2 infra, outstanding.
 - The consistency sweep has been executed (2026-09-29): every SmartStore permission is `Sale.*`. The single
   remaining `Sales.*` occurrence quotes the surveyed system's hazard and is deliberately unchanged (GAP-031).
+## 6. Addendum 2026-09-30 - C-06 re-measured, and the review artifact rebuilt
+
+**Append-only.** Sections 1 to 5 are unchanged. Where this addendum disagrees with them, it governs.
+
+**Correction to section 4.** The claim that C-06 "is a traceability-coverage defect rather than a design gap" is
+**no longer accurate, and never was a Phase 3 blocker on coverage grounds.** All 342 formerly `inferred` homes
+were adjudicated in ten batches, `inferred` is 0, and 1161 rules are `mapped` with 1161 distinct rules cited.
+The coverage table and the citation columns are a bijection, verified in both directions.
+
+The Phase 3 gate was always this project's own acceptance rule, not a defect:
+
+> every one of the 342 must read `mapped` with `inferred 0` in section 26.3
+
+That condition is met. What is unmet is that 175 drafted rows are still
+`PROPOSED - REQUIRES HUMAN CONFIRMATION`. A drafted row is a proposal, so `mapped` is not `approved`.
+
+**C-06 status: MET pending owner approval of 175 proposed rows and acceptance of the rebuilt audit.**
+
+**Correction to section 5, first bullet.** The quantified claim "73 of the 342 homes point at OUT OF SCOPE rows
+and 132 point at two generic catch-all rows" was true when measured on 2026-09-29. It no longer describes the
+trace. Measured 2026-09-30, 24 requirement rows carry `Pri` = `OUT OF SCOPE` and 50 coverage rows resolve to one
+by canonical home (52 by any listed home); the figure 48 in section 26.3 predates the OUT OF SCOPE rows added by
+Batches 5b, 5c and 5d (`GAP-047`). The 342 homes are not pending relabelling - they were reviewed against their
+domain sources, one batch at a time.
+
+**What happened to the review artifact.** `C-06-TRACEABILITY-REVIEW.md` was destroyed on 2026-09-30 by a
+PowerShell write defect and mechanically rebuilt. The 175-row owner confirmation list and the rebuild notice
+were preserved verbatim from the git baseline; 49 of the 342 rule identities are not reconstructable and say so
+rather than being guessed (`GAP-045`).
+
+**Independent verification, 2026-09-30.** 42 of the 1161 mappings were re-read against their domain sources:
+**29 CONFIRMED, 12 WEAK MATCH, 1 ADDS BEHAVIOUR NOT IN SOURCE, 0 WRONG HOME.** No mapping is wrong. The 12 weak
+matches are under-stated pre-existing rows (`GAP-046`) and sit outside the 175-row list, so approving that list
+will not decide them. The single "adds behaviour" finding is `IV-34` at `RT-475`, which claims negative stock is
+a store policy decision - that is `SM-14`'s content, homed at `RT-410`.
+
+`docs/architecture/measure-c06.ps1` re-derives all of this from the two documents and exits 1 on any failure:
+38 checks, all passing.
+
+**Phase 2 remains complete. No Phase 3 artifact has been created, and none should be until the 175 rows and the
+rebuild are accepted.**

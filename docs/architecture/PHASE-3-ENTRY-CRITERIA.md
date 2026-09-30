@@ -172,3 +172,31 @@ and the jurisdictional tax facts — the last of which is a hard **release** blo
 issue a receipt without them.
 
 **No Phase 3 artifact has been created, and none should be until C-06 is closed.**
+## 4. Addendum 2026-09-30 - C-06 re-measured (supersedes the C-06 row in section 3)
+
+**Append-only.** The table in section 3 is unchanged. This addendum supersedes its C-06 row and the
+"Gate decision" line that follows it.
+
+| Criterion | Status | Evidence / decision reference |
+|---|---|---|
+| C-06 traceability backlog | **MET pending owner approval of 175 proposed rows and acceptance of the rebuilt audit** | `requirements-traceability.md` section 26.3: `inferred 0`, 1161 rules `mapped`, 1161 distinct rules cited, bijection verified in both directions. All 342 formerly `inferred` homes were adjudicated in ten batches (`GAP-035`). Independently re-measured 2026-09-30 by `measure-c06.ps1`, 38 checks, all passing. The review artifact was destroyed on 2026-09-30 and mechanically rebuilt (`GAP-045`); 49 of the 342 rule identities are marked not reconstructable rather than guessed |
+
+**Gate decision: NOT REACHED - the blocker is now an approval, not a coverage defect.**
+
+The original gate text was that all 342 homes must read `mapped` with `inferred 0` in section 26.3. That
+condition is met and independently measured. What remains is that 175 requirement rows drafted by the
+review carry `PROPOSED - REQUIRES HUMAN CONFIRMATION`, and a drafted row is a proposal. `mapped` is not
+`approved`.
+
+The exact actions that reach the gate:
+
+1. The owner accepts, amends or rejects each of the 175 rows in section 18 of
+   `C-06-TRACEABILITY-REVIEW.md`.
+2. The owner accepts the rebuilt audit (or names a section to reject).
+3. The owner decides the 12 pre-existing rows recorded in `GAP-046`, which approving the 175-row list will
+   **not** cover.
+
+Item 3 is new and was not visible before the 2026-09-30 sampling. It is not a schema blocker.
+
+**No Phase 3 artifact has been created, and none should be created until the above are done.** That
+sentence is unchanged in force; what changed is that C-06 no longer fails on coverage.

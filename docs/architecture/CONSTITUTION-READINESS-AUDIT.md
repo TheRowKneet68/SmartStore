@@ -416,3 +416,60 @@ citation defect and is fixed by pointing `EC-05` at `SM-04`/`PY-39`, with the re
 offline-scoped title left for the owner. G-4 and G-5 became GAP-041 and GAP-042.
 
 **No Phase 3 artifact was created by the closure pass, and none should be created until C-06 is closed.**
+## 14. Addendum 2026-09-30 - C-06 closed on coverage; the review artifact rebuilt
+
+**Append-only.** Sections 1 to 13 are unchanged. Where this addendum disagrees with them - and it does,
+in two places - this addendum governs. Section 13 is the record as of 2026-09-29.
+
+### 14.1 Two corrections to section 13
+
+**Correction 1 - the "one remaining Phase 3 blocker" paragraph is superseded.** It states the exact action that
+closes C-06 is "a human confirming or reassigning each of the 342 homes against its domain source." That
+adjudication is done. All 342 homes were confirmed or reassigned in ten batches; `inferred` is 0; 1161 rules are
+`mapped` and 1161 distinct rules are cited, a bijection verified in both directions. The 73 and 132 counts are
+historical, true on 2026-09-29, and no longer describe the trace: 24 requirement rows now carry `Pri` =
+`OUT OF SCOPE` and 50 coverage rows resolve to one by canonical home, 52 by any listed home. The 48 in
+section 26.3 is stale (`GAP-047`).
+
+**Correction 2 - C-06 was never a design gap, and the coverage defect is not what blocks Phase 3.** The gate is
+this project's own acceptance rule, that all 342 read `mapped` with `inferred 0`. That rule is met. What is
+unmet is that 175 drafted rows are still `PROPOSED - REQUIRES HUMAN CONFIRMATION`. `mapped` is not `approved`.
+
+### 14.2 Status
+
+**C-06: MET pending owner approval of 175 proposed rows and acceptance of the rebuilt audit.**
+
+Three things close it: the owner accepts, amends or rejects the 175 rows in section 18 of
+`C-06-TRACEABILITY-REVIEW.md`; the owner accepts the rebuilt audit; and the owner decides the 12 pre-existing rows
+in `GAP-046`, which the 175-row list will not cover.
+
+### 14.3 The review artifact was destroyed and rebuilt
+
+`C-06-TRACEABILITY-REVIEW.md` was destroyed on 2026-09-30: a PowerShell array collapsed to a string and
+`WriteAllText` overwrote the file, losing the per-rule disposition log for 8 of the 10 batches. The traceability
+work was never at risk - every home is in `requirements-traceability.md` section 26.2. The file was rebuilt
+mechanically: the pre-damage copy was recovered from git baseline `9283038`, the 175-row owner list and the
+rebuild notice were preserved verbatim, and the rest was recovered from surviving fragments or derived from
+section 26.2 and labelled as such. **49 of the 342 rule identities are not reconstructable and are marked so
+rather than invented** (`GAP-045`). Appendix A was corrected from 282 to **279** rules: 3 of its rows were
+section references.
+
+### 14.4 Independent verification
+
+42 of the 1161 mappings were re-read against their domain sources, spanning all 25 source documents: **29
+CONFIRMED, 12 WEAK MATCH, 1 ADDS BEHAVIOUR NOT IN SOURCE, 0 WRONG HOME.** The 12 weak matches are
+correctly-homed but under-stated pre-existing rows (`GAP-046`); the one "adds behaviour" finding is `IV-34` at
+`RT-475`, which restates `SM-14`'s content from the wrong home.
+
+`docs/architecture/measure-c06.ps1` re-derives every invariant from the two documents and exits 1 on any
+failure: 38 checks, all passing. It is saved in the repository so the gate can be re-measured rather than
+trusted.
+
+### 14.5 Constitution position
+
+The Constitution is **not** the constraint here and was not implicated at any point. C-06 is a documentation
+and approval task. `GAP-036`..`GAP-044` are unchanged by this addendum and remain as section 13 describes them:
+not Phase 3 blockers, except `GAP-044` and `GATE-Q2-LICENCE`, which are release blockers.
+
+**No Phase 3 artifact has been created by this pass, and none should be until the 175 rows and the rebuild are
+accepted.**

@@ -147,3 +147,45 @@ Phase 3 gate is traceability coverage.
   they name exist in `actors-and-roles.md` §2 (D-01). The 27 permission-column `OPEN DECISION` cells are a
   separate, previously unregistered population; see GAP-036.
 - `PHASE-2-ARCHITECTURE.md` §28.3: the 10 gates above.
+## 7. Addendum 2026-09-30 - C-06 rebuild, verification, and re-measurement
+**Append-only.** Everything above this line is unchanged. This addendum records what happened to C-06 on
+2026-09-30 and what the re-measurement found. Where it disagrees with an earlier section, this addendum
+governs; the earlier text is left as the historical record.
+
+### 7.1 What happened
+
+`C-06-TRACEABILITY-REVIEW.md` was damaged on 2026-09-30: a PowerShell array collapsed to a string and
+`WriteAllText` overwrote the file, destroying the per-rule disposition log for Batches 1, 2, 3a, 3b, 4a,
+4b, 5a and 5b. The traceability work itself was never at risk - every home is recorded in
+`requirements-traceability.md` section 26.2 and every rule is cited there.
+
+The artifact was rebuilt mechanically: the pre-damage file was recovered from the git baseline
+(`9283038`, 28,727 bytes), the rebuild notice and the 175-row owner confirmation list were preserved
+verbatim, and the remaining sections were recovered from surviving fragments or derived from section 26.2
+and labelled as such. **Nothing lost was invented.** 49 of the 342 rule identities are not reconstructable
+and say so.
+
+### 7.2 New register rows
+
+Same 20 fields as section 3. `GAP-035` is not repeated; its status change is in 7.3.
+
+| ID | Domain | Description | Evidence | Current Status | Type | Impact | Phase affected | Can documentation resolve it? | Requires owner decision? | Database impact | Security impact | Financial/inventory impact | Recommended action | Final decision/status | Priority | Source | Gate | Resolved by | Notes |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| GAP-045 | Traceability | The C-06 review artifact was destroyed on 2026-09-30 by a PowerShell write defect, losing the per-rule disposition log for 8 of the 10 batches. The traceability work was unaffected; only the evidence log was lost | git baseline `9283038`; rebuild notice and "Rebuild provenance" in the audit; surviving temporary fragments; full backup `D:\SmartStore-backup-20260930-094918` (3021 files, 358,420,886 bytes) | RESOLVED | Process defect | High - this artifact is the evidence for a Phase 3 gate | Phase 3 (the gate evidence) | Yes - rebuilt and verified | Yes - only to accept or reject the rebuild | None | None | None | Owner reads the "Rebuild provenance" section and accepts the rebuild, or names a section to reject | RESOLVED - rebuilt; acceptance pending | High | `C-06-TRACEABILITY-REVIEW.md` | C-06 | - | Measured by `measure-c06.ps1` (38 checks, all passing). 49 of the 342 identities are marked not reconstructable rather than guessed. Appendix A was corrected from 282 to **279** rules: 3 of its rows were section references, not rules |
+| GAP-046 | Traceability | 12 pre-existing requirement rows are filed correctly but their wording is too thin to carry the rules citing them. Found by independent sampling of 42 of 1161 mappings: 29 CONFIRMED, 12 WEAK MATCH, 1 ADDS BEHAVIOUR NOT IN SOURCE, **0 WRONG HOME** | `RT-002` (`EM-15`), `RT-036` (`PR-21`), `RT-078` (`IV-45`), `RT-106` (`PR-Q21`), `RT-130` (`SP-34`), `RT-145` (`RR-02`), `RT-170` (`CU-26`), `RT-179` (`SU-14`), `RT-200` (`RF-21`), `RT-218` (`HD-31`), `RT-223` (`OF-20`), `RT-231` (`SM-64`) - each rule named in the audit's verification section | OPEN SPECIFICATION | Traceability quality | Medium - a reader consulting the row does not learn what the cited rule requires | Phase 2 close-out; not a Phase 3 blocker | No - each row needs a wording decision | **Yes** - the owner decides whether to widen the row or re-file the rule | None | None | None: none of the 12 rows is itself wrong, it is under-stated | Owner widens the 12 row statements to state the cited rules, or re-files the rules | OPEN - recorded, not rewritten | Medium | `C-06-TRACEABILITY-REVIEW.md` verification section | - | - | **These 12 are not covered by the 175-row owner confirmation list**, so they will not be decided by approving that list. No mapping is wrong and the coverage bijection is unaffected; this is statement granularity only. Separately, `IV-34` / `RT-475` is the one finding **inside** a drafted row and asserts "a negative stock balance is a store policy decision", which neither `IV-34` nor `BI-05` states (`SM-14` is the policy rule, homed at `RT-410`) |
+| GAP-047 | Traceability | `requirements-traceability.md` section 26.3 states 48 coverage rows resolve to an OUT OF SCOPE requirement row. Measured 2026-09-30: 50 by canonical home, 52 by any listed home | 24 requirement rows carry `Pri` = `OUT OF SCOPE`; `measure-c06.ps1` reports all three figures | OPEN SPECIFICATION | Stale summary figure | Low - no mapping is affected | None | Yes - it is a one-line correction | No | None | None | None | Correct the figure in section 26.3, or state the counting rule the 48 was produced under | OPEN | Low | `requirements-traceability.md` section 26.3 | C-06 | - | The 48 predates the OUT OF SCOPE rows added by Batches 5b, 5c and 5d, which added `RT-482`, `RT-501`, `RT-514` and `RT-529`. **The trace was deliberately not edited** - only the four governance documents are in scope for this pass, so the stale figure is recorded here rather than silently changed |
+
+### 7.3 GAP-035 status change
+
+`GAP-035` recorded 342 rule rows carrying `inferred` mappings and asked a human to confirm or reassign all
+342. **That adjudication is done.** All 342 now read `mapped`, `inferred` is 0, and 1161 rules are `mapped`
+with 1161 distinct rules cited - the coverage table and the citation columns are a bijection, verified in
+both directions by `measure-c06.ps1`.
+
+What is left is not the backlog. It is 175 drafted requirement rows, every one of which is
+`PROPOSED - REQUIRES HUMAN CONFIRMATION`, and the acceptance of the rebuilt audit. `mapped` is not
+`approved`: it means a requirement row states a rule and cites it, not that the requirement text is agreed.
+
+`GAP-035` therefore moves from **OPEN - remains a Phase 3 blocker** to
+**OPEN - reduced to owner approval of 175 drafted rows**, and the exact action that closes C-06 is now:
+the owner accepts, amends or rejects the 175 rows in section 18 of the audit, and accepts the rebuild.
