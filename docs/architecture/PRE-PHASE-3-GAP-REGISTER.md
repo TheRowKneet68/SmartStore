@@ -219,3 +219,32 @@ from two conditions to one:
 
 with the first condition now satisfied and the second outstanding. `GAP-046` is closed by the 13 approvals.
 `GAP-045` and `GAP-047` remain open. `measure-c06.ps1` passes all checks after the change.
+### 7.6 C-06 closed; the three carried contradictions classified
+
+Recorded 2026-09-30. **Append-only.** This section supersedes the open items named in 7.5; it does not edit them.
+
+**Owner acceptance of the rebuilt C-06 audit: YES**, with the owner's stated limits - original per-rule reasoning
+lost, mechanical rebuild, independently re-sampled. Combined with the 175 recorded row decisions, both conditions
+of the C-06 criterion are met: **C-06 is `MET` and closed, and `GAP-035` closes with it.** `GAP-045` and `GAP-046`
+close. `GAP-047` remains open and is a documentation correction, not a build input.
+
+`GAP-035` was the only Phase 3 blocker listed in section 5. The classification below was derived after that
+2026-09-29 pass, which is why `CON-03` did not appear in it.
+
+#### 7.6.1 Classification of the three carried items
+
+| Item | Classification | Evidence | One-line reason |
+|---|---|---|---|
+| `CON-03` - `PY-54` / `RT-420` | **PHASE-3 BLOCKER** | `payment-domain.md` L128-131 (`PY-54`): "a retry is a new `Payment`, never a reopened one... `Failed` and `Voided` are terminal... The state graph must have no edge out of either." Against `SM-53` and `RT-420`: "`Failed` is retryable". `RT-420` cites `PY-54` while asserting the opposite. | The dispute is whether the `Failed` state has an outgoing edge, and the state-graph edge set is precisely what Phase 3 derives, so the contradiction is schema-determining rather than behavioural. |
+| `RT-186` / `SU-22` | NON-BLOCKING | `RT-186` (`MUST`): "A statement to a supplier is the ledger with a running balance and due date", cited to `SU-22`. `SU-22` (`supplier-domain.md` L173) is "no supplier portal in v1", which says nothing about statement content. The content is stated in full by `SU-12` (L108-109): "a statement is reproducible from the ledger (BI-11), shows the running balance, the terms, the due date, and states its scope (SU-02)", with `SU-13` fixing due-date computation. | Mis-citation only. The behaviour and the schema are already fully determined by `SU-12`/`SU-13`; re-citing `RT-186` from `SU-22` to `SU-12` is a one-cell documentation fix and has not been applied. |
+| `GAP-037` | NON-BLOCKING | `RT-067`/`EC-01` (`MUST`) requires "two concurrent checkouts for one remaining unit yield exactly one completed sale and one refusal"; `BI-36` (`business-invariants.md` L726) resolves the last-unit race deterministically on a different basis. | `BI-36` determines the build, so schema is unaffected. It remains a requirement-coherence and release defect, consistent with the existing section 5 classification. |
+
+#### 7.6.2 Net effect on the blocker list
+
+- **Phase 3 blockers: one.** `CON-03`. It is genuine, so it is not waived here.
+- `GAP-036`, `GAP-040`, `GAP-041`, `GAP-042`, `GAP-043`, `GAP-038`, `GAP-039` stay non-blocking, as section 5 records.
+- **Release blockers unchanged:** `GAP-044` and `GATE-Q2-LICENCE`.
+- `RT-420`'s agent-review approval is withdrawn pending `CON-03`. The row is not itself defective; it cannot be
+  called correct while its cited source disagrees with it.
+
+**Phase 3 has not been started and must not be started while `CON-03` is open.**

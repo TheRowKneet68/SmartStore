@@ -143,3 +143,20 @@ a store policy decision - that is `SM-14`'s content, homed at `RT-410`.
 
 **Phase 2 remains complete. No Phase 3 artifact has been created, and none should be until the 175 rows and the
 rebuild are accepted.**
+## 7. Addendum 2026-09-30 - C-06 closed
+
+**Append-only.** Earlier sections are unchanged.
+
+The C-06 criterion status recorded in this document, `MET pending owner approval of 175 proposed rows and
+acceptance of the rebuilt audit`, is now **satisfied in full and C-06 is closed.**
+
+- **Row decisions:** all 175 drafted rows have a recorded decision, none blank - 10 owner decisions among the drafted
+  rows, 165 agent-reviewed under owner delegation, each labelled by origin in `OWNER-APPROVAL-WORKSHEET.md`.
+- **Audit acceptance:** the owner accepted the rebuilt audit (YES) on 2026-09-30, with the limits they stated -
+  original per-rule reasoning lost, mechanical rebuild, independently re-sampled.
+- **Applied:** 15 rows changed in `requirements-traceability.md` (14 wordings, 1 citation). The 13 GAP-046
+  corrections are closed by approval. `RT-420`'s agent-review approval is withdrawn pending `CON-03`.
+- **Measured:** `inferred 0` of 1161 rules, two-way bijection intact, `measure-c06.ps1` all checks pass.
+
+`CON-03` remains a genuine Phase 3 blocker and is recorded in `PRE-PHASE-3-GAP-REGISTER.md` section 7.6. Phase 3
+has not been started.

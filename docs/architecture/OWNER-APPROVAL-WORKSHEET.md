@@ -14,8 +14,8 @@ code exists or is proposed here; this file only collects decisions.
   owner's own words, and are labelled as such so the distinction stays visible.
 - The owner-approved wording changes in section 5, the RT-435 reword, and the RT-476 citation have been **applied to**
   `requirements-traceability.md`.
-- **C-06 is not `MET` yet.** It is `MET pending owner approval of 175 proposed rows and acceptance of the rebuilt
-  audit`. The first half is now recorded. The second half is the owner's alone and is still open in section 7.
+- The owner **accepted the rebuilt C-06 audit on 2026-09-30**, with the limits recorded in section 7.1. **C-06 is
+  closed.** One genuine Phase 3 blocker survives, `CON-03`, which is outside C-06; see gap register 7.6.
 
 ## 2. How to read the columns
 
@@ -68,7 +68,7 @@ Only you can decide. `GAP-046` in section 5 is the part where a human read has a
 | UX | 21 | 0 |
 | **Total** | **175** | **16** |
 
-Rows: **175**. Owner decisions recorded: **10**. Agent-reviewed under owner delegation: **165**. Flagged for reading against the source: **16**.
+Rows: **175**. Owner decisions recorded: **11**. Agent-reviewed under owner delegation: **164**. Flagged for reading against the source: **16**.
 
 Citation extraction: **291** rule citations across **282** distinct rules, all resolved to a source, plus 3
 document-section references (`overview 3`, `overview 3.1`, `overview 3.3`).
@@ -387,7 +387,7 @@ the `file:line` to read it in full. Every row now carries a decision; none is le
 | `RT-417` | A `Failed` refund is retryable and holds the amount | **SM-41** - `Failed` is retryable and holds the amount, exactly as `Failed` is in procurement (SM-30). A refund that cannot be retried is a customer who ... _(docs/product/state-machines.md:398)_ | N - no token or number found that is absent from the source | APPROVE (agent review, owner delegation) |
 | `RT-418` | A customer balance is never state; only the status is, and every status edge is a permissioned human decision with a reason | **SM-45** - What *is* stateful is the customer status, and its values are the four the domain defines (customer-domain §3): `Active`, `OnHold`, `CreditBlocked`, `Closed`. A status ... _(docs/product/state-machines.md:427)_<br>**SM-45b** - No edge is taken by a payment, a job, or a client. Every transition is a permissioned human decision with a reason (BI-25), and ... _(docs/product/state-machines.md:444)_<br>**SM-46** - A `CreditLimitCheck` result is not a state change. It is a projection of the balance and the limit (CU-14). Recording "the limit was checked" ... _(docs/product/state-machines.md:458)_ | N - no token or number found that is absent from the source | APPROVE (agent review, owner delegation) |
 | `RT-419` | `OnHold` is not a credit control; `CreditBlocked` is the credit control, and it is liftable | **SM-45a** - `OnHold` is not a credit control. It warns, notifies, and requires a note, and the customer may still buy (CU-09). `CreditBlocked` is the credit ... _(docs/product/state-machines.md:440)_<br>**SM-45c** - `CreditBlocked` is a credit control, not a terminal state. `CreditBlocked` as terminal. That is wrong twice over. It contradicts the owner, which treats `CreditBlocked` ... _(docs/product/state-machines.md:447)_ | N - no token or number found that is absent from the source | APPROVE (agent review, owner delegation) |
-| `RT-420` | `Declined` and `Failed` payments are retryable; `Voided` and `Captured` are terminal | **SM-53** - `Declined` is retryable; `Failed` is retryable; `Voided` is terminal; `Captured` is terminal for the payment machine. _(docs/product/state-machines.md:532)_<br>**PY-14** - a decline is retryable; a capture is not. refunded if it must be reversed. Conflating them is how a "retry" becomes a double charge. _(docs/product/payment-domain.md:141)_<br>**PY-54** - a retry is a new `Payment`, never a reopened one. retried by writing another `Payment` against the same sale, and every attempt is recorded ... _(docs/product/payment-domain.md:128)_ | N - no token or number found that is absent from the source | APPROVE (agent review, owner delegation) |
+| `RT-420` | `Declined` and `Failed` payments are retryable; `Voided` and `Captured` are terminal | **SM-53** - `Declined` is retryable; `Failed` is retryable; `Voided` is terminal; `Captured` is terminal for the payment machine. _(docs/product/state-machines.md:532)_<br>**PY-14** - a decline is retryable; a capture is not. refunded if it must be reversed. Conflating them is how a "retry" becomes a double charge. _(docs/product/payment-domain.md:141)_<br>**PY-54** - a retry is a new `Payment`, never a reopened one. retried by writing another `Payment` against the same sale, and every attempt is recorded ... _(docs/product/payment-domain.md:128)_ | N - no token or number found that is absent from the source | **APPROVAL WITHDRAWN (agent review)** - not a defect in this row, but it cites PY-54, which says the opposite of the row. Blocked by `CON-03`; see gap register 7.6 |
 | `RT-421` | A payment's state is a reconciliation of provider events and the local record | **SM-54** - Payment state is a reconciliation of provider events and the local record (PY-15). The local transition alone does not make a payment captured; a ... _(docs/product/state-machines.md:535)_<br>**EC-14** - The acquirer confirms a capture the cashier never saw _(docs/product/edge-cases.md:50)_ | N - no token or number found that is absent from the source | APPROVE (agent review, owner delegation) |
 | `RT-422` | A shift's only forward path is `Open` → `Reconciling` → `Closed`; there is no `Void` state, and a closed shift is immutable except for `Reopened` | **SM-55** - The only forward path is `Open` → `Reconciling` → `Closed`, and the count happens in `Reconciling` with the expected amount hidden (CD-21, CD-31). _(docs/product/state-machines.md:558)_<br>**SM-57** - A `Closed` shift is immutable except for the `Reopened` edge (CD-26, BI-08). The counted amount, the variance, and the reason are never edited — ... _(docs/product/state-machines.md:570)_<br>**SM-58** - There is no `Void` state for a shift. A shift is money that was present; it does not get voided, it gets reconciled. (CD-19's ... _(docs/product/state-machines.md:574)_<br>**SM-56a** - `Reopened` is a state on the machine, not a synonym for "closed". `Reopened` among the shift's four statuses, so it is a state this ... _(docs/product/state-machines.md:564)_ | N - no token or number found that is absent from the source | APPROVE (agent review, owner delegation) |
 | `RT-423` | A `PosTerminal`'s mode is configuration, not a lifecycle step, and is separate from its service state | **SM-59** - A `PosTerminal` carries two distinct things that an earlier revision of this section collapsed into one graph. First a mode — `Standard`, `Training`, or ... _(docs/product/state-machines.md:595)_ | N - no token or number found that is absent from the source | APPROVE (agent review, owner delegation) |
@@ -443,21 +443,47 @@ the `file:line` to read it in full. Every row now carries a decision; none is le
 | Rows presented | 175 (`RT-355`..`RT-529`) |
 | Flagged for reading against the source | 16 (all dispositioned in section 4) |
 | GAP-046 proposals | 13 raised, **13 owner-approved, all 13 applied to the trace** (12 of them are pre-existing rows `RT-002`..`RT-231`, outside the 175 drafted rows) |
-| Owner decisions recorded | 10 |
-| Agent-reviewed under delegation | 165 |
+| Owner decisions recorded | 11 |
+| Agent-reviewed under delegation | 164 |
 | Rows with no decision | **0** |
 | `requirements-traceability.md` | 15 rows updated: 14 wordings (13 GAP-046 + RT-435), 1 citation (RT-476 + RR-09) |
 | Phase 3 artifact, schema, or code | none - none proposed |
-| **Owner accepts the rebuilt C-06 audit** | **NOT YET ANSWERED - owner decision required** |
+| **Owner accepts the rebuilt C-06 audit** | **YES - accepted 2026-09-30**, with the stated limits in 7.1 |
+| **C-06 criterion status** | **MET - CLOSED** |
 
-### 7.1 The one open item
+### 7.1 Acceptance of the rebuilt audit
 
-C-06 reads `MET pending owner approval of 175 proposed rows and acceptance of the rebuilt audit`. The row
-approvals are now recorded. **Acceptance of the rebuilt audit is the owner's own judgement and I have deliberately not
-filled it in** - it is not mine to answer, and answering it would manufacture the owner consent the criterion is
-waiting on. Answer `YES` or `NO` in the table above and C-06 can close.
+> **The owner accepts the rebuilt C-06 audit: YES**, with the limits they stated: *original per-rule reasoning lost,
+> mechanical rebuild, independently re-sampled*.
 
-Also still open, unrelated to C-06: `CON-03`/`PY-54`/`RT-420`, `RT-186`/`SU-22`, and `GAP-037`.
+Recorded 2026-09-30. With this, both conditions of the criterion are satisfied - the 175 row decisions above and
+acceptance of the rebuild - so **C-06 is `MET` and closed.** `GAP-035` (the 342-row traceability backlog) closes
+with it, and it was the only Phase 3 blocker the register carried.
+
+The three acceptance limits are carried forward as permanent disclosure, not as caveats to be quietly dropped:
+
+1. **Original per-rule reasoning lost.** The Phase 1 narrative behind the 342 homes is unrecoverable; 49 rule
+   identities cannot be reconstructed. The audit records a mechanical rebuild, not a recovered original.
+2. **Mechanical rebuild.** Placement was derived by rule-id matching, not by re-deriving each placement by hand.
+3. **Independently re-sampled.** A 42-rule sample was read against source: 29 `CONFIRMED`, 12 `WEAK MATCH`,
+   1 `ADDS BEHAVIOUR NOT IN SOURCE`, 0 `WRONG HOME`. The 13 weak/adds findings became GAP-046 and are now
+   fixed and applied.
+
+### 7.2 What C-06 closure does not close
+
+Closing C-06 does not clear Phase 3. One genuine blocker remains, found by this review and classified in gap
+register 7.6:
+
+| Item | Classification | One-line reason |
+|---|---|---|
+| `CON-03` / `PY-54` / `RT-420` | **PHASE-3 BLOCKER** | `PY-54` says the state graph must have no edge out of `Failed`; `SM-53` and `RT-420` say `Failed` is retryable, and the edge set is exactly what Phase 3 derives |
+| `RT-186` / `SU-22` | NON-BLOCKING | mis-citation only - `SU-12` already states the statement content in full, so the behaviour and the schema are determinate |
+| `GAP-037` | NON-BLOCKING | `BI-36` determines the build, so schema is unaffected; it is a requirement-coherence and release defect |
+
+Because `CON-03` is genuine, `RT-420`'s agent-review approval is **withdrawn** in section 6 rather than left
+standing. That was my error last pass: I approved the row without noticing that its own cited source (`PY-54`)
+says the opposite of its wording. Also still open and unrelated to C-06: `GAP-040`, `GAP-041`, `GAP-042`,
+`GAP-043`, `GAP-038`, `GAP-039`.
 
 ## 8. Known limits of this worksheet
 

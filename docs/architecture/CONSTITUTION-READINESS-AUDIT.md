@@ -473,3 +473,39 @@ not Phase 3 blockers, except `GAP-044` and `GATE-Q2-LICENCE`, which are release 
 
 **No Phase 3 artifact has been created by this pass, and none should be until the 175 rows and the rebuild are
 accepted.**
+## 15. Addendum 2026-09-30 - C-06 closed, entry gate met, one blocker stands
+
+**Append-only.** Earlier sections are unchanged.
+
+### 15.1 C-06 is closed
+
+The C-06 criterion status, `MET pending owner approval of 175 proposed rows and acceptance of the rebuilt audit`,
+is satisfied in both halves and **C-06 is `MET`**. The owner recorded a decision on all 175 drafted rows and
+accepted the rebuilt audit (YES) on 2026-09-30 with the limits they stated: original per-rule reasoning lost,
+mechanical rebuild, independently re-sampled.
+
+Those three limits are not caveats to be dropped later. They describe what the audit is: a mechanical rebuild of a
+lost original, validated by a 42-rule independent re-sample (29 `CONFIRMED`, 12 `WEAK MATCH`, 1 `ADDS BEHAVIOUR NOT
+IN SOURCE`, 0 `WRONG HOME`). The 13 weak and adds-behaviour findings became `GAP-046`, were approved by the owner,
+and are applied. 49 rule identities remain unrecoverable and are recorded as such rather than reconstructed.
+
+### 15.2 Entry gate: met, with one genuine blocker
+
+All of C-01..C-13 are now met or decided. **Phase 3 nonetheless does not start**, because `CON-03` is a genuine
+blocker:
+
+> `PY-54` (`payment-domain.md` L128-131) requires that the payment state graph have **no edge out of `Failed`**.
+> `SM-53` and `RT-420` state that **`Failed` is retryable**. `RT-420` cites `PY-54` while asserting the opposite.
+
+The disputed fact is the edge set of the state graph, which is exactly the artifact Phase 3 derives. This cannot be
+waived by review or re-sampling, because both readings are in the owner document and neither is marked as
+superseded. It needs an owner decision.
+
+`RT-186`/`SU-22` and `GAP-037` were classified in the same pass and are **non-blocking**: `RT-186` is a mis-citation
+whose content `SU-12` already states in full, and `GAP-037` is a requirement-coherence and release defect that
+`BI-36` resolves for build purposes. Evidence is in `PRE-PHASE-3-GAP-REGISTER.md` section 7.6.
+
+### 15.3 Standing constraint
+
+**No Phase 3 artifact exists. None has been created by this work, and none should be created until `CON-03` is
+decided.** The schema, the migrations, and the implementation remain out of scope.

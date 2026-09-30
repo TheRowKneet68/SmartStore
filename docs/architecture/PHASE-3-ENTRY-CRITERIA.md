@@ -200,3 +200,50 @@ Item 3 is new and was not visible before the 2026-09-30 sampling. It is not a sc
 
 **No Phase 3 artifact has been created, and none should be created until the above are done.** That
 sentence is unchanged in force; what changed is that C-06 no longer fails on coverage.
+## 5. Addendum 2026-09-30 - C-06 closed; entry status restated
+
+**Append-only.** Sections 3 and 4 are unchanged. This addendum supersedes the C-06 row of section 3 and the
+addendum in section 4.
+
+> **C-06 traceability backlog: `MET` - CLOSED.**
+
+The owner reviewed all 175 drafted rows in `OWNER-APPROVAL-WORKSHEET.md` and recorded a decision on every one, with
+no blanks: 10 owner decisions among the drafted rows and 165 dispositioned by agent review under explicit owner
+delegation, labelled distinctly so the two are never conflated. Fifteen rows were changed in
+`requirements-traceability.md` - 14 wordings (13 approved GAP-046 corrections plus the owner's `RT-435` reword) and
+one citation (`RR-09` added to `RT-476`). The owner then **accepted the rebuilt audit (YES)**, with the stated
+limits: original per-rule reasoning lost, mechanical rebuild, independently re-sampled. Those limits are permanent
+disclosure and are restated in `C-06-TRACEABILITY-REVIEW.md` and worksheet section 7.1.
+
+`requirements-traceability.md` section 26.3 now reads `inferred 0`, with 1161 of 1161 rules `mapped`.
+`measure-c06.ps1` passes every check. The 1161-rule two-way bijection holds.
+
+### 5.1 C-01..C-13 after this addendum
+
+| Criterion | Status |
+|---|---|
+| C-01 permission keys | decided |
+| C-02 payable timing | decided |
+| C-03 warehouse attribution | decided |
+| C-04 offline stock | decided |
+| C-05 credit due date | decided |
+| **C-06 traceability backlog** | **MET - closed** |
+| C-07 audit vocabulary | decided |
+| C-08 dead-letter | decided |
+| C-09 Notification/StockCount states | decided |
+| C-10 licence | decided |
+| C-11 test strategy | met |
+| C-12 consistency sweep | met |
+| C-13 gap register current | met |
+
+All thirteen entry criteria are now met or decided.
+
+### 5.2 Why Phase 3 still does not start
+
+Meeting C-01..C-13 is necessary, not sufficient. **One genuine Phase 3 blocker remains: `CON-03`**, the
+`PY-54` / `RT-420` conflict over whether the `Failed` payment state has an outgoing edge. `PY-54` requires no edge
+out of `Failed`; `SM-53` and `RT-420` say `Failed` is retryable. The state-graph edge set is what Phase 3 derives, so
+this is schema-determining. Full evidence and the classification of the other two carried items (`RT-186`/`SU-22`
+and `GAP-037`, both non-blocking) are in `PRE-PHASE-3-GAP-REGISTER.md` section 7.6.
+
+**No Phase 3 artifact has been created, and none should be created until `CON-03` is decided.**
