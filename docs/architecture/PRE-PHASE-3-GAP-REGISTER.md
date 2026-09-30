@@ -189,3 +189,13 @@ What is left is not the backlog. It is 175 drafted requirement rows, every one o
 `GAP-035` therefore moves from **OPEN - remains a Phase 3 blocker** to
 **OPEN - reduced to owner approval of 175 drafted rows**, and the exact action that closes C-06 is now:
 the owner accepts, amends or rejects the 175 rows in section 18 of the audit, and accepts the rebuild.
+### 7.4 C-06 criterion status, stated exactly
+
+Section 7.3 gives the `GAP-035` register status. The C-06 *criterion* status, identical to the wording in
+`PHASE-3-ENTRY-CRITERIA.md`, `PHASE-2-REVIEW.md` and `CONSTITUTION-READINESS-AUDIT.md`, is:
+
+> **MET pending owner approval of 175 proposed rows and acceptance of the rebuilt audit**
+
+It is recorded here so this register can be read on its own. `GAP-035` is not closed by that wording:
+`GAP-045`, `GAP-046` and `GAP-047` are open alongside it, and `GAP-046` is the one approving the 175-row list
+will not decide.
