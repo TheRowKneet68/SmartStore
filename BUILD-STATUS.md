@@ -422,6 +422,8 @@ domain, detected 126 of 126** (D4 §11).
 | 9 | The variance tolerance and the higher threshold that needs a different approver. Interim: the tolerance is zero, so every non-zero variance needs an acknowledgement with a reason, and no second approver is required. "Closes automatically within tolerance" and the second-approver gate are unbuilt, because the numbers do not exist | OQ-020, `CD-23` | Those two behaviours only |
 | 10 | Whether the declared closing float may exceed the counted amount. Interim: recorded as declared; it feeds no expected amount | OQ-029, `CD-20` | Nothing |
 | 11 | Veto, or accept, two choices for receipts. (a) Recording a print's outcome and reprinting need `Sale.Create`: the catalogue has no reprint key, and receipt issuance is the cashier's work (actors-and-roles §4). (b) A reprint has no audit event: AU-12 has no type for one, and the `receipt_reprint` row is the record. The reprint's mandatory reason is your instruction of 2026-10-01; `/docs` asks for none | D4 §10 | Nothing |
+| 12 | Authorize one forward-only migration for manual weigh entry: the sale line's weight source (`PR-27`) and its reason code (`PR-28`), and a per-store threshold. Also give the threshold: the interim proposed is zero, so every manual weight needs a reason | OQ-032 | Manual weigh entry at the till |
+| 13 | Archiving brands, units and tax categories: whether they can be archived, and what an archive stops | OQ-031 | Archiving those three only; editing them is built |
 
 Until then, tests run on a scratch PostgreSQL 17.11 cluster and a portable Node 26 in the session scratch directory
 (ADR-31 §14). Nothing on the owner's PostgreSQL service is touched.
@@ -491,7 +493,9 @@ sets the order. Phase A (housekeeping and the push) is done.
      categories (OQ-031);
    - price history. **Done** (D2 §11);
    - selling by name. **Done** (D4 §13);
-   - manual weigh entry;
+   - manual weigh entry. **Blocked** (OQ-032): it needs a forward-only migration for the line's weight source
+     (`PR-27`) and its reason (`PR-28`), which Phase D is not authorized for, and the store's threshold, a number
+     `/docs` does not give;
    - the onboarding wrapper;
    - health and readiness endpoints;
    - consistent paging on every list;

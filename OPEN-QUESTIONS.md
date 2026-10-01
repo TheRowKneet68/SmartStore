@@ -475,6 +475,21 @@ fallback is a design that holds either answer, not a guess at the answer.
   once anything uses it (`PR-14`, `RT-491`), and a tax rate changes only by a new version (`RT-047`).
 - *Meanwhile:* none of the three can be archived.
 
+### OQ-032 — The manual-weight threshold per store, and the line's weight source
+
+- **Unknown:** the number above which a hand-entered weight needs a reason code and is reported (`PR-28`, `SP-18`:
+  "the threshold is per store"). No document gives it, or a default.
+- **Also missing, and not a question:** the schema has nowhere to keep what `/docs` requires.
+  - `PR-27` and `SP-16` store a weight with its source (`Scale`, `Manual`, `BarcodeEmbedded`).
+  - `PR-28` requires a reason code on a manual weight above the threshold.
+  - `sale_line` has neither column, and the store settings have no threshold. Adding them is a forward-only
+    migration. The owner authorized migrations for Phase B only, so this one waits for the owner.
+- **Why not answerable from `/docs`:** the threshold is a configured value with no stated default.
+- **Blocked:** manual weigh entry at the till, the brief's Phase D item. A sale still takes whole quantities only.
+  A typed decimal weight would be a manual weight with no recorded source or reason, against `PR-27` and `PR-28`.
+- *Suggested interim, once the migration is authorized:* a threshold of zero, so that every manual weight needs a
+  reason, as OQ-020 does for the shift variance.
+
 ## How to use this file
 
 - Add an entry the moment you hit something the specification does not answer. Then continue with a different task.
