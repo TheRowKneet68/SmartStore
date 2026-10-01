@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { withTransaction } from '../../db/pool.ts';
 import { AppError } from '../../http/errors.ts';
 import { auditContext, type Access } from '../../http/gate.ts';
+import { paged, pageOf } from '../../http/paging.ts';
 import { assignRole, createRole, grantStoreAccess } from './repo.ts';
 import { endSessions } from './sessions.ts';
 
@@ -39,14 +40,15 @@ export async function accessRoutes(app: FastifyInstance, options: { pool: pg.Poo
   });
 
   app.get('/roles', access('Role.View'), async (request) => {
+    const page = pageOf(request.query);
     const { rows } = await pool.query(
       `SELECT r.id, r.name, r.description, r.archived_at AS "archivedAt",
               array(SELECT g.permission_key::text FROM role_permission g
                     WHERE g.role_id = r.id AND g.revoked_at IS NULL ORDER BY g.permission_key) AS keys
-       FROM role r WHERE r.organization_id = $1 ORDER BY r.name`,
-      [request.principal!.organizationId],
+       FROM role r WHERE r.organization_id = $1 ORDER BY r.name, r.id LIMIT $2 OFFSET $3`,
+      [request.principal!.organizationId, page.limit, page.offset],
     );
-    return { items: rows };
+    return paged(rows, page);
   });
 
   /** A role from catalogue keys only (`AC-02`, `D-01`): a key outside the catalogue is refused by its foreign key. */
@@ -149,13 +151,14 @@ export async function accessRoutes(app: FastifyInstance, options: { pool: pg.Poo
 
   app.get('/employees/:employeeId/roles', access('Role.View'), async (request) => {
     const { employeeId } = EmployeeId.parse(request.params);
+    const page = pageOf(request.query);
     const { rows } = await pool.query(
       `SELECT a.id, a.role_id AS "roleId", r.name AS "roleName", a.store_id AS "storeId", a.assigned_at AS "assignedAt"
        FROM employee_role_assignment a JOIN role r ON r.id = a.role_id
-       WHERE a.employee_id = $1 AND a.organization_id = $2 AND a.revoked_at IS NULL ORDER BY r.name`,
-      [employeeId, request.principal!.organizationId],
+       WHERE a.employee_id = $1 AND a.organization_id = $2 AND a.revoked_at IS NULL ORDER BY r.name, a.id LIMIT $3 OFFSET $4`,
+      [employeeId, request.principal!.organizationId, page.limit, page.offset],
     );
-    return { items: rows };
+    return paged(rows, page);
   });
 
   /**
@@ -190,12 +193,14 @@ export async function accessRoutes(app: FastifyInstance, options: { pool: pg.Poo
 
   app.get('/employees/:employeeId/stores', access('Employee.View'), async (request) => {
     const { employeeId } = EmployeeId.parse(request.params);
+    const page = pageOf(request.query);
     const { rows } = await pool.query(
       `SELECT id, store_id AS "storeId", valid_from AS "validFrom", valid_to AS "validTo", granted_at AS "grantedAt"
-       FROM employee_store_access WHERE employee_id = $1 AND organization_id = $2 AND revoked_at IS NULL ORDER BY granted_at`,
-      [employeeId, request.principal!.organizationId],
+       FROM employee_store_access WHERE employee_id = $1 AND organization_id = $2 AND revoked_at IS NULL
+       ORDER BY granted_at, id LIMIT $3 OFFSET $4`,
+      [employeeId, request.principal!.organizationId, page.limit, page.offset],
     );
-    return { items: rows };
+    return paged(rows, page);
   });
 
   /**

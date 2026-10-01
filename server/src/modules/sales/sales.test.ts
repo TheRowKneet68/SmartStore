@@ -360,10 +360,12 @@ describe('reading sales (MS-02, SP-58, RT-140, architecture s18.5)', () => {
     expect((await call('GET', `/stores/${s.storeId}/sales/${third.saleId}`, s.owner)).json(), 'one sale').toMatchObject({ saleId: third.saleId, documentNumber: 3, totalDue: 1_250 });
     const first = await list('?limit=2');
     expect(numbers(first)).toEqual([3, 2]);
-    expect(first.before, 'a cursor while the page is full').toBe(2);
-    const second = await list(`?limit=2&before=${first.before}`);
+    expect(first.next, 's18.5: a cursor while the page is full, as on every list').toBe('2');
+    const second = await list(`?limit=2&after=${first.next}`);
     expect(numbers(second)).toEqual([1]);
-    expect(second.before).toBeNull();
+    expect(second.next).toBeNull();
+    expect(first.before, "the cursor's first name, kept for the screens written against it").toBe(2);
+    expect(numbers(await list(`?limit=2&before=${first.before}`))).toEqual([1]);
     expect(numbers(await list(`?terminalId=${two.till}`))).toEqual([3]);
     expect(numbers(await list(`?employeeId=${s.cashier}`))).toEqual([2, 1]);
     const today = all.items[0].businessDate as string;

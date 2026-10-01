@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { withTransaction, type Queryable } from '../../db/pool.ts';
 import { AppError } from '../../http/errors.ts';
 import { auditContext, type Access } from '../../http/gate.ts';
+import { MAX_PAGE } from '../../http/paging.ts';
 import { employeeName } from '../identity/names.ts';
 import type { QuoteSigner } from './quotes.ts';
 import { tillOf, type Till } from './till.ts';
@@ -26,7 +27,10 @@ const SaleListing = z.object({
   employeeId: z.uuid().optional(),
   // `Failed` is the reprint queue (SP-58); `None` is a sale whose first print has not been reported.
   receipt: z.enum(['Printed', 'Failed', 'Reprinted', 'None']).optional(),
-  limit: z.coerce.number().int().min(1).max(200).default(50),
+  limit: z.coerce.number().int().min(1).max(MAX_PAGE).default(50),
+  // `after` is the `next` of the page before, as on every list. ponytail: `before` is the same cursor under the name
+  // this route had first, kept for the screens written against it; drop it once they read `next`.
+  after: z.coerce.number().int().min(1).optional(),
   before: z.coerce.number().int().min(1).optional(),
 });
 // SP-03: the till reports the first print's outcome after the commit. A reprint is its own act (SP-57).
@@ -329,9 +333,10 @@ export async function saleRoutes(
          AND ($6::text IS NULL OR s.receipt_status = $6 OR ($6 = 'None' AND s.receipt_status IS NULL))
          AND ($7::bigint IS NULL OR s.document_number < $7)
        ORDER BY s.document_number DESC LIMIT $8`,
-      [request.storeId, q.from ?? null, q.to ?? null, q.terminalId ?? null, q.employeeId ?? null, q.receipt ?? null, q.before ?? null, q.limit],
+      [request.storeId, q.from ?? null, q.to ?? null, q.terminalId ?? null, q.employeeId ?? null, q.receipt ?? null, q.after ?? q.before ?? null, q.limit],
     );
-    return { items: rows, before: rows.length === q.limit ? rows.at(-1)!.documentNumber : null };
+    const last = rows.length === q.limit ? rows.at(-1)!.documentNumber : null;
+    return { items: rows, next: last === null ? null : String(last), before: last };
   });
 
   /** The receipt of a sale of this store (`SP-57`, `SP-59`, `SP-60`). */

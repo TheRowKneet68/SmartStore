@@ -500,7 +500,7 @@ sets the order. Phase A (housekeeping and the push) is done.
      `server/src/onboarding.ts`, `cli/onboard.ts` (D-15) and `web/src/App.tsx`, which this would touch. It resumes
      once that work is committed;
    - health and readiness endpoints. **Done:** `GET /health` and `GET /ready`;
-   - consistent paging on every list;
+   - consistent paging on every list. **Done** (CONVENTIONS §18);
    - housekeeping jobs, only if no new dependency is needed.
 4. **Phase E, after the key list is approved:**
    - the keys applied, never renamed without asking;
@@ -1260,3 +1260,23 @@ Append-only. One dated line per step, including failed and abandoned attempts.
   - `/docs` has no requirement row for a server probe. The owner's brief is the justification.
   - Tests: 3, including a database that refuses, and one that does not answer: the pool's only connection is held,
     and the probe still says not ready in about a second. `plan-d-health.mjs`: 4 of 4 detected.
+- 2026-10-02 — **Phase D: consistent paging on every list** (architecture §18.5). CONVENTIONS §18.
+  - **One way for every list:** `limit` (1 to 200) and `after`, answered with `{ items, next }`.
+  - **Bounded and paged for the first time:** units, tax categories, categories, brands, roles, an employee's roles
+    and stores, reason codes, payment methods, tills and locations.
+  - **Bounded before, now paged:** price versions (it was 50), shifts and stock (both were up to 500).
+  - **Short configuration lists default to the full 200,** because screens, including the other session's
+    uncommitted ones, read them whole. They page by position, through one helper (`http/paging.ts`).
+  - **The sales list and the movement ledger** answer `next` and take `after`, and still answer and take `before`.
+    The other session's uncommitted sales and stock screens use `before`, so dropping it waits for them.
+  - **Not paged, by design:** the permission catalogue (117 keys, fixed by migration) and the till's name lookup (at
+    most 20, `UX-49`).
+  - `storeLocations()` was folded into its one route; `STORE_LOCATIONS` stays, because adjustments use it.
+  - **Tests:** one table-driven test pages 15 lists two at a time, and checks that the pages, joined, are the whole
+    list in its order. It also walks the ledger by `before`, and checks the 200 cap, the 200 default (60 units come
+    whole) and a bad cursor. The sales reading test now pages by `after` and by `before`.
+  - **Mutation check:** `plan-d-paging.mjs`, 24 of 24. Each route's offset is neutralized, keeping its parameter
+    bound so that the failure is the paging and not SQL. The shift-close plan's R12 search text moved with the code;
+    it was updated, re-run and detected.
+  - 435 server tests pass, and the server typechecks. The web suite fails only in the other session's uncommitted
+    `Products.test.tsx`.

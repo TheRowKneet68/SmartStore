@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { withTransaction } from '../../db/pool.ts';
 import { AppError } from '../../http/errors.ts';
 import { auditContext } from '../../http/gate.ts';
+import { paged, pageOf } from '../../http/paging.ts';
 
 const text = z.string().trim().min(1).max(200);
 const NewReason = z.object({ code: text, name: text });
@@ -23,11 +24,12 @@ export async function reasonRoutes(app: FastifyInstance, options: { pool: pg.Poo
    * product change) picks from it, and it carries no business data (D3 §9).
    */
   app.get('/reason-codes', { config: { access: { kind: 'session' } } }, async (request) => {
+    const page = pageOf(request.query);
     const { rows } = await pool.query(
-      'SELECT id, code, name FROM reason_code WHERE organization_id = $1 AND archived_at IS NULL ORDER BY code',
-      [request.principal!.organizationId],
+      'SELECT id, code, name FROM reason_code WHERE organization_id = $1 AND archived_at IS NULL ORDER BY code, id LIMIT $2 OFFSET $3',
+      [request.principal!.organizationId, page.limit, page.offset],
     );
-    return { items: rows };
+    return paged(rows, page);
   });
 
   app.post('/reason-codes', CONFIG, async (request, reply) => {

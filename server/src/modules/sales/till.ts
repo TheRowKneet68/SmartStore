@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { withTransaction, type Queryable } from '../../db/pool.ts';
 import { AppError } from '../../http/errors.ts';
 import { auditContext, type Access } from '../../http/gate.ts';
+import { paged, pageOf } from '../../http/paging.ts';
 import type { MachineBinding } from '../../http/transitions.ts';
 
 /** The Device machine on the till (§22.12): registered, then activated before it can trade (`RT-423`). */
@@ -52,12 +53,14 @@ export async function tillRoutes(app: FastifyInstance, options: { pool: pg.Pool 
   const { pool } = options;
 
   app.get('/stores/:storeId/terminals', inStore('Device.View'), async (request) => {
+    const page = pageOf(request.query);
     const { rows } = await pool.query(
       `SELECT t.id, t.code, t.label, t.mode, t.status, t.sell_from_location_id AS "sellFromLocationId", d.id AS "drawerId"
-       FROM pos_terminal t LEFT JOIN cash_drawer d ON d.pos_terminal_id = t.id WHERE t.store_id = $1 ORDER BY t.code`,
-      [request.storeId],
+       FROM pos_terminal t LEFT JOIN cash_drawer d ON d.pos_terminal_id = t.id WHERE t.store_id = $1
+       ORDER BY t.code, t.id LIMIT $2 OFFSET $3`,
+      [request.storeId, page.limit, page.offset],
     );
-    return { items: rows };
+    return paged(rows, page);
   });
 
   /**

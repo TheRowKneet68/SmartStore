@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { withTransaction, type Queryable } from '../../db/pool.ts';
 import { AppError } from '../../http/errors.ts';
 import { auditContext, type Access, type Principal } from '../../http/gate.ts';
+import { paged, pageOf } from '../../http/paging.ts';
 import type { MachineBinding } from '../../http/transitions.ts';
 import { employeeName } from '../identity/names.ts';
 
@@ -79,10 +80,7 @@ const COUNT = `c.id, c.pass_number AS "passNumber", c.counted_amount AS "counted
   c.variance, c.counted_by AS "countedBy", c.counted_at AS "countedAt", c.acknowledged_by AS "acknowledgedBy",
   c.acknowledged_at AS "acknowledgedAt", c.reason_code_id AS "reasonCodeId"`;
 
-const Listing = z.object({
-  status: z.enum(['Open', 'Reconciling', 'Closed', 'Reopened']).optional(),
-  limit: z.coerce.number().int().min(1).max(500).default(100),
-});
+const Listing = z.object({ status: z.enum(['Open', 'Reconciling', 'Closed', 'Reopened']).optional() });
 
 const nameOf = employeeName;
 
@@ -218,11 +216,12 @@ export async function shiftCloseRoutes(app: FastifyInstance, options: { pool: pg
    */
   app.get('/stores/:storeId/shifts', inStore('Cash.Count.View'), async (request) => {
     const query = Listing.parse(request.query);
+    const page = pageOf(request.query);
     const { rows } = await pool.query<ScreenRow>(
-      `${SCREEN} WHERE s.store_id = $1 AND ($2::text IS NULL OR s.status = $2) ORDER BY s.opened_at DESC, s.id DESC LIMIT $3`,
-      [request.storeId, query.status ?? null, query.limit],
+      `${SCREEN} WHERE s.store_id = $1 AND ($2::text IS NULL OR s.status = $2) ORDER BY s.opened_at DESC, s.id DESC LIMIT $3 OFFSET $4`,
+      [request.storeId, query.status ?? null, page.limit, page.offset],
     );
-    return { items: rows.map(answers) };
+    return paged(rows.map(answers), page);
   });
 
   /** One shift's screen (`CD-30`, `RT-527`), with its variance history: every pass, in order, as it stands (`SM-57`). */

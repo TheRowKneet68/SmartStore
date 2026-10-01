@@ -336,3 +336,25 @@ layer sets them from the signed-in session, never from a request body. It sets t
 so they end with the transaction. Without the three required settings, an audited change is refused (`SS054`). A
 new table whose changes the specification audits gets its trigger in its own migration. A new machine's edges carry
 their §22 Audit type and reason flag in `state_machine_edge`.
+
+## 18. Paging every list (2026-10-02)
+
+Architecture §18.5: list queries are "paginated and bounded by construction". Every list route pages the same way.
+
+- **Request:** `limit`, from 1 to 200, and `after`, the `next` of the page before. A limit above 200, or a cursor
+  that is not one, is refused (`invalid_request`).
+- **Answer:** `{ items, next }`. `next` is null on the last page. A cursor is opaque to the client.
+- **Order:** every list has a fixed order with a unique last key (usually `id`), so a page boundary falls in one
+  place.
+- **Short configuration lists** default to the full 200, so a screen that reads one whole still gets all of it.
+  These are units, tax categories, categories, brands, roles, an employee's roles and stores, reason codes, payment
+  methods, tills, locations, a variant's price versions, shifts and stock. They page by position (`http/paging.ts`).
+- **Long lists** page by key, with their own defaults:
+  - products and employees, from the start;
+  - the sales list and the movement ledger, newest first by number.
+- **The sales list and the ledger answered `before` first.** They now answer `next` and take `after`, as every list
+  does. They still answer and take `before`, for the screens written against it. Drop it once those screens read
+  `next`.
+- **Two lists are not paged, by design:**
+  - the permission catalogue is fixed by migration at 117 keys;
+  - the till's lookup by name answers at most 20, because a suggestion list is short by rule (`UX-49`).

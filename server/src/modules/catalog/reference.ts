@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { withTransaction } from '../../db/pool.ts';
 import { AppError } from '../../http/errors.ts';
 import { auditContext, type Access } from '../../http/gate.ts';
+import { paged, pageOf } from '../../http/paging.ts';
 
 // The catalogue belongs to the organization (organization-model §8.1), so its keys are held organization-wide (OQ-025
 // item 6). Tax.* covers tax categories and rates (actors-and-roles §2.1); Product.* covers the other catalogue entries.
@@ -62,12 +63,13 @@ export async function catalogReferenceRoutes(app: FastifyInstance, options: { po
   };
 
   app.get('/units', access('Product.View'), async (request) => {
+    const page = pageOf(request.query);
     const { rows } = await pool.query(
       `SELECT id, code, name, plural_name AS "pluralName", quantity_kind AS "quantityKind", scale
-       FROM unit WHERE organization_id = $1 ORDER BY code`,
-      [org(request)],
+       FROM unit WHERE organization_id = $1 ORDER BY code, id LIMIT $2 OFFSET $3`,
+      [org(request), page.limit, page.offset],
     );
-    return { items: rows };
+    return paged(rows, page);
   });
 
   /** `PR-14`, `PR-15`: a unit with its kind and decimal places; a countable unit has none (overview §3.2). */
@@ -87,6 +89,7 @@ export async function catalogReferenceRoutes(app: FastifyInstance, options: { po
 
   /** Tax categories with each jurisdiction's rate in force (`PR-37`, `RT-047`). */
   app.get('/tax-categories', access('Tax.View'), async (request) => {
+    const page = pageOf(request.query);
     const { rows } = await pool.query(
       `SELECT c.id, c.code, c.name,
               coalesce((SELECT json_agg(json_build_object('jurisdiction', r.jurisdiction, 'ratePercent', r.rate_percent::text,
@@ -94,10 +97,10 @@ export async function catalogReferenceRoutes(app: FastifyInstance, options: { po
                         FROM (SELECT DISTINCT ON (jurisdiction) jurisdiction, rate_percent, effective_from FROM tax_rate
                               WHERE tax_category_id = c.id AND effective_from <= now()
                               ORDER BY jurisdiction, effective_from DESC) r), '[]') AS "ratesInForce"
-       FROM tax_category c WHERE c.organization_id = $1 ORDER BY c.code`,
-      [org(request)],
+       FROM tax_category c WHERE c.organization_id = $1 ORDER BY c.code, c.id LIMIT $2 OFFSET $3`,
+      [org(request), page.limit, page.offset],
     );
-    return { items: rows };
+    return paged(rows, page);
   });
 
   app.post('/tax-categories', access('Tax.Edit'), async (request, reply) => {
@@ -137,12 +140,13 @@ export async function catalogReferenceRoutes(app: FastifyInstance, options: { po
   });
 
   app.get('/categories', access('Product.View'), async (request) => {
+    const page = pageOf(request.query);
     const { rows } = await pool.query(
       `SELECT id, parent_id AS "parentId", name, sort_order AS "sortOrder", archived_at AS "archivedAt"
-       FROM category WHERE organization_id = $1 ORDER BY parent_id NULLS FIRST, sort_order, name`,
-      [org(request)],
+       FROM category WHERE organization_id = $1 ORDER BY parent_id NULLS FIRST, sort_order, name, id LIMIT $2 OFFSET $3`,
+      [org(request), page.limit, page.offset],
     );
-    return { items: rows };
+    return paged(rows, page);
   });
 
   /** `PR-04`..`PR-06`, `RT-026`, `RT-488`: a single-parent tree with an explicit order; a cycle is refused (`SS006`). */
@@ -189,8 +193,13 @@ export async function catalogReferenceRoutes(app: FastifyInstance, options: { po
   });
 
   app.get('/brands', access('Product.View'), async (request) => {
-    const { rows } = await pool.query('SELECT id, name FROM brand WHERE organization_id = $1 ORDER BY lower(name)', [org(request)]);
-    return { items: rows };
+    const page = pageOf(request.query);
+    const { rows } = await pool.query('SELECT id, name FROM brand WHERE organization_id = $1 ORDER BY lower(name), id LIMIT $2 OFFSET $3', [
+      org(request),
+      page.limit,
+      page.offset,
+    ]);
+    return paged(rows, page);
   });
 
   /** A brand is optional, and unique by name whatever its case (product-domain §3). */
