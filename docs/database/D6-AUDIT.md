@@ -218,3 +218,61 @@ Removing **both** turns the test red, which was confirmed separately.
   - The standing reports (`AU-27`, `AU-28`, P5).
   - The chain check's schedule (`AU-30`, P5).
   - The external log shipper (`AU-31`).
+
+## 11. Application layer (Step 3, 2026-10-01)
+
+| State | What |
+|---|---|
+| **IMPLEMENTED** | The request's audit context, including the role used; the application's events for the paths built so far; the chain check as a command |
+| **TESTED** | `server/src/modules/audit/audit.test.ts` (4 tests), with the context, events and refusals also proven by the domain 1 and 7 tests; 340 passing in all |
+| **Not built** | As §10: the read path, the reports, the check's schedule, the shipper. The other Application types wait for their features (below) |
+
+**The context of every audited change** (§4). It is set from the session, local to the use case's transaction
+(`withTransaction()`, domain 1):
+
+- the actor;
+- **the role used**;
+- the source: `Terminal` for a session at a till, otherwise `UI`;
+- the terminal;
+- the request's correlation id, which every response returns as `x-correlation-id`, so the error a cashier saw and
+  the event that recorded it are found together (`AU-10`);
+- the client operation id and the reason, where the request carries them;
+- the IP address.
+
+**The role used** (architecture §8.5, §14.2) is the ids of the roles that grant the checked permission at that
+moment, in that scope. Comma-separated, sorted. It counts only:
+- live assignments that are organization-wide, or in the store at hand;
+- roles that are not archived;
+- grants of the key that are not revoked.
+
+The permission decision itself stays the database's `employee_holds_permission()`, so the two cannot disagree on
+whether access was granted. The transition endpoint sets the role only once the edge's key is known.
+
+Ids, not names, because a role can be renamed. Re-deriving "who was allowed to do this" uses the grant history
+(`PC-01`).
+
+**Application events recorded so far** (§6):
+- `Security.Login`, `Security.LoginFailed`, `Security.Logout` and `Security.SessionEnded` (domain 7);
+- `Security.PermissionDenied` for every refusal by the gate (`AU-03`).
+
+The other Application types wait for the features that produce them, none built yet:
+- `Data.Export`;
+- `Notification.Sent`;
+- the `Offline.*` types;
+- `Payment.Provider.Configure`;
+- `Security.Impersonate`;
+- `Audit.EventExpired`.
+
+**The chain check** (`AU-29`, `AU-30`, `RT-302`). `npm run audit:check` runs `audit_chain_breaks()` for every
+organization, prints each break, and exits non-zero if there is one, so a scheduler can alert on it. It repairs
+nothing (`EC-76`). Running it on a schedule is still not built.
+
+**Mutation check (2026-10-01).** 8 mutations, all detected:
+- the role recorded;
+- each of its four exclusions: scope, archived role, revoked grant, revoked assignment;
+- the request carrying it;
+- the transition setting it;
+- the check covering every organization.
+
+The multi-role test was strengthened before the run. As first written, it could not have caught a wrong
+exclusion.

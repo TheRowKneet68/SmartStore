@@ -3,7 +3,7 @@ import type pg from 'pg';
 import { z } from 'zod';
 import { withTransaction } from '../db/pool.ts';
 import { AppError } from './errors.ts';
-import { auditContext, holdsPermission, missingPermission, refuse, type Principal } from './gate.ts';
+import { auditContext, missingPermission, refuse, rolesGranting, type Principal } from './gate.ts';
 
 /**
  * How one state machine's subjects are found and changed. The edges, their permissions, events and reasons are data
@@ -130,9 +130,12 @@ async function transition(
         : 'Only the system can do this.';
     throw new Denied(null, subject.store_id, 'not_permitted', step.permission_rule, message);
   }
-  if (!(await holdsPermission(c, principal, step.permission_key!, subject.store_id))) {
+  const roles = await rolesGranting(c, principal, step.permission_key!, subject.store_id);
+  if (roles === null) {
     throw new Denied(step.permission_key, subject.store_id, 'forbidden', 'Key', missingPermission(step.permission_key!, subject.store_id));
   }
+  // The role-as-used is known only now, from the edge's key (architecture §14.2).
+  await c.query(`SELECT set_config('smartstore.role', $1, true)`, [roles]);
 
   // The database enforces the edge again, records its event and requires its reason (SS004, SS055; D6).
   await c.query(`UPDATE ${binding.table} SET ${binding.stateColumn} = $2, ${binding.actorColumn} = $3 WHERE id = $1`, [

@@ -37,6 +37,8 @@ declare module 'fastify' {
     principal: Principal | null;
     /** The store the gate authorized for this request: the only store a handler may touch (`MS-02`, `MS-03`). */
     storeId: string | null;
+    /** The roles that granted the permission the gate checked: the audit's role-as-used (architecture §14.2). */
+    rolesUsed: string | null;
   }
 }
 
@@ -55,6 +57,7 @@ export function registerGate(app: FastifyInstance, pool: pg.Pool, authenticate: 
 
   app.decorateRequest('principal', null);
   app.decorateRequest('storeId', null);
+  app.decorateRequest('rolesUsed', null);
 
   app.addHook('onRoute', (route: RouteOptions) => {
     const access = (route.config as { access?: Access } | undefined)?.access;
@@ -99,10 +102,12 @@ export function registerGate(app: FastifyInstance, pool: pg.Pool, authenticate: 
       storeId = raw;
     }
     if (principal.readOnly && writes) await refuse(pool, request, access.key, storeId, 'read_only', READ_ONLY);
-    if (!(await holdsPermission(pool, principal, access.key, storeId))) {
+    const roles = await rolesGranting(pool, principal, access.key, storeId);
+    if (roles === null) {
       await refuse(pool, request, access.key, storeId, 'forbidden', missingPermission(access.key, storeId));
     }
     request.storeId = storeId;
+    request.rolesUsed = roles;
   });
 }
 
@@ -115,21 +120,27 @@ export function missingPermission(key: string, storeId: string | null): string {
 }
 
 /**
- * The one permission check (`AC-01`, `AC-02`, `EM-13`, `MS-11`): the database's `employee_holds_permission()`. The answer
- * is the same whether the store exists or not (architecture §24.3, `MS-03`).
+ * The one permission check (`AC-01`, `AC-02`, `EM-13`, `MS-11`). The decision is the database's
+ * `employee_holds_permission()`; the answer is the same whether the store exists or not (architecture §24.3, `MS-03`).
+ * When it allows, the result is the ids of the live, unarchived roles whose live grants carry the key in that scope:
+ * the role-as-used that every audit entry carries (architecture §8.5, §14.2). Null means refused.
  */
-export async function holdsPermission(
+export async function rolesGranting(
   db: Pick<pg.Pool, 'query'>,
   principal: Principal,
   key: string,
   storeId: string | null,
-): Promise<boolean> {
-  const { rows } = await db.query<{ allowed: boolean }>('SELECT employee_holds_permission($1, $2, $3) AS allowed', [
-    principal.employeeId,
-    storeId,
-    key,
-  ]);
-  return rows[0]?.allowed === true;
+): Promise<string | null> {
+  const { rows } = await db.query<{ allowed: boolean; roles: string | null }>(
+    `SELECT employee_holds_permission($1, $2, $3) AS allowed,
+            (SELECT string_agg(DISTINCT a.role_id::text, ',' ORDER BY a.role_id::text)
+             FROM employee_role_assignment a
+             JOIN role r ON r.id = a.role_id AND r.archived_at IS NULL
+             JOIN role_permission g ON g.role_id = r.id AND g.permission_key = $3 AND g.revoked_at IS NULL
+             WHERE a.employee_id = $1 AND a.revoked_at IS NULL AND (a.store_id IS NULL OR a.store_id = $2)) AS roles`,
+    [principal.employeeId, storeId, key],
+  );
+  return rows[0]?.allowed === true ? rows[0].roles : null;
 }
 
 /**
@@ -166,6 +177,7 @@ export function auditContext(
   if (!principal) throw new AppError(401, 'unauthenticated', 'You are not signed in. Sign in to continue.');
   return {
     actorId: principal.employeeId,
+    role: request.rolesUsed,
     source: principal.terminalId === null ? 'UI' : 'Terminal',
     correlationId: request.id,
     terminalId: principal.terminalId,

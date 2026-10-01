@@ -273,6 +273,15 @@ Step 3 rules, given by the owner on 2026-10-01 with "start Step 3":
   - **Owner action:** set `SESSION_LIFETIME_MINUTES`, `SIGN_IN_FAILURE_LIMIT` and `SIGN_IN_FAILURE_WINDOW_MINUTES` in
     `.env` before `npm start` (OQ-027).
 
+- 2026-10-01 — **Step 3, Domain 6 — Audit: application layer.** IMPLEMENTED + **TESTED** (4 new tests, 340
+  passing). [D6 §11](docs/database/D6-AUDIT.md).
+  - Every audited change made through the server carries the role used: the ids of the roles that granted the
+    checked permission at that moment, in that scope (architecture §8.5, §14.2).
+  - Every response returns its correlation id, which the audit event stores (`AU-10`).
+  - `npm run audit:check` checks every organization's hash chain and exits non-zero on a break (`AU-29`, `AU-30`).
+  - The read path and the check's schedule stay deferred (§10).
+  - Mutation-checked: 8 of 8 detected.
+
 ## In progress
 
 None.
@@ -294,13 +303,13 @@ Until then, tests run on a scratch PostgreSQL 17.11 cluster and a portable Node 
 
 ## Next
 
-1. **Step 3, Domain 6: Audit.**
-   - The audit context is already set per transaction, and sign-in and refusal events are recorded (domains 1 and 7).
-   - What remains: the chain check as a callable job (`audit_chain_breaks()`), and a review of which application events
-     the slice still owes (`AU-03`).
-   - The read path stays deferred (OQ-024).
-2. Then Domain 2, the vertical slice with the performance numbers (working agreement 9), then 3 and 4. Then the
-   permission-key list before Domain 5 (working agreement 8), with OQ-018, OQ-023, OQ-025, OQ-026 and OQ-028.
+1. **Step 3, Domain 2: Product / Barcode / Unit.**
+   - The catalogue routes: units, categories, tax categories and rates, products, variants, barcodes, prices,
+     standard costs. The Product machine is bound to the transition endpoint.
+   - The till's barcode lookup: one indexed read, no stock, no lock (ADR-31 §8, `UX-48`).
+2. Then **the vertical slice** (working agreement 9): sign in, scan, add to the cart in the browser, save a sale, and
+   the performance numbers. Then 3 and 4. Then the permission-key list before Domain 5 (working agreement 8), with
+   OQ-018, OQ-023, OQ-025, OQ-026 and OQ-028.
    - Owner decisions needed along the way: OQ-018 before the card path; OQ-023 before any refund is paid; OQ-025
      before an employee is reactivated, a till re-enabled or a refund retried.
    - Step 3 builds the one authorization gate (architecture §8.2). Two guards moved there from the database: it sets
@@ -499,3 +508,12 @@ Append-only. One dated line per step, including failed and abandoned attempts.
   (6) The gate was refactored, which left Domain 1's mutations of its permission check matching nothing. Two
       mutations of the refactored check were added; both are detected.
   Result: 336 tests passing; 50 of 50 mutations detected.
+- 2026-10-01 — Step 3, Domain 6 (application layer). One correction before commit: planning the mutation run showed
+  that the multi-role test could not catch a wrong exclusion of a role. It now includes:
+  - an archived role;
+  - a role whose grant was revoked;
+  - a revoked assignment;
+  - a role assigned only in a store, on an organization-level action.
+
+  None of them counts as a role used. All 8 mutations are detected. The three `.env` loaders (server, onboarding, chain
+  check) became one `loadDotEnv()`.

@@ -1,4 +1,13 @@
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
+
+/** Reads `.env` at the repository root, if present. Variables already set in the environment win (ADR-31 §6). */
+export function loadDotEnv(): void {
+  const file = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '.env');
+  if (existsSync(file)) process.loadEnvFile(file);
+}
 
 /**
  * The environment the server needs, read and validated once at start, failing fast (ADR-31 §5). `DATABASE_URL` is the

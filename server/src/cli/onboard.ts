@@ -1,9 +1,7 @@
-import { existsSync } from 'node:fs';
-import path from 'node:path';
 import { stdin, stdout } from 'node:process';
 import { createInterface } from 'node:readline/promises';
-import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
+import { loadDotEnv } from '../config.ts';
 import { createPool } from '../db/pool.ts';
 import { onboard, OnboardingInput } from '../onboarding.ts';
 
@@ -12,8 +10,7 @@ import { onboard, OnboardingInput } from '../onboarding.ts';
  * `npm run onboard`. It asks for everything, and reads the password without echoing it, so it never appears in a
  * command line or a shell history (`EM-04`).
  */
-const envFile = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '.env');
-if (existsSync(envFile)) process.loadEnvFile(envFile);
+loadDotEnv();
 const url = z.url({ protocol: /^postgres(ql)?$/ }).safeParse(process.env.DATABASE_URL);
 if (!url.success) throw new Error('DATABASE_URL is not set. Run scripts/db-setup.ps1, or see .env.example.');
 
