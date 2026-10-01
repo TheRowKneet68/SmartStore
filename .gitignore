@@ -2,6 +2,10 @@
 *.tmp
 research.zip
 
+# Archives are never committed. SmartStore.zip (about 210 MB) once sat untracked at the root.
+SmartStore.zip
+*.zip
+
 # Secrets: never commit. .env holds database passwords; .env.example is the template.
 .env
 .env.*
