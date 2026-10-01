@@ -292,6 +292,24 @@ Step 3 rules, given by the owner on 2026-10-01 with "start Step 3":
     stock, no lock. Unknown, unreleased and unclassified items each get their own answer.
   - Mutation-checked: 26 of 26 detected, after 10 tests were added (see the log).
 
+- 2026-10-01 — **The first working slice** (working agreement 9). IMPLEMENTED + **TESTED** (9 new server tests, 369
+  passing) + **MEASURED**. Sign in, scan a barcode, add it to the cart in the browser, save a sale.
+  - **Server:** tills and drawers, opening a shift, payment methods, and the cash sale in one transaction. These are
+    built early from Domain 4. The scan now quotes with `resolve_price()` and signs each quote. A sale accepts only
+    signed quotes no older than `QUOTE_MAX_AGE_MINUTES` (OQ-027).
+  - **Browser:** `web/`, React + Vite. Sign in, set up a browser as a till, open the shift, scan to the cart, pay cash,
+    see the outcome. It is keyboard-first, plain, and announces each action.
+  - **The numbers** (`npm run perf`; ADR-31 §16), on 100,000 variants:
+    - scan-to-cart over HTTP: **p95 3.4 ms**;
+    - scan-to-cart in the browser, Enter to line drawn: **p95 20.6 ms**;
+    - against the owner's budget of p95 ≤ 100 ms, both are **met**;
+    - sale-save for 10 lines in cash: **p95 27.1 ms**. No budget is stated; **p95 ≤ 100 ms is proposed** for the
+      owner's approval.
+  - **OQ-018 reading (owner may veto):** a cash tender is created and captured only inside the sale's completion, as
+    the `Sale.Create` side effect §22.6 names. Card payments stay refused.
+  - `npm run demo` adds TEST-ONLY items, cash and a till to an onboarded organization, so the slice can be tried.
+  - Mutation check: with Domain 4, which owns this code (working agreement 10).
+
 ## In progress
 
 None.
@@ -304,22 +322,26 @@ None.
 3. Push `v1-build` at the end of each domain.
 4. Decide what happens to the untracked `SmartStore.zip` (210 MB) at the repository root. It is not ignored, so every
    commit has to exclude it by name.
-5. Set the three security settings in `.env` (OQ-027): `SESSION_LIFETIME_MINUTES`, `SIGN_IN_FAILURE_LIMIT`,
-   `SIGN_IN_FAILURE_WINDOW_MINUTES`. Then run `npm run onboard` once to create the organization, its Owner and its
-   store.
+5. **To try the slice:**
+   1. Set the four required settings in `.env` (OQ-027): `SESSION_LIFETIME_MINUTES`, `SIGN_IN_FAILURE_LIMIT`,
+      `SIGN_IN_FAILURE_WINDOW_MINUTES`, `QUOTE_MAX_AGE_MINUTES`.
+   2. Run `npm run onboard` once, to create the organization, its Owner and its store.
+   3. Run `npm run demo` for TEST-ONLY items, cash and a till.
+   4. Run `npm start` (the server) and, in a second terminal, `npm run web`. Then open http://127.0.0.1:5173.
+   5. Sign in as the Owner and choose the till. Sign in again, open the shift, type a barcode `npm run demo` printed,
+      press Enter, and press Enter twice more to pay.
+6. Approve, or change, the proposed sale-save budget of p95 ≤ 100 ms (ADR-31 §16).
 
 Until then, tests run on a scratch PostgreSQL 17.11 cluster and a portable Node 26 in the session scratch directory
 (ADR-31 §14). Nothing on the owner's PostgreSQL service is touched.
 
 ## Next
 
-1. **The vertical slice** (working agreement 9): sign in, scan, add to the cart in the browser, save a sale, and the
-   performance numbers, shown to the owner.
-   - The slice needs a cash sale's save path, which is Domain 4's: open a shift, then the checkout, cash payment,
-     sale and lines in one transaction. That path is built now, for cash only.
-   - The rest of Domain 4 follows in its turn.
-2. Then domains 3 and 4. Then the permission-key list before Domain 5 (working agreement 8), with OQ-018, OQ-023,
-   OQ-025, OQ-026 and OQ-028.
+1. **Step 3, Domain 3: Inventory ledger.** Stock adjustments (counted quantities, opening balances), the stock and
+   ledger views, and reconciliation.
+2. Then Domain 4: the rest of the till, including shift close and counts, card payments behind OQ-018, and the
+   mutation check of the slice's code. Then the permission-key list before Domain 5 (working agreement 8), with
+   OQ-018, OQ-023, OQ-025, OQ-026 and OQ-028.
    - Owner decisions needed along the way: OQ-018 before the card path; OQ-023 before any refund is paid; OQ-025
      before an employee is reactivated, a till re-enabled or a refund retried.
    - Step 3 builds the one authorization gate (architecture §8.2). Two guards moved there from the database: it sets
@@ -544,3 +566,20 @@ Append-only. One dated line per step, including failed and abandoned attempts.
       - Discontinued selling.
       One more survived the first run (a variant's first barcode added on its own) and has a test now. 26 of 26
       detected.
+- 2026-10-01 — The vertical slice. Failed attempts and corrections:
+  (1) Three catalogue tests failed after the scan began quoting with `resolve_price()` and signing its quotes. They
+      still expected the old answer, with a price `source` and no `quote`. The expectations were updated.
+  (2) A sale test's own SQL named an ambiguous `status` column. Another expected the opening float as a string,
+      though the server's pool returns exact numbers. Both tests were fixed; the sale itself was right in each case.
+  (3) A Node edit through bash mangled its quoted match strings and changed nothing. The three test lines were edited
+      with the file tool.
+  (4) The web app's typecheck did not know the CSS import. Vite's client types were added.
+  (5) The browser check first expected Playwright's Chromium build 1243. The machine had 1234; `PERF_CHROMIUM` names
+      it, and nothing was downloaded.
+  Two design points were corrected before any code depended on them:
+  - The scan had duplicated the price resolution in its own SQL. D4 §3 makes `resolve_price()` the one rule for both
+    the quote and the sale line's check, so the scan now calls it.
+  - Quote times would have lost their microseconds in a JavaScript `Date`. The quote now carries the database's own
+    timestamp text.
+  Domain 2's scan mutations (S04 to S06) were written against the old query. Domain 4's mutation check covers the scan
+  as it is now.

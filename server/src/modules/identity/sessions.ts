@@ -260,7 +260,15 @@ export function sessionAuthenticator(pool: pg.Pool): Authenticate {
 export interface Workspace {
   employee: { id: string; name: string; readOnly: boolean };
   organization: { id: string; name: string; permissions: string[] };
-  stores: { id: string; code: string; name: string; deactivatedAt: Date | null; permissions: string[] }[];
+  stores: {
+    id: string;
+    code: string;
+    name: string;
+    deactivatedAt: Date | null;
+    currencyCode: string;
+    minorUnitExponent: number;
+    permissions: string[];
+  }[];
   terminal: { id: string; code: string; label: string; storeId: string } | null;
 }
 
@@ -279,11 +287,12 @@ export async function workspace(db: Queryable, principal: Principal): Promise<Wo
     [principal.employeeId],
   );
   const stores = await db.query<Workspace['stores'][number]>(
-    `SELECT id, code, name, deactivated_at AS "deactivatedAt", permissions FROM (
-       SELECT s.id, s.code, s.name, s.deactivated_at,
+    `SELECT id, code, name, deactivated_at AS "deactivatedAt", currency_code AS "currencyCode",
+            minor_unit_exponent AS "minorUnitExponent", permissions FROM (
+       SELECT s.id, s.code, s.name, s.deactivated_at, s.currency_code, c.minor_unit_exponent,
               array(SELECT p.key::text FROM permission p WHERE employee_holds_permission($1, s.id, p.key) ORDER BY p.key)
                 AS permissions
-       FROM store s WHERE s.organization_id = $2) AS scoped
+       FROM store s JOIN currency c ON c.code = s.currency_code WHERE s.organization_id = $2) AS scoped
      WHERE cardinality(permissions) > 0 ORDER BY code`,
     [principal.employeeId, principal.organizationId],
   );

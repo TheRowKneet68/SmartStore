@@ -317,3 +317,36 @@ smartstore roles. The owner's `postgresql-x64-17` service was not touched and it
 | Request validation | zod (§3) | zod schemas parse the body in each handler. Unknown fields are dropped, so a client cannot supply a `*_by` column (`AU-05`, `BI-33`) |
 | `int8` | Number only when `Number.isSafeInteger`, otherwise throw (§2) | Built as a per-pool type parser, so test pools and anything else in the process keep pg's defaults |
 | Session lookup | Domain 7 (§10) | The gate takes the principal lookup as a function. Until domain 7, nobody is signed in, so every non-public request is refused (`AC-01`). Tests use a TEST-ONLY lookup that reads headers; the permission check and everything after it run for real |
+
+## 16. Implementation notes — 2026-10-01, the first UI slice and the performance test
+
+**Append-only.** Sections 1 to 15 are unchanged. Nothing here changes the owner's decision.
+
+| Item | Proposal said | What was done, and why |
+|---|---|---|
+| Password hashing | `argon2` or `@node-rs/argon2`, chosen with domain 7 (§9) | **Neither.** Node 26's built-in `crypto.argon2` (Argon2id), so there is no native dependency. Cost: the OWASP Password Storage Cheat Sheet's first Argon2id configuration (19 MiB, 2 passes, 1 lane), about 30 ms here |
+| Session cookie | `@fastify/cookie` 11.1.2, a candidate (§9) | **Not installed.** The server reads its one cookie from the `Cookie` header and writes it with `Set-Cookie` (`server/src/modules/identity/sessions.ts`) |
+| vite | 8.3.1 (§3) | **8.3.0.** 8.3.1 is inside the 7-day release-age window. MIT |
+| `@vitejs/plugin-react` | Not listed | 6.1.1, MIT. Vite's standard React plugin (the JSX runtime), development only |
+| `@types/react`, `@types/react-dom` | Not listed | 19.3.0, MIT, development only |
+| `@playwright/test` | 1.63.0, for browser timing at the first UI slice (§3, §8) | 1.63.0, Apache-2.0, a development dependency of `server`, used only by `npm run perf`. It expects Chromium build 1243. `PERF_CHROMIUM` can name an installed Chromium instead; the run below used the machine's build 1234 |
+
+**The performance test** (§8), `npm run perf`, measured on 2026-10-01:
+
+- **Catalogue:** 100,000 TEST-ONLY variants, each with an EAN-13 and a price.
+- **Machine:** Intel Core i5-12500H, 15.7 GB, Windows 11. Node 26.10.0, PostgreSQL 17.11, both on localhost. The
+  scratch cluster ran with default settings.
+- **HTTP:** real requests with keep-alive.
+- **Browser:** headless Chromium, timed from the scan field's Enter to the new cart row drawn.
+
+| Measure | n | p50 | p95 | max | Budget |
+|---|---|---|---|---|---|
+| scan-to-cart (HTTP) | 1000 | 2.5 ms | 3.4 ms | 5.3 ms | p95 ≤ 100 ms: **met** |
+| scan-to-cart in the browser (Enter to line drawn) | 200 | 12.4 ms | 20.6 ms | 22.2 ms | p95 ≤ 100 ms: **met** |
+| sale-save, 10 lines, cash | 200 | 22.5 ms | 27.1 ms | 107.0 ms | none stated |
+
+The same run, in the browser: signed in at the till, scanned 10 items, paid in cash, and the outcome was shown.
+
+**Proposed for the owner's approval: a sale-save budget of p95 ≤ 100 ms on the local setup.** That is about four times
+the first measurement. The one 107 ms sample of 200 shows how much a single save can vary. As §8 says, a cloud round
+trip adds latency the server cannot remove. A budget that must hold in the cloud would be measured there.
