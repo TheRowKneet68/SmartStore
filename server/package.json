@@ -1,0 +1,29 @@
+{
+  "name": "@smartstore/server",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node src/main.ts",
+    "dev": "node --watch src/main.ts",
+    "onboard": "node src/cli/onboard.ts",
+    "audit:check": "node src/cli/audit-check.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "perf": "node test/perf/perf.ts",
+    "demo": "node src/cli/demo.ts",
+    "ledger:check": "node src/cli/ledger-check.ts"
+  },
+  "dependencies": {
+    "fastify": "5.12.5",
+    "pg": "8.23.0",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/node": "24.13.6",
+    "@types/pg": "8.23.1",
+    "typescript": "7.0.2",
+    "vitest": "5.0.1"
+  }
+}

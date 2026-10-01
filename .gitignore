@@ -1,3 +1,21 @@
 *.bak
 *.tmp
 research.zip
+
+# Archives are never committed. SmartStore.zip (about 210 MB) once sat untracked at the root.
+SmartStore.zip
+*.zip
+
+# Secrets: never commit. .env holds database passwords; .env.example is the template.
+.env
+.env.*
+!.env.example
+
+# Node and build output
+node_modules/
+dist/
+coverage/
+*.log
+
+# Editor-local settings: machine-specific paths, never shared (see .vscode/settings.json, an ESP-IDF path).
+.vscode/

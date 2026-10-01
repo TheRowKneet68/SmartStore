@@ -762,6 +762,10 @@ the id into the row it belongs to.
 
 ## 23. Priorities in summary
 
+> **Superseded 2026-10-01 — see §27.** The table below is a Phase-1 snapshot, kept as it was written. The matrix now
+> holds **529** requirement rows (`MUST` 490, `SHOULD` 11, `COULD` 4, `OUT OF SCOPE` 24). Do not size work from
+> this table; use §26.2 and §26.3.
+
 | Priority | Count | Notes |
 |---|---|---|
 | `MUST` | 325 | Every one carries measurable acceptance criteria above |
@@ -777,6 +781,10 @@ generated in §26.
 ---
 
 ## 24. Gaps and known limits of this matrix
+
+> **Partly superseded 2026-10-01 — see §27.** `GR-01`'s "819 cited / 320 `inferred`" and `GR-06`'s 342 unverified
+> assignments are Phase-1 snapshots. All 1,161 rules are now `mapped`, 0 `inferred`. `GR-02`, `GR-03`, `GR-04` and
+> `GR-05` still stand as written.
 
 **Rule GR-01.** The matrix is at **requirement granularity**, not rule granularity. §26 walks the other
 direction and is honest about the result: **819** rules are cited by a requirement row, **320** are not cited
@@ -810,6 +818,9 @@ been reviewed by a person.** This was the largest known defect in Phase 1 and is
 ---
 
 ## 25. Requirement traceability rules index
+
+> **`GR-01` and `GR-06` superseded 2026-10-01 — see §27.** Both say 140 rules are machine-assigned and unverified.
+> That was the pre-Batch-5a figure; 0 rules are `inferred` now. `GR-02`..`GR-05` stand as written.
 
 | ID | Rule |
 |---|---|
@@ -2020,6 +2031,8 @@ statuses, and the difference matters:
 - Requirement rows: **529**, of which **175** were drafted by this review
 - Coverage rows resolving to an `OUT OF SCOPE` requirement row: **48**
 
+> Measured at **50** on 2026-10-01, twice independently. Not corrected here; see §27.2.
+
 The count is 1161 rows, 1161 `mapped`, 0 `inferred`, summing correctly. The rule-id pattern used to
 parse 26.2 did not match the `PR-Qnn` form, so 42 `PR-Q` rows were invisible to it. `PR-Q` ids are
 now parsed (`PR-Q01`, `PR-Q06a`, and the `PR-Q11..PR-Q21` range form). The pre-Batch-5a figure was
@@ -2099,3 +2112,51 @@ requirements.
 
 A review is only a decision if it cites the source: a generator `inferred` row is a proposal, and a
 reviewed row names the source file and rule id behind it.
+
+---
+
+## 27. Correction of the summary figures in §23, §24, §25 and §26.3 — 2026-10-01
+
+Added 2026-10-01 on the owner's instruction, after `WORK-SPLIT.md` was sized from this file and it was found that
+the summary sections disagree with the body. **No historical statement above this line was changed, and no number,
+wording or citation was altered.** §§1–22 and §26.2 are unchanged, and `docs/architecture/measure-c06.ps1` passes
+before and after this section. Four dated forward-pointers were added — one at the head of §23, one at the head of
+§24, one at the head of §25, and one beside §26.3's superseded figure — so that a reader who lands on a stale table
+is sent here. §23, §24, §25 and §26.3 otherwise stand exactly as they were written, per the convention that a past
+statement is corrected by appending a dated section that names what it supersedes rather than by rewriting it.
+
+Method: every count below was measured from this file — the `Pri` column of the requirement rows in §§1–22, and the
+status and owning-requirement columns of §26.2 — and cross-checked against `measure-c06.ps1`, which reports the same
+figures independently.
+
+### 27.1 Figures that are superseded
+
+| Location | Statement as written | Measured now |
+|---|---|---|
+| §23 | `MUST` 325, `SHOULD` 9, `COULD` 4, `OUT OF SCOPE` 16, **total 354**, "`RT-001` to `RT-354`" | `MUST` **490**, `SHOULD` **11**, `COULD` **4**, `OUT OF SCOPE` **24**, **total 529**, `RT-001` to `RT-529` |
+| §24 `GR-01` | "**819** rules are cited by a requirement row, **320** are not cited at all and are marked `inferred`" | **1161** are cited, **0** `inferred` (as §26.3 already states) |
+| §24 `GR-06` | 342 rules labelled `inferred`, unverified | All **342** reviewed and closed; **0** remain `inferred` |
+| §25 `GR-01`, `GR-25` `GR-06` | "140 rules are still machine-assigned and unverified" | **0**. The 140 was the pre-Batch-5a figure, as §26.3 line 2026 already notes |
+| §26 opening line | "1161 defined rules across **26** rule-bearing documents" | 25 distinct canonical-home names appear in §26.2. The 26th is not identifiable; §26.3's own count is internally consistent at 25 |
+| §26.3 | "Coverage rows resolving to an `OUT OF SCOPE` requirement row: **48**" | **50** (measured twice: independently here and by `measure-c06.ps1`) |
+
+§23 and §25 `GR-01`/`GR-06` are **stale Phase-1 snapshots**, not defects in the matrix. §23's own text says its
+counts are "counted from the table rather than asserted"; the table has since grown by the 175 rows drafted under
+C-06 (`RT-355`..`RT-529`) and the summary was never updated. **Do not size work from §23, §24 or §25. §26.2 and
+§26.3 are the current figures.**
+
+### 27.2 The 48 / 50 difference, and why it is left open
+
+The measured figure is 50, not 48. The likely cause is visible in §26.3's own Batch 5d bullet: that batch drafted
+`RT-503`..`RT-529`, "two of them `OUT OF SCOPE`", and those two rows are `RT-514` (`EM-05`) and `RT-529` (`CD-37`),
+one rule each. `48 + 2 = 50`. This is a **reading, not a verified cause**, and the two figures do not differ in any
+way that affects the assertion C-06 made — §26.3's own argument is that a rule mapped to an `OUT OF SCOPE` row is
+itself an exclusion rule and therefore correct. Recorded here as an open reconciliation for the owner rather than
+silently changed.
+
+### 27.3 What is still not approved
+
+Nothing in this section approves anything. `mapped` is not `approved`: the 175 rows drafted under C-06 remain
+`PROPOSED - REQUIRES HUMAN CONFIRMATION`, as §26.3 states. The per-rule reasoning behind the original audit was
+lost and 49 rule identities are permanently unrecoverable; see
+`../architecture/C-06-TRACEABILITY-REVIEW.md`. This section corrects arithmetic and staleness only.
