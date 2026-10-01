@@ -36,7 +36,14 @@ const BUSINESS_RULES: Record<string, string> = {
   SS007: 'A variant with barcodes needs one primary barcode. Mark another one primary first.',
   SS008: 'Every live variant needs a price in force before the product can be released.',
   SS009: 'This product is archived, so nothing new may refer to it.',
-  SS011: 'There is not enough stock for this sale, and this store does not sell below zero.',
+  SS011: 'There is not enough stock for this, and this store does not go below zero.',
+  SS012: 'A service item is not stocked, so it cannot be adjusted.',
+  SS013: 'A quantity has more decimal places than its unit allows.',
+  SS014: 'This store may not move stock at that location.',
+  SS016: 'That document is not in a state that moves stock.',
+  SS018: 'Lines change only while the document is a draft.',
+  SS022: 'The document did not write exactly its stock movements, so nothing was saved.',
+  SS024: 'That reason code is archived. Choose a live one.',
   SS025: 'This till is not in service, or is in training mode, so it cannot make a real sale.',
   SS026: 'The shift at this till is not open.',
   SS028: 'An item on this cart is no longer for sale.',
@@ -68,6 +75,9 @@ const CHECKS: Record<string, string> = {
   ck_variant_standard_cost_prospective: 'A cost takes effect now or later, never in the past.',
   ck_tax_rate_non_negative: 'A tax rate cannot be negative. Zero is how an exemption is recorded.',
   ck_tax_rate_prospective: 'A tax rate takes effect now or later, never in the past.',
+  ck_stock_adjustment_separation: 'The approver must be someone other than the person who submitted it.',
+  ck_stock_adjustment_line_positive: 'A quantity must be more than zero.',
+  ck_stock_adjustment_line_type: 'That kind of line does not belong on this kind of document.',
 };
 
 /** Uniqueness a client can run into, by constraint or index, with what it means. */
@@ -87,6 +97,7 @@ const UNIQUE: Record<string, string> = {
   uq_cash_shift_open_per_employee: 'You already have a shift in this store that is not closed.',
   uq_pos_terminal_code: 'That till code is already in use in this store.',
   uq_payment_method_code: 'That payment method code is already in use.',
+  uq_reason_code_code: 'That reason code is already in use.',
 };
 
 export function toApiError(error: unknown): AppError {
@@ -113,6 +124,10 @@ export function toApiError(error: unknown): AppError {
   if (code === '23503') return new AppError(422, 'invalid_reference', 'Something this refers to does not exist.');
   if (code === '40001' || code === '40P01') {
     return new AppError(503, 'busy', 'The store is busy. Nothing was saved; try again.');
+  }
+  // IV-23: a lock timeout is a normal, expected outcome, and the retry is safe.
+  if (code === '55P03') {
+    return new AppError(409, 'busy_item', 'Another till is using one of these items right now. Nothing was saved; try again.');
   }
   return new AppError(500, 'internal', 'Something went wrong on the server. Nothing was saved; try again.');
 }

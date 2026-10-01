@@ -100,6 +100,7 @@ try {
     pool,
     session: { lifetimeMinutes: 60, failureLimit: 5, failureWindowMinutes: 15 },
     quoteMaxAgeMinutes: 60,
+    lockTimeoutMs: 2_000,
     ownsPool: true,
   });
   await app.listen({ host: '127.0.0.1', port: 0 });

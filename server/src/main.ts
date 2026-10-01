@@ -9,6 +9,7 @@ const app = await buildApp({
   pool,
   logger: true,
   quoteMaxAgeMinutes: config.QUOTE_MAX_AGE_MINUTES,
+  lockTimeoutMs: config.LOCK_TIMEOUT_MS,
   session: {
     lifetimeMinutes: config.SESSION_LIFETIME_MINUTES,
     failureLimit: config.SIGN_IN_FAILURE_LIMIT,

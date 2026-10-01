@@ -24,6 +24,7 @@ const Environment = z.object({
   SIGN_IN_FAILURE_LIMIT: z.coerce.number().int().min(1),
   SIGN_IN_FAILURE_WINDOW_MINUTES: wholeMinutes,
   QUOTE_MAX_AGE_MINUTES: wholeMinutes,
+  LOCK_TIMEOUT_MS: z.coerce.number().int().min(1),
 });
 
 export type Config = z.infer<typeof Environment>;

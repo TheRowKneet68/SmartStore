@@ -11,6 +11,9 @@ import { accessRoutes } from './modules/identity/access.ts';
 import { employeeMachine, employeeRoutes } from './modules/identity/employees.ts';
 import { identityRoutes } from './modules/identity/routes.ts';
 import { sessionAuthenticator, type SessionPolicy } from './modules/identity/sessions.ts';
+import { adjustmentMachine, adjustmentRoutes } from './modules/inventory/adjustments.ts';
+import { reasonRoutes } from './modules/inventory/reasons.ts';
+import { stockRoutes } from './modules/inventory/stock.ts';
 import { organizationRoutes } from './modules/organization/routes.ts';
 import { paymentMethodRoutes } from './modules/sales/payment-methods.ts';
 import { quoteSigner } from './modules/sales/quotes.ts';
@@ -22,6 +25,8 @@ export interface AppOptions {
   session: SessionPolicy;
   /** How long a scan's price quote stays valid for the sale (OQ-027). */
   quoteMaxAgeMinutes: number;
+  /** How long a transaction that moves stock waits for a contended balance (IV-23, OQ-027). */
+  lockTimeoutMs: number;
   /** How a request's principal is found: the session cookie. Tests may substitute their own. */
   authenticate?: Authenticate;
   logger?: boolean;
@@ -57,8 +62,15 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   await app.register(scanRoutes, { ...v1, quotes });
   await app.register(tillRoutes, v1);
   await app.register(paymentMethodRoutes, v1);
-  await app.register(saleRoutes, { ...v1, quotes, quoteMaxAgeMinutes: options.quoteMaxAgeMinutes });
-  await app.register(transitionRoutes, { ...v1, machines: [employeeMachine, productMachine, deviceMachine] });
+  await app.register(saleRoutes, { ...v1, quotes, quoteMaxAgeMinutes: options.quoteMaxAgeMinutes, lockTimeoutMs: options.lockTimeoutMs });
+  await app.register(reasonRoutes, v1);
+  await app.register(adjustmentRoutes, v1);
+  await app.register(stockRoutes, v1);
+  await app.register(transitionRoutes, {
+    ...v1,
+    machines: [employeeMachine, productMachine, deviceMachine, adjustmentMachine],
+    lockTimeoutMs: options.lockTimeoutMs,
+  });
 
   await app.ready();
   return app;

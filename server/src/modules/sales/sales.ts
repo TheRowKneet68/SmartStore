@@ -85,6 +85,7 @@ async function completeCashSale(
   body: z.infer<typeof NewSale>,
   quotes: QuoteSigner,
   quoteMaxAgeMinutes: number,
+  lockTimeoutMs: number,
 ): Promise<string> {
   const principal = request.principal!;
   const store = request.storeId!;
@@ -222,13 +223,13 @@ async function completeCashSale(
       );
     }
     return sale;
-  });
+  }, { lockTimeoutMs });
 }
 
 /** The till's sale routes (sales-pos-domain; D4). */
 export async function saleRoutes(
   app: FastifyInstance,
-  options: { pool: pg.Pool; quotes: QuoteSigner; quoteMaxAgeMinutes: number },
+  options: { pool: pg.Pool; quotes: QuoteSigner; quoteMaxAgeMinutes: number; lockTimeoutMs: number },
 ): Promise<void> {
   const { pool } = options;
 
@@ -245,7 +246,7 @@ export async function saleRoutes(
     const before = await existing();
     if (before !== undefined) return reply.status(200).send(await summary(pool, before.id));
     try {
-      const sale = await completeCashSale(pool, request, till, body, options.quotes, options.quoteMaxAgeMinutes);
+      const sale = await completeCashSale(pool, request, till, body, options.quotes, options.quoteMaxAgeMinutes, options.lockTimeoutMs);
       return reply.status(201).send(await summary(pool, sale));
     } catch (error) {
       const raced = (error as { code?: string; constraint?: string }).constraint === 'uq_checkout_operation' ? await existing() : undefined;

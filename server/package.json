@@ -11,7 +11,8 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "perf": "node test/perf/perf.ts",
-    "demo": "node src/cli/demo.ts"
+    "demo": "node src/cli/demo.ts",
+    "ledger:check": "node src/cli/ledger-check.ts"
   },
   "dependencies": {
     "fastify": "5.12.5",

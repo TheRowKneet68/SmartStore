@@ -7,6 +7,7 @@ import type { TestDb } from './db.ts';
 /** TEST-ONLY security policy. The real values are the owner's to set (OQ-027). */
 export const TEST_SESSION_POLICY: SessionPolicy = { lifetimeMinutes: 60, failureLimit: 3, failureWindowMinutes: 15 };
 export const TEST_QUOTE_MAX_AGE_MINUTES = 30;
+export const TEST_LOCK_TIMEOUT_MS = 2_000;
 
 /**
  * A pool built as the server builds its own (createPool: exact int8), on the test database's runtime role, so a
@@ -21,7 +22,7 @@ function serverPool(db: TestDb) {
 
 /** The server as it runs: principals come from session cookies only. */
 export async function sessionApp(db: TestDb, policy: SessionPolicy = TEST_SESSION_POLICY): Promise<FastifyInstance> {
-  return buildApp({ pool: serverPool(db), session: policy, quoteMaxAgeMinutes: TEST_QUOTE_MAX_AGE_MINUTES, ownsPool: true });
+  return buildApp({ pool: serverPool(db), session: policy, quoteMaxAgeMinutes: TEST_QUOTE_MAX_AGE_MINUTES, lockTimeoutMs: TEST_LOCK_TIMEOUT_MS, ownsPool: true });
 }
 
 /**
@@ -34,6 +35,7 @@ export async function testApp(db: TestDb, options: { quoteMaxAgeMinutes?: number
     pool: serverPool(db),
     session: TEST_SESSION_POLICY,
     quoteMaxAgeMinutes: options.quoteMaxAgeMinutes ?? TEST_QUOTE_MAX_AGE_MINUTES,
+    lockTimeoutMs: TEST_LOCK_TIMEOUT_MS,
     ownsPool: true,
     authenticate: async (request) => {
       const employeeId = request.headers['x-test-employee'];

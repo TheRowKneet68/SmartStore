@@ -19,8 +19,17 @@ export interface MachineBinding {
   actorColumn: string;
   /** Store-scoped subjects are authorized in their store; organization-scoped ones organization-wide (OQ-025 item 6). */
   storeColumn: string | null;
+  /** Columns also set to the acting employee when the subject enters a state (for example `submitted_by`). */
+  actorColumnsFor?: (to: string) => string[];
+  /** Further columns read with the subject, for `keyFor`. */
+  extraColumns?: string[];
+  /**
+   * The key the specification names for this subject, where it differs from the edge's by the subject's kind (for
+   * example inventory-domain §5's opening balance). It returns the edge's own key otherwise.
+   */
+  keyFor?: (subject: Record<string, unknown>, event: string, key: string) => string;
   /** Work the transition's use case does with it, in its transaction (for example SM-47's session revocation). */
-  after?: (client: pg.PoolClient, subjectId: string, from: string, to: string) => Promise<void>;
+  after?: (client: pg.PoolClient, subjectId: string, from: string, to: string, principal: Principal, correlationId: string) => Promise<void>;
 }
 
 const Transition = z.object({
@@ -59,7 +68,10 @@ interface Subject {
  * permission is `OpenDecision` or `System` refuses every person (`SM-02d`). The subject is locked first, so the edge
  * is decided on its state at the moment of change (`ADR-25`).
  */
-export async function transitionRoutes(app: FastifyInstance, options: { pool: pg.Pool; machines: MachineBinding[] }): Promise<void> {
+export async function transitionRoutes(
+  app: FastifyInstance,
+  options: { pool: pg.Pool; machines: MachineBinding[]; lockTimeoutMs: number },
+): Promise<void> {
   const { pool } = options;
   const machines = new Map(options.machines.map((binding) => [binding.machine, binding]));
 
@@ -72,7 +84,9 @@ export async function transitionRoutes(app: FastifyInstance, options: { pool: pg
       return await withTransaction(
         pool,
         auditContext(request, { clientOperationId: body.clientOperationId ?? null, reasonCodeId: body.reasonCodeId ?? null }),
-        (c) => transition(c, principal, binding, body.event, body.subject),
+        (c) => transition(c, principal, binding, body.event, body.subject, request.id),
+        // A transition may move stock (posting an adjustment), so it waits for a balance only so long (IV-23).
+        { lockTimeoutMs: options.lockTimeoutMs },
       );
     } catch (error) {
       if (!(error instanceof Denied)) throw error;
@@ -92,10 +106,12 @@ async function transition(
   binding: MachineBinding,
   event: string,
   subjectId: string,
+  correlationId: string,
 ): Promise<{ subject: string; state: string; changed: boolean }> {
   const store = binding.storeColumn === null ? 'NULL::uuid' : binding.storeColumn;
-  const found = await c.query<Subject>(
-    `SELECT ${binding.stateColumn} AS state, organization_id, ${store} AS store_id
+  const extra = (binding.extraColumns ?? []).map((column) => `, ${column}`).join('');
+  const found = await c.query<Subject & Record<string, unknown>>(
+    `SELECT ${binding.stateColumn} AS state, organization_id, ${store} AS store_id${extra}
      FROM ${binding.table} WHERE id = $1 FOR UPDATE`,
     [subjectId],
   );
@@ -130,19 +146,21 @@ async function transition(
         : 'Only the system can do this.';
     throw new Denied(null, subject.store_id, 'not_permitted', step.permission_rule, message);
   }
-  const roles = await rolesGranting(c, principal, step.permission_key!, subject.store_id);
+  const key = binding.keyFor?.(subject, event, step.permission_key!) ?? step.permission_key!;
+  const roles = await rolesGranting(c, principal, key, subject.store_id);
   if (roles === null) {
-    throw new Denied(step.permission_key, subject.store_id, 'forbidden', 'Key', missingPermission(step.permission_key!, subject.store_id));
+    throw new Denied(key, subject.store_id, 'forbidden', 'Key', missingPermission(key, subject.store_id));
   }
   // The role-as-used is known only now, from the edge's key (architecture §14.2).
   await c.query(`SELECT set_config('smartstore.role', $1, true)`, [roles]);
 
   // The database enforces the edge again, records its event and requires its reason (SS004, SS055; D6).
-  await c.query(`UPDATE ${binding.table} SET ${binding.stateColumn} = $2, ${binding.actorColumn} = $3 WHERE id = $1`, [
+  const actors = [binding.actorColumn, ...(binding.actorColumnsFor?.(step.to_state) ?? [])].map((column) => `${column} = $3`).join(', ');
+  await c.query(`UPDATE ${binding.table} SET ${binding.stateColumn} = $2, ${actors} WHERE id = $1`, [
     subjectId,
     step.to_state,
     principal.employeeId,
   ]);
-  await binding.after?.(c, subjectId, subject.state, step.to_state);
+  await binding.after?.(c, subjectId, subject.state, step.to_state, principal, correlationId);
   return { subject: subjectId, state: step.to_state, changed: true };
 }

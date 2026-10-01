@@ -417,6 +417,11 @@ fallback is a design that holds either answer, not a guess at the answer.
     bound its age, so an old quote cannot be replayed at an old price.
   - No document gives the bound. *Meanwhile:* a fourth required setting, `QUOTE_MAX_AGE_MINUTES`, with no default.
   - A cart older than that must be rescanned.
+- **Added 2026-10-01: how long to wait for a contended stock balance.**
+  - `IV-23` wants "a short, bounded timeout" on the balance-row lock, after which the operation fails cleanly and the
+    cashier is told to retry. No document gives the number.
+  - *Meanwhile:* a fifth required setting, `LOCK_TIMEOUT_MS`, with no default. It applies to every transaction that
+    moves stock (a sale, posting or reversing an adjustment).
 
 ### OQ-028 — `Config.Roles` and `Role.Create`/`Role.Edit` overlap
 

@@ -65,12 +65,17 @@ export async function withTransaction<T>(
   pool: pg.Pool,
   context: AuditContext,
   work: (client: pg.PoolClient) => Promise<T>,
+  options: { lockTimeoutMs?: number } = {},
 ): Promise<T> {
   for (let attempt = 1; ; attempt++) {
     const client = await pool.connect();
     let broken = false;
     try {
       await client.query('BEGIN');
+      // IV-23: a contended stock balance is waited for only so long; then the whole transaction fails cleanly.
+      if (options.lockTimeoutMs !== undefined) {
+        await client.query(`SELECT set_config('lock_timeout', $1, true)`, [`${Math.trunc(options.lockTimeoutMs)}ms`]);
+      }
       await client.query(SET_CONTEXT, [
         context.actorId ?? '',
         context.source,
