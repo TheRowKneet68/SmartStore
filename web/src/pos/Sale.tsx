@@ -23,6 +23,9 @@ interface Line {
 export function SaleScreen({ storeId, currency, onCartChange }: { storeId: string; currency: Currency; onCartChange?: (lines: number) => void }) {
   const [lines, setLines] = useState<Line[]>([]);
   const [code, setCode] = useState('');
+  // Finding an item by name: what was typed, and what this store sells by that name (null before a search).
+  const [name, setName] = useState('');
+  const [found, setFound] = useState<Scanned[] | null>(null);
   const [cash, setCash] = useState('');
   const [problem, setProblem] = useState<Problem | null>(null);
   const [said, setSaid] = useState('');
@@ -56,15 +59,42 @@ export function SaleScreen({ storeId, currency, onCartChange }: { storeId: strin
       return;
     }
     try {
-      const item = await api<Scanned>('GET', `/stores/${storeId}/scan/${encodeURIComponent(typed)}`);
-      setLines((current) => [...current, { key: crypto.randomUUID(), item, quantity: 1 }]);
-      setProblem(null);
-      setSaid(`Added ${item.description}, ${money(item.price.amount)}. Total ${money(total + item.price.amount)}.`);
+      add(await api<Scanned>('GET', `/stores/${storeId}/scan/${encodeURIComponent(typed)}`));
     } catch (e) {
       // UX-11: an unknown or unsellable code is a message under the field; the cart is untouched.
       refuse(problemOf(e));
     }
     setCode('');
+  };
+
+  const add = (item: Scanned) => {
+    setLines((current) => [...current, { key: crypto.randomUUID(), item, quantity: 1 }]);
+    setProblem(null);
+    setSaid(`Added ${item.description}, ${money(item.price.amount)}. Total ${money(total + item.price.amount)}.`);
+  };
+
+  // UX-48: a name is looked up by name only, never as a barcode. The server answers with at most a short list of what
+  // this store sells (UX-49), each with its own quote; the cart is untouched whatever the answer.
+  const findByName = async (event: FormEvent) => {
+    event.preventDefault();
+    const typed = name.trim();
+    if (typed === '') return;
+    try {
+      const { items } = await api<{ items: Scanned[] }>('GET', `/stores/${storeId}/items?name=${encodeURIComponent(typed)}`);
+      setFound(items);
+      setProblem(null);
+      setSaid(items.length === 0 ? `Nothing on sale here has ${typed} in its name.` : `${items.length} found. Choose one to add it.`);
+    } catch (e) {
+      refuse(problemOf(e));
+    }
+  };
+
+  const choose = (item: Scanned) => {
+    add(item);
+    setFound(null);
+    setName('');
+    // Back to the scan field, the keyboard path (UX-01).
+    setTimeout(() => scanField.current?.focus());
   };
 
   const setQuantity = (key: string, quantity: number) =>
@@ -121,10 +151,33 @@ export function SaleScreen({ storeId, currency, onCartChange }: { storeId: strin
 
   return (
     <section className="sale">
-      <form onSubmit={scan} className="scan">
-        <label htmlFor="code">Scan or type a barcode, then Enter</label>
-        <input id="code" ref={scanField} autoFocus autoComplete="off" value={code} onChange={(e) => setCode(e.target.value)} />
-      </form>
+      <div className="lookup">
+        <form onSubmit={scan} className="scan">
+          <label htmlFor="code">Scan or type a barcode, then Enter</label>
+          <input id="code" ref={scanField} autoFocus autoComplete="off" value={code} onChange={(e) => setCode(e.target.value)} />
+        </form>
+        <form onSubmit={findByName} className="find" role="search" aria-label="Find an item by name">
+          <label htmlFor="item-name">Or find an item by name</label>
+          <div className="find-row">
+            <input id="item-name" autoComplete="off" value={name} onChange={(e) => setName(e.target.value)} />
+            <button type="submit">Find</button>
+          </div>
+        </form>
+        {found !== null &&
+          (found.length === 0 ? (
+            <p className="hint">Nothing on sale here has that in its name.</p>
+          ) : (
+            <ul className="choices" aria-label="Items found">
+              {found.map((item) => (
+                <li key={item.variantId}>
+                  <button type="button" onClick={() => choose(item)}>
+                    {item.description} — {money(item.price.amount)}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ))}
+      </div>
       <ProblemNotice problem={problem} />
       <table className="cart" aria-label="Cart">
         <thead>

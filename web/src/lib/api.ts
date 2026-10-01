@@ -44,7 +44,8 @@ export interface Workspace {
 export interface Scanned {
   variantId: string;
   description: string;
-  barcode: string;
+  /** Null for an item found by name, not scanned. */
+  barcode: string | null;
   price: { amount: number; currencyCode: string; minorUnitExponent: number };
   quote: string;
 }

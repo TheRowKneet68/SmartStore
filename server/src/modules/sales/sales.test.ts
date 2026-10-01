@@ -227,6 +227,17 @@ describe('a cash sale at the till (s22.6, SP-01, SP-02, PY-38, RT-119)', () => {
     await brief.close();
   });
 
+  it('RT-489, UX-48: an item found by name is sold as selected, with no barcode on its line', async () => {
+    const s = await shop();
+    await openShift(s);
+    const found = (await call('GET', `/stores/${s.storeId}/items?name=bread`, s.at)).json().items;
+    expect(found.map((i: { description: string }) => i.description)).toEqual(['Bread']);
+    const sale = await sell(s, [{ quote: found[0].quote, quantity: 1 }], 500);
+    expect(sale.statusCode, sale.body).toBe(201);
+    const entries = await db.app.query('SELECT entry_method, scanned_barcode FROM sale_line WHERE sale_id = $1', [sale.json().saleId]);
+    expect(entries.rows).toEqual([{ entry_method: 'Selected', scanned_barcode: null }]);
+  });
+
   it('UX-17, RT-119: an underpayment is named, and nothing is saved', async () => {
     const s = await shop();
     await openShift(s);

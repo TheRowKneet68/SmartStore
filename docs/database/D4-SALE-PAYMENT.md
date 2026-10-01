@@ -406,3 +406,24 @@ refusal is still `SS021`, and names the first use.
 
 - **Test:** `sales.test.ts`. A service is sold once, and its unit then cannot change kind.
 - **Mutation check:** 1 of 1 detected (`plan-b7.mjs`). Without the branch, the change goes through.
+
+## 13. Phase D: selling by name at the till (2026-10-01)
+
+| Route | Permission |
+|---|---|
+| `GET /stores/:storeId/items?name=` | `Sale.Create`, in the store |
+
+- **A name is looked up by name only** (`UX-48`, `RT-379`). It is a case-blind contains match on the product's or
+  the variant's name, with its wildcards escaped, as the catalogue's search is (D2 §9). A barcode typed as a name
+  finds nothing.
+- **Only what this store can sell is returned, before anything is returned** (`UX-47`, `UX-49`): a released product
+  (`SM-11`), a live variant, a tax category (`RT-493`), and a price at this store (`PR-30`). At most 20 items.
+- **Each item carries its own signed quote, with no barcode.** The sale therefore records its line as `Selected`,
+  with no barcode (`RT-489`). The sale checks such a quote exactly as it checks a scanned one (§3).
+- **The till:** "Or find an item by name" sits under the scan field (`web/src/pos/Sale.tsx`). The item chosen joins
+  the cart, and focus goes back to the scan field. A name that finds nothing says so, and the cart is untouched
+  (`UX-11`).
+- **Shared with the scan:** one mapping from a row to what the till is told, and one quote signer.
+- **Mutation check:** the route's 10 mutants are all detected (`plan-d-name.mjs`): the wildcard, the organization,
+  an archived variant, a product not released, an unclassified variant, no price at the store, the variant's name,
+  the limit, the barcode, and the key. The scan's 9 mutants were run again after the refactor, and all are detected.

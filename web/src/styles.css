@@ -388,8 +388,22 @@ form.panel > button[type='submit'],
   padding: 1.25rem 1.5rem 2rem;
 }
 
-.sale > .scan {
+.sale > .lookup {
   grid-area: scan;
+}
+
+/* Finding by name sits under the scan field, quieter than it: the barcode is the normal path (UX-09, UX-48). */
+.find {
+  margin-top: 0.75rem;
+}
+
+.find label {
+  margin-top: 0;
+}
+
+.find-row {
+  display: flex;
+  gap: 0.5rem;
 }
 
 .sale > .problem {

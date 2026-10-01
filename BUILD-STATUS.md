@@ -490,7 +490,7 @@ sets the order. Phase A (housekeeping and the push) is done.
    - reference-data edit and archive. **Edit done** (D2 §10). Archive is not specified for brands, units or tax
      categories (OQ-031);
    - price history. **Done** (D2 §11);
-   - selling by name;
+   - selling by name. **Done** (D4 §13);
    - manual weigh entry;
    - the onboarding wrapper;
    - health and readiness endpoints;
@@ -1210,3 +1210,18 @@ Append-only. One dated line per step, including failed and abandoned attempts.
     `plan-d-prices.mjs` detected the setter's join, 1 of 1.
   - **A mutant left unclaimed:** fixing the decimal places at 2 would survive, because the fixtures have one
     currency, with two places. D2 §11 says so.
+- 2026-10-01 — **Phase D: selling by name at the till.** D4 §13.
+  - **Server:** `GET /stores/:storeId/items?name=` (`Sale.Create`). A name is looked up by name only, never as a
+    barcode (`UX-48`, `RT-379`).
+    - It returns only what this store can sell (`UX-47`, `UX-49`): released, live, classified, priced here, and at
+      most 20.
+    - Each item carries a signed quote with no barcode, so its line is recorded as `Selected` (`RT-489`).
+    - The scan and the lookup now share one row mapping and one quote signer.
+  - **Web:** "Or find an item by name" under the scan field. The item chosen joins the cart, and focus goes back to
+    the scan field. Nothing found is said, and the cart is untouched (`UX-11`). `api.ts`'s `Scanned.barcode` may be
+    null.
+  - Tests: 2 server (catalog: what a name finds and does not; sales: a found item is sold as `Selected`) and 2 web.
+  - **Mutation check:** `plan-d-name.mjs`, 10 of 10. The scan's 9 mutants were re-run after the refactor, and all 9
+    are detected.
+    - Two of `plan-d4-app`'s search texts changed with the code: C08, the quote's store, and C09, the scan's key,
+      which now matched the new route too. Both were updated, re-run and detected.

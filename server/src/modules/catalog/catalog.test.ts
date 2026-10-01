@@ -3,7 +3,15 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { signedInAs, testApp } from '../../../test/app.ts';
 import { createTestDb, type TestDb } from '../../../test/db.ts';
-import { draftAdjustment, employeeWithAccess, insertOrganization, insertReasonCode, insertStore, insertWarehouse } from '../../../test/fixtures.ts';
+import {
+  draftAdjustment,
+  employeeWithAccess,
+  insertOrganization,
+  insertReasonCode,
+  insertSellableVariant,
+  insertStore,
+  insertWarehouse,
+} from '../../../test/fixtures.ts';
 
 let db: TestDb;
 let app: FastifyInstance;
@@ -394,6 +402,53 @@ describe("the till's scan (UX-09, UX-11, UX-25, UX-48, SM-11, RT-124, RT-493, AD
     const response = await scan(c, '96385074', there, abroad);
     expect(response.statusCode).toBe(409);
     expect(response.json().error).toEqual({ code: 'no_price', message: 'Oat milk — 1 L has no price in force here, so it cannot be sold yet.' });
+  });
+
+  it('UX-48, UX-49, UX-47, RT-379, SM-11, RT-493, PR-30: a name finds only what this store sells, case-blind and at most 20, and never by barcode', async () => {
+    const c = await catalogue();
+    const elsewhere = await catalogue();
+    await sellable(elsewhere, { value: '4006381333931', kind: 'EAN13' });
+    const s = await sellable(c, { value: '012345678905', kind: 'UPC_A' }, 1_250);
+    // Not for sale: a draft, an unclassified item, and an archived variant.
+    const draft = await created('POST', '/products', c.as, { categoryId: s.category, name: 'Oatcake' });
+    await created('POST', `/products/${draft}/variants`, c.as, { baseUnitId: s.unit, taxCategoryId: s.tax, price: { amount: 100 } });
+    const plain = await created('POST', '/products', c.as, { categoryId: s.category, name: 'Oat flakes' });
+    await created('POST', `/products/${plain}/variants`, c.as, { baseUnitId: s.unit, price: { amount: 100 } });
+    await call('POST', '/transitions', c.as, { machine: 'Product', event: 'activate', subject: plain });
+    const big = await created('POST', `/products/${s.product}/variants`, c.as, { name: '2 L', baseUnitId: s.unit, taxCategoryId: s.tax, price: { amount: 2_000 } });
+    expect((await call('POST', `/variants/${big}/archive`, c.as)).statusCode).toBe(200);
+
+    const find = (name: string, as: Headers = c.as, store = c.store) => call('GET', `/stores/${store}/items?name=${encodeURIComponent(name)}`, as);
+    const found = await find('OAT');
+    expect(found.statusCode).toBe(200);
+    expect(found.json().items).toEqual([
+      {
+        variantId: s.variant,
+        productId: s.product,
+        description: 'Oat milk — 1 L',
+        barcode: null,
+        unit: { code: expect.any(String), quantityKind: 'Countable', scale: 0 },
+        price: { amount: 1_250, currencyCode: 'XTS', minorUnitExponent: 2 },
+        quotedAt: expect.any(String),
+        quote: expect.any(String),
+      },
+    ]);
+    expect((await find('1 l')).json().items.map((i: { variantId: string }) => i.variantId), "the variant's own name").toEqual([s.variant]);
+    expect((await find('012345678905')).json().items, 'RT-379: a name never resolves as a barcode').toEqual([]);
+    expect((await find('%')).json().items, 'a wildcard is only a character').toEqual([]);
+
+    for (let i = 0; i < 21; i++) await insertSellableVariant(db.app, c.org);
+    expect((await find('product')).json().items, 'UX-49: limited').toHaveLength(20);
+
+    await db.owner.query(`INSERT INTO currency (code, minor_unit_exponent) VALUES ('XXX', 0) ON CONFLICT (code) DO NOTHING`);
+    const abroad = (await db.app.query<{ id: string }>(
+      `INSERT INTO store (organization_id, code, name, time_zone, currency_code) VALUES ($1, $2, 'Abroad', 'UTC', 'XXX') RETURNING id`,
+      [c.org, `S-${randomUUID()}`],
+    )).rows[0]!.id;
+    const there = signedInAs(await employeeWithAccess(db.app, c.org, ['Sale.Create'], { assignedStore: null, accessStores: [abroad] }), c.org);
+    expect((await find('oat', there, abroad)).json().items, 'PR-30: nothing is priced at that store').toEqual([]);
+    const viewer = signedInAs(await employeeWithAccess(db.app, c.org, ['Product.View', 'Price.View'], { assignedStore: null, accessStores: [c.store] }), c.org);
+    expect((await find('oat', viewer)).statusCode, 'finding is ringing up: Sale.Create').toBe(403);
   });
 
   it('MS-03, AC-01: scanning needs Sale.Create in that store; another store or organization gets a 403', async () => {
