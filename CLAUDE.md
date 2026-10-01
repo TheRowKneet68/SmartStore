@@ -24,6 +24,11 @@ ADR exists, do not assume a language, framework, ORM, or driver.
 **PostgreSQL is fixed** per `ADR-03` (PostgreSQL as the central store; no SQLite-as-server). Money is integer minor
 units end to end per `ADR-04`.
 
+**2026-10-01 — Step 3, v1 implementation, has started on the owner's instruction.** Phase 3's design is complete
+(all seven domains). The stack is chosen by ADR-31, which the owner approved. The owner said "start Step 3", so
+application code is now in scope, in the order and under the rules in BUILD-STATUS.md working agreements 7 to 12.
+The two paragraphs above describe Phase 3 as it was and are superseded by this note only as to application code.
+
 ## Rules
 
 **`/docs` is the source of truth. Never invent business behaviour.** The specification lives in

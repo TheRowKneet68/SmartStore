@@ -1,16 +1,18 @@
 # Build Status
 
-**Last updated:** 2026-09-30
+**Last updated:** 2026-10-01
 
 ## Phase
 
-**Phase 3 — database design.** Authorized by the owner on 2026-09-30
-([Constitution §35](SMARTSTORE-CONSTITUTION.md)). Schema, entities, keys, constraints, indexes, and the migrations
-that create them.
+**Step 3 — v1 implementation**, started 2026-10-01 on the owner's instruction ("start Step 3"), under the rules in
+the working agreements (7 to 12). Constitution §35 authorized "Phase 3 (database design) and the subsequent v1
+implementation".
+
+**Phase 3 — database design** is complete: all seven domains are designed, migrated and tested (Done, below).
 
 **Stack chosen:** [ADR-31](docs/architecture/ADR-31-V1-STACK-AND-TOOLING.md), approved by the owner on 2026-09-30 —
 Node 26, TypeScript, Fastify 5, `pg` (no ORM), dbmate (plain-SQL, forward-only migrations), Vitest against a real
-PostgreSQL, React + Vite. PostgreSQL is fixed per `ADR-03`. **No migration and no application code exists yet.**
+PostgreSQL, React + Vite. PostgreSQL is fixed per `ADR-03`.
 
 Phase 2 documentation is closed. All thirteen entry criteria (C-01..C-13) are met or decided
 ([PHASE-3-ENTRY-CRITERIA.md](docs/architecture/PHASE-3-ENTRY-CRITERIA.md) §6), and no genuine Phase 3 blockers
@@ -104,6 +106,22 @@ Owner-approved with ADR-31 on 2026-09-30 (ADR-31 §13 has the full text):
    fixtures are labelled TEST-ONLY.
 5. Work is on branch `v1-build`; commit after each passing step; remind the owner to push at the end of each domain.
 6. Migrations are forward-only.
+
+Step 3 rules, given by the owner on 2026-10-01 with "start Step 3":
+
+7. Order: Organization/Store/Warehouse (1), Employee/Role/Permission (7), Audit (6), Product/Barcode/Unit (2),
+   Inventory ledger/Batch (3), Sale/Payment (4), Returns/Refunds (5).
+8. **Before starting Domain 5**: list every transition that lacks a permission key (OQ-023, OQ-025), show which
+   existing keys could be reused, propose names for the rest, and **wait for the owner's approval**. No invented keys.
+9. **First working slice early.** After domains 1, 7, 6 and 2, build a minimal vertical slice (login, scan a barcode,
+   add to the cart in the browser, save a sale), run the performance test (scan-to-cart and sale-save timing), and
+   show the owner the numbers.
+10. Run the full mutation check only at the end of each domain; run focused tests while developing.
+11. CLAUDE.md rules stand: cite requirement IDs, small commits, update this file, never commit secrets or `.env`.
+    Remind the owner to push at the end of each domain.
+12. After each domain: the 5-line summary, then continue unless the owner must decide something. **Stop and ask
+    before** changing an owner decision, adding any feature from the deferred list, or anything needing money,
+    secrets or real hardware.
 
 ## Done
 
@@ -232,9 +250,10 @@ Until then, tests run on a scratch PostgreSQL 17.11 cluster and a portable Node 
 
 ## Next
 
-1. **Step 3: implementation**, in the order of the working agreements (1, 7, 6, 2, 3, 4, 5). **It starts when the
-   owner confirms.** The continuation protocol pasted on 2026-10-01 forbids application code, and the owner's reply
-   to the question it raised was read as covering only the finishing of Domain 7.
+1. **Step 3, Domain 1: Organization / Store / Warehouse.** The server skeleton (ADR-31 §5: config, pool, transaction
+   helper, error shape, route permission declarations checked at boot) and the organization module.
+2. Then domains 7, 6 and 2, the vertical slice with the performance numbers (working agreement 9), then 3 and 4. Then
+   the permission-key list before Domain 5 (working agreement 8).
    - Owner decisions needed along the way: OQ-018 before the card path; OQ-023 before any refund is paid; OQ-025
      before an employee is reactivated, a till re-enabled or a refund retried.
    - Step 3 builds the one authorization gate (architecture §8.2). Two guards moved there from the database: it sets
@@ -390,3 +409,11 @@ Append-only. One dated line per step, including failed and abandoned attempts.
       - The re-run detected all three: 41 of 41.
   Result: 273 tests passing on 4 consecutive runs. Decisions stated for the owner are in D7 §8 and OQ-025. Step 3 was
   not started (see Next).
+- 2026-10-01 — `v1-build` was pushed: 9 commits, ADR-31 through Domain 7. `git push -u origin v1-build` was run in
+  this session at the owner's request, after a check found no `.env`, no archive and no file over 409 KiB in the
+  range. The owner then said **"start Step 3"**, with six rules, recorded as working agreements 7 to 12. That instruction
+  supersedes the pasted protocol's "no application code". CLAUDE.md's "Current phase" gets a dated note so that a
+  later session does not stop at "design only".
+  - Noted for the record: Constitution §6 lists "Phase 4 — UI/UX system" before implementation. No Phase 4 document
+    exists. The browser slice follows `ux-requirements.md` and architecture §5, and is plain (`UX-67`, `UX-68`). It is
+    built because the owner asked for it by name.
