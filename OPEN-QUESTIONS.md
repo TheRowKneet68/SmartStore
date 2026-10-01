@@ -331,6 +331,47 @@ fallback is a design that holds either answer, not a guess at the answer.
   is a reviewed change for the owner (`AU-13`).
 - **Blocked:** nothing in the schema; auditing reads of the log waits for a type.
 
+### OQ-025 — Employees and access: unnamed permissions, drawn edges, and the templates' notation
+
+- **Unknown, and needed from the owner before Step 3 builds these screens:**
+  1. *Reversal edges with no permission.* The contract's Reversal column names four edges but gives each no
+     permission (and the first two no event):
+     - an employee's return from leave (`OnLeave → Active`, §22.9);
+     - an employee's reactivation from suspension (`Suspended → Active`, §22.9);
+     - re-enabling a disabled till (`Disabled → Active`, §22.12);
+     - retrying a failed refund (`Failed → Processing`, §22.7).
+
+     `SM-02d` forbids borrowing the forward edge's key. *Meanwhile:* built as edges ("reactivate" is `SM-50`'s word)
+     with the permission `OpenDecision`, so the gate refuses them. **Until keys are named, no employee returns from
+     leave or suspension, no disabled till is re-enabled, and no failed refund is retried.**
+- **Unknown, not blocking the schema:**
+  2. *Drawn but not contracted.* §10's diagram draws `Suspended → Terminated` and `Active → Archived`. §22.9 contracts
+     `OnLeave → Terminated` and `Terminated → Archived` instead. *Meanwhile:* the contract's edges; the drawn ones
+     refuse (as OQ-009, OQ-014).
+  3. *A suspension leaves no event of its own.* §22.9 audits a suspension as `Security.SessionEnded` per revoked
+     session, and `D-06` gives it no `Employee.StateChange`. Suspending someone with no live session therefore
+     records no event, and its reason nowhere. *Meanwhile:* as contracted.
+  4. *Store access and role definitions have no event type.* `EM-15` and `PC-01` require audit entries for store
+     access and role changes, but `AU-12` names none (`Security.Role.Assign` covers assignments, and is used for
+     them). *Meanwhile:* not audit events; the history is kept in the rows as revocation facts, never deleted.
+  5. *The templates are notation, not data.* actors-and-roles §4 uses names the catalogue lacks:
+     - `Sales.*`, although no key starts with `Sales.`;
+     - `Refund.Large.Approve` and `Cost.View`, where the catalogue has `Sale.Refund.Large.Approve` and
+       `Product.Cost.View`;
+     - limits such as "(low limit)";
+     - the Auditor's "read-only access to all transactional documents".
+
+     §2.13 cites `Payment.Capture` (SEP-06) and `Purchase.Return.Create.Approve` (SEP-11), neither of which is a
+     catalogue key. *Meanwhile:* no template is seeded; roles are built from catalogue keys, and custom roles are
+     permitted.
+  6. *Organization-level actions.* Editing the catalogue or organization configuration names no store.
+     *Meanwhile:* it needs an organization-wide assignment (`MS-11`); a store-scoped one authorizes only that store.
+  7. *Usernames.* Unique per organization, whatever the case, so sign-in resolves the organization first (from the
+     till or the address). Confirm, or require usernames unique across organizations.
+- **Why not answerable from `/docs`:** naming permission keys is the owner's (`SM-02d`, as OQ-018 and OQ-023); the
+  rest is silent or contradictory.
+- **Blocked:** item 1's features in Step 3. Nothing else.
+
 ## How to use this file
 
 - Add an entry the moment you hit something the specification does not answer. Then continue with a different task.

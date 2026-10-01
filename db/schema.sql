@@ -1016,6 +1016,50 @@ COMMENT ON FUNCTION public.audit_ledger_row() IS 'Cites: AU-03, AU-04, RT-292. E
 
 
 --
+-- Name: audit_redact(text, jsonb); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.audit_redact(p_entity_type text, p_values jsonb) RETURNS jsonb
+    LANGUAGE sql STABLE
+    AS $$
+  SELECT jsonb_object_agg(e.key, CASE WHEN f.field IS NULL OR e.value = 'null'::jsonb THEN e.value
+                                      ELSE to_jsonb('[redacted]'::text) END)
+  FROM jsonb_each(p_values) e
+  LEFT JOIN audit_redacted_field f ON f.entity_type = p_entity_type AND f.field = e.key
+$$;
+
+
+--
+-- Name: FUNCTION audit_redact(p_entity_type text, p_values jsonb); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.audit_redact(p_entity_type text, p_values jsonb) IS 'Cites: AU-09, CU-35, RT-295. Replaces the value of each personal field with a marker, so the event shows that it changed and never what it holds.';
+
+
+--
+-- Name: audit_role_assignment(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.audit_role_assignment() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'pg_catalog', 'public'
+    AS $$
+BEGIN
+  PERFORM write_audit_event('Security.Role.Assign', TG_TABLE_NAME,
+    CASE TG_OP WHEN 'INSERT' THEN NULL ELSE to_jsonb(OLD) END, to_jsonb(NEW), false);
+  RETURN NULL;
+END
+$$;
+
+
+--
+-- Name: FUNCTION audit_role_assignment(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.audit_role_assignment() IS 'Cites: AU-03, RT-020, PC-01. Every role assignment and every removal records Security.Role.Assign, naming the role and scope on the entity and the prior state in before.';
+
+
+--
 -- Name: audit_setting(text); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -1270,6 +1314,36 @@ COMMENT ON FUNCTION public.customer_return_line_rules() IS 'Cites: RR-14, RR-17,
 
 
 --
+-- Name: employee_holds_permission(uuid, uuid, text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.employee_holds_permission(p_employee_id uuid, p_store_id uuid, p_permission text) RETURNS boolean
+    LANGUAGE sql STABLE
+    AS $$
+  SELECT EXISTS (
+    SELECT 1
+    FROM employee_role_assignment a
+    JOIN role r ON r.id = a.role_id AND r.archived_at IS NULL
+    JOIN role_permission g ON g.role_id = r.id AND g.permission_key = p_permission AND g.revoked_at IS NULL
+    WHERE a.employee_id = p_employee_id AND a.revoked_at IS NULL
+      AND CASE WHEN p_store_id IS NULL THEN a.store_id IS NULL
+               ELSE (a.store_id IS NULL OR a.store_id = p_store_id)
+                    AND EXISTS (SELECT 1 FROM employee_store_access s
+                                WHERE s.employee_id = p_employee_id AND s.store_id = p_store_id AND s.revoked_at IS NULL
+                                  AND (s.valid_from IS NULL OR s.valid_from <= now())
+                                  AND (s.valid_to IS NULL OR s.valid_to > now()))
+          END)
+$$;
+
+
+--
+-- Name: FUNCTION employee_holds_permission(p_employee_id uuid, p_store_id uuid, p_permission text); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.employee_holds_permission(p_employee_id uuid, p_store_id uuid, p_permission text) IS 'Cites: AC-01, AC-02, EM-13, MS-11, MS-12, BI-14. Whether an employee''s grants give a permission in a store: a live assignment, of a live role holding the exact key, in that store or organization-wide, intersected with live store access. An organization-level action (no store) needs an organization-wide assignment (OQ-025). Default deny. The one authorization gate also checks the employee''s status and session on every request (architecture s7.5, s8.2).';
+
+
+--
 -- Name: enforce_state_transition(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -1402,6 +1476,30 @@ $$;
 --
 
 COMMENT ON FUNCTION public.forbid_store_deactivation_with_stock() IS 'Cites: ORG-05, RT-445, RT-508, EC-39. A store is not deactivated while its own locations hold stock.';
+
+
+--
+-- Name: forbid_termination_with_open_shift(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.forbid_termination_with_open_shift() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  IF NEW.status = 'Terminated' AND OLD.status IS DISTINCT FROM 'Terminated'
+     AND EXISTS (SELECT 1 FROM cash_shift WHERE opened_by = NEW.id AND status <> 'Closed') THEN
+    RAISE EXCEPTION 'employee % has a till shift that is not closed; close it first', NEW.id USING ERRCODE = 'SS057';
+  END IF;
+  RETURN NEW;
+END
+$$;
+
+
+--
+-- Name: FUNCTION forbid_termination_with_open_shift(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.forbid_termination_with_open_shift() IS 'Cites: EM-10, BI-39, CD-01. Termination is refused while the employee has a till shift that is not closed.';
 
 
 --
@@ -1845,6 +1943,60 @@ COMMENT ON FUNCTION public.record_deactivation() IS 'Cites: BI-40, RT-506, RT-50
 
 
 --
+-- Name: record_revocation(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.record_revocation() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  IF OLD.revoked_by IS NOT NULL THEN
+    IF NEW.revoked_by IS DISTINCT FROM OLD.revoked_by OR NEW.revoked_at IS DISTINCT FROM OLD.revoked_at THEN
+      RAISE EXCEPTION '% % is already revoked; who revoked it and when cannot be changed', TG_TABLE_NAME, OLD.id
+        USING ERRCODE = 'SS001';
+    END IF;
+  ELSIF NEW.revoked_by IS NOT NULL THEN
+    NEW.revoked_at := now();
+  END IF;
+  RETURN NEW;
+END
+$$;
+
+
+--
+-- Name: FUNCTION record_revocation(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.record_revocation() IS 'Cites: BI-40, PC-01, EM-15, RT-353. A grant is revoked once, recording who and when with server time; the grant row stays as history, so the permission set as it stood at any time can be rebuilt.';
+
+
+--
+-- Name: record_session_end(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.record_session_end() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  IF OLD.end_reason IS NOT NULL THEN
+    RAISE EXCEPTION 'session % has ended; how and when cannot be changed', OLD.id USING ERRCODE = 'SS001';
+  END IF;
+  IF NEW.end_reason IS NOT NULL THEN
+    NEW.ended_at := now();
+  END IF;
+  RETURN NEW;
+END
+$$;
+
+
+--
+-- Name: FUNCTION record_session_end(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.record_session_end() IS 'Cites: AU-12a, SM-03, RT-353. A session ends once, stamped with server time.';
+
+
+--
 -- Name: refund_before_write(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -2197,6 +2349,29 @@ COMMENT ON FUNCTION public.stamp_changed_at() IS 'Cites: RT-353, PY-05. Stamps a
 
 
 --
+-- Name: stamp_password_change(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.stamp_password_change() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  IF NEW.password_hash IS DISTINCT FROM OLD.password_hash THEN
+    NEW.password_changed_at := now();
+  END IF;
+  RETURN NEW;
+END
+$$;
+
+
+--
+-- Name: FUNCTION stamp_password_change(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.stamp_password_change() IS 'Cites: EM-04, RT-353. Records when a credential last changed, with server time.';
+
+
+--
 -- Name: stamp_status_change(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -2360,8 +2535,8 @@ BEGIN
                            reason_code_id, before, after)
   VALUES (v_org, v_store, p_event_type, p_entity_type, (p_new ->> 'id')::uuid, v_actor,
           audit_setting('effective_actor_id')::uuid, audit_setting('role'), v_source, audit_setting('terminal_id')::uuid,
-          v_corr, audit_setting('client_operation_id')::uuid, audit_setting('ip_address')::inet, v_reason, v_before,
-          v_after);
+          v_corr, audit_setting('client_operation_id')::uuid, audit_setting('ip_address')::inet, v_reason,
+          audit_redact(p_entity_type, v_before), audit_redact(p_entity_type, v_after));
 END
 $$;
 
@@ -2370,7 +2545,7 @@ $$;
 -- Name: FUNCTION write_audit_event(p_event_type text, p_entity_type text, p_old jsonb, p_new jsonb, p_needs_reason boolean); Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON FUNCTION public.write_audit_event(p_event_type text, p_entity_type text, p_old jsonb, p_new jsonb, p_needs_reason boolean) IS 'Cites: AU-01, AU-04, AU-05, AU-06, AU-07, AU-08, AU-10, RT-290, RT-293, RT-464. Writes one event in the transaction of the change: the actor, source and correlation id from the authenticated context, refusing the change without them; the store and organization from the entity; the reason from the entity or the context, refusing a transition that needs one without it; the whole created row, or only the fields that changed.';
+COMMENT ON FUNCTION public.write_audit_event(p_event_type text, p_entity_type text, p_old jsonb, p_new jsonb, p_needs_reason boolean) IS 'Cites: AU-01, AU-04, AU-05, AU-06, AU-07, AU-08, AU-09, AU-10, RT-290, RT-293, RT-295, RT-464. Writes one event in the transaction of the change: the actor, source and correlation id from the authenticated context, refusing the change without them; the store and organization from the entity; the reason from the entity or the context, refusing a transition that needs one without it; the whole created row, or only the fields that changed, with personal fields redacted at write time.';
 
 
 --
@@ -2449,6 +2624,23 @@ COMMENT ON TABLE public.audit_event_type IS 'Cites: AU-11, AU-12, AU-12b, AU-12c
 --
 
 COMMENT ON CONSTRAINT ck_audit_event_type_origin ON public.audit_event_type IS 'Cites: AU-01, AU-05. Whether the database writes the event itself, in the transaction of the change, or the application records it.';
+
+
+--
+-- Name: audit_redacted_field; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.audit_redacted_field (
+    entity_type public.nonblank_text NOT NULL,
+    field public.nonblank_text NOT NULL
+);
+
+
+--
+-- Name: TABLE audit_redacted_field; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.audit_redacted_field IS 'Cites: AU-09, CU-33, CU-35, RT-295. The personal fields of each entity that an audit event records only as changed, never with their value.';
 
 
 --
@@ -2930,6 +3122,119 @@ COMMENT ON TABLE public.document_type IS 'Cites: BI-42, RT-479, ADR-21. The clos
 
 
 --
+-- Name: employee; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.employee (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    organization_id uuid NOT NULL,
+    employee_number public.nonblank_text NOT NULL,
+    first_name public.nonblank_text NOT NULL,
+    last_name public.nonblank_text NOT NULL,
+    preferred_name public.nonblank_text,
+    email public.nonblank_text,
+    phone public.nonblank_text,
+    start_date date,
+    employment_type public.nonblank_text,
+    home_store_id uuid,
+    department public.nonblank_text,
+    "position" public.nonblank_text,
+    status text DEFAULT 'Active'::text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    status_changed_at timestamp with time zone DEFAULT now() NOT NULL,
+    status_changed_by uuid NOT NULL,
+    CONSTRAINT ck_employee_status CHECK ((status = ANY (ARRAY['Active'::text, 'OnLeave'::text, 'Suspended'::text, 'Terminated'::text, 'Archived'::text])))
+);
+
+
+--
+-- Name: TABLE employee; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.employee IS 'Cites: EM-01, EM-05, EM-06, EM-08, EM-11, SM-48, SM-48a, RT-009. A person the organization employs, with or without a login. Kept for ever once created: documents name their employees, and a terminated employee stays answerable for what they did (never a delete).';
+
+
+--
+-- Name: CONSTRAINT ck_employee_status ON employee; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_employee_status ON public.employee IS 'Cites: SM-48a, EM-09. The employee statuses of employee-domain s3, verbatim.';
+
+
+--
+-- Name: employee_role_assignment; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.employee_role_assignment (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    employee_id uuid NOT NULL,
+    role_id uuid NOT NULL,
+    organization_id uuid NOT NULL,
+    store_id uuid,
+    assigned_at timestamp with time zone DEFAULT now() NOT NULL,
+    assigned_by uuid NOT NULL,
+    revoked_at timestamp with time zone,
+    revoked_by uuid,
+    CONSTRAINT ck_employee_role_assignment_revoked CHECK (((revoked_at IS NULL) = (revoked_by IS NULL)))
+);
+
+
+--
+-- Name: TABLE employee_role_assignment; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.employee_role_assignment IS 'Cites: MS-11, MS-12, EM-13, RT-020. Which role an employee holds, and where: organization-wide (no store) or in one store. An organization-wide assignment broadens the stores a role applies to and never bypasses store access or default deny.';
+
+
+--
+-- Name: CONSTRAINT ck_employee_role_assignment_revoked ON employee_role_assignment; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_employee_role_assignment_revoked ON public.employee_role_assignment IS 'Cites: RT-020, SM-03. A removal records who and when together.';
+
+
+--
+-- Name: employee_store_access; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.employee_store_access (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    employee_id uuid NOT NULL,
+    store_id uuid NOT NULL,
+    organization_id uuid NOT NULL,
+    valid_from timestamp with time zone,
+    valid_to timestamp with time zone,
+    granted_at timestamp with time zone DEFAULT now() NOT NULL,
+    granted_by uuid NOT NULL,
+    revoked_at timestamp with time zone,
+    revoked_by uuid,
+    CONSTRAINT ck_employee_store_access_revoked CHECK (((revoked_at IS NULL) = (revoked_by IS NULL))),
+    CONSTRAINT ck_employee_store_access_window CHECK (((valid_to IS NULL) OR (valid_from IS NULL) OR (valid_to > valid_from)))
+);
+
+
+--
+-- Name: TABLE employee_store_access; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.employee_store_access IS 'Cites: EM-12, EM-13, EM-14, EM-15, MS-03, RT-002. An employee''s access to a store, with optional dates. Access and a role are separate facts, and a role without access grants nothing. Revocation records a fact and keeps the row, so the scope before and after is recoverable (not yet an audit event: OQ-025).';
+
+
+--
+-- Name: CONSTRAINT ck_employee_store_access_revoked ON employee_store_access; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_employee_store_access_revoked ON public.employee_store_access IS 'Cites: EM-15, SM-03. A revocation records who and when together.';
+
+
+--
+-- Name: CONSTRAINT ck_employee_store_access_window ON employee_store_access; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_employee_store_access_window ON public.employee_store_access IS 'Cites: EM-12. The optional access window ends after it starts.';
+
+
+--
 -- Name: inventory_movement; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3227,6 +3532,31 @@ COMMENT ON TABLE public.payment_method IS 'Cites: PY-03, PY-04, ADR-09. A typed 
 --
 
 COMMENT ON CONSTRAINT ck_payment_method_type ON public.payment_method IS 'Cites: PY-03, ADR-09. The method types v1 settles: cash in the drawer, and card through the provider abstraction.';
+
+
+--
+-- Name: permission; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.permission (
+    key public.nonblank_text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_permission_key CHECK (((key)::text ~ '^[A-Z][A-Za-z]*(\.[A-Z][A-Za-z]*)+$'::text))
+);
+
+
+--
+-- Name: TABLE permission; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.permission IS 'Cites: AC-02, D-01, RT-009. The permission catalogue of actors-and-roles s2: 117 opaque dotted keys, matched only for equality. A key is added only by a migration.';
+
+
+--
+-- Name: CONSTRAINT ck_permission_key ON permission; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_permission_key ON public.permission IS 'Cites: AC-02. A key is a dotted name of capitalised parts; there are no wildcards.';
 
 
 --
@@ -3631,6 +3961,67 @@ COMMENT ON CONSTRAINT ck_refund_line_amounts ON public.refund_line IS 'Cites: RR
 
 
 --
+-- Name: role; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.role (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    organization_id uuid NOT NULL,
+    name public.nonblank_text NOT NULL,
+    description public.nonblank_text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    archived_at timestamp with time zone,
+    archived_by uuid,
+    CONSTRAINT ck_role_archival CHECK (((archived_at IS NULL) = (archived_by IS NULL)))
+);
+
+
+--
+-- Name: TABLE role; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.role IS 'Cites: AC-01, AC-04, EM-06, RT-009. A named permission set of the organization. Custom roles are permitted; templates are a starting point (actors-and-roles s4, OQ-025), and there are no nested roles.';
+
+
+--
+-- Name: CONSTRAINT ck_role_archival ON role; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_role_archival ON public.role IS 'Cites: BI-40. An archived role records who and when together; a role is never deleted.';
+
+
+--
+-- Name: role_permission; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.role_permission (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    role_id uuid NOT NULL,
+    organization_id uuid NOT NULL,
+    permission_key text NOT NULL,
+    granted_at timestamp with time zone DEFAULT now() NOT NULL,
+    granted_by uuid NOT NULL,
+    revoked_at timestamp with time zone,
+    revoked_by uuid,
+    CONSTRAINT ck_role_permission_revoked CHECK (((revoked_at IS NULL) = (revoked_by IS NULL)))
+);
+
+
+--
+-- Name: TABLE role_permission; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.role_permission IS 'Cites: AC-02, PC-01, D-01, RT-020. A permission granted to a role: an exact catalogue key, never a pattern. Removing it records a revocation and keeps the row, so a role''s before and after permission sets are always recoverable.';
+
+
+--
+-- Name: CONSTRAINT ck_role_permission_revoked ON role_permission; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_role_permission_revoked ON public.role_permission IS 'Cites: PC-01, SM-03. A revocation records who and when together.';
+
+
+--
 -- Name: sale; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3899,7 +4290,10 @@ CREATE TABLE public.state_machine_edge (
     event public.nonblank_text NOT NULL,
     audit_event_type text,
     requires_reason boolean DEFAULT false NOT NULL,
-    CONSTRAINT ck_state_machine_edge_not_loop CHECK (((from_state)::text <> (to_state)::text))
+    permission_rule text NOT NULL,
+    permission_key text,
+    CONSTRAINT ck_state_machine_edge_not_loop CHECK (((from_state)::text <> (to_state)::text)),
+    CONSTRAINT ck_state_machine_edge_permission CHECK (((permission_rule = ANY (ARRAY['Key'::text, 'System'::text, 'OpenDecision'::text])) AND ((permission_rule = 'Key'::text) = (permission_key IS NOT NULL))))
 );
 
 
@@ -3918,6 +4312,13 @@ COMMENT ON CONSTRAINT ck_state_machine_edge_not_loop ON public.state_machine_edg
 
 
 --
+-- Name: CONSTRAINT ck_state_machine_edge_permission ON state_machine_edge; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_state_machine_edge_permission ON public.state_machine_edge IS 'Cites: SM-02d, D-01, AC-01. What authorizes an edge (the s22 Permission column): a catalogue key; the system (a provider, telemetry); or OPEN DECISION, which the one authorization gate refuses until the owner names a key (architecture s8.4).';
+
+
+--
 -- Name: state_machine_state; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3925,7 +4326,10 @@ CREATE TABLE public.state_machine_state (
     machine public.nonblank_text NOT NULL,
     state public.nonblank_text NOT NULL,
     is_initial boolean NOT NULL,
-    creation_audit_event_type text
+    creation_audit_event_type text,
+    creation_permission_rule text,
+    creation_permission_key text,
+    CONSTRAINT ck_state_machine_state_permission CHECK (((creation_permission_rule = ANY (ARRAY['Key'::text, 'System'::text, 'OpenDecision'::text])) AND ((creation_permission_rule = 'Key'::text) = (creation_permission_key IS NOT NULL))))
 );
 
 
@@ -3934,6 +4338,13 @@ CREATE TABLE public.state_machine_state (
 --
 
 COMMENT ON TABLE public.state_machine_state IS 'Cites: SM-07, ADR-19, ADR-21. The closed state set of each lifecycle machine; a state is added only by a reviewed migration.';
+
+
+--
+-- Name: CONSTRAINT ck_state_machine_state_permission ON state_machine_state; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_state_machine_state_permission ON public.state_machine_state IS 'Cites: SM-02d, D-01. What authorizes a creation, where s22 contracts one: a catalogue key, the system, or an undecided key, which refuses.';
 
 
 --
@@ -4450,6 +4861,93 @@ COMMENT ON CONSTRAINT ck_unit_scale ON public.unit IS 'Cites: ADR-06. Quantities
 
 
 --
+-- Name: user_account; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.user_account (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    organization_id uuid NOT NULL,
+    employee_id uuid NOT NULL,
+    username public.nonblank_text NOT NULL,
+    password_hash text NOT NULL,
+    password_changed_at timestamp with time zone DEFAULT now() NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_user_account_password_hash CHECK (((password_hash ~ '^\$argon2id\$'::text) OR (password_hash ~ '^\$2[aby]\$(1[2-9]|[23][0-9])\$'::text)))
+);
+
+
+--
+-- Name: TABLE user_account; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.user_account IS 'Cites: EM-01, EM-02, EM-04, RT-293. A login credential, optional for an employee and belonging to exactly one. The password is kept only as a slow salted hash made by the application.';
+
+
+--
+-- Name: CONSTRAINT ck_user_account_password_hash ON user_account; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_user_account_password_hash ON public.user_account IS 'Cites: EM-04, ADR-12. Only an Argon2id hash, or a bcrypt hash of cost 12 or more, is stored (architecture s7.3); a password is never stored in a form that could be shown.';
+
+
+--
+-- Name: user_session; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.user_session (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    organization_id uuid NOT NULL,
+    user_account_id uuid NOT NULL,
+    employee_id uuid NOT NULL,
+    token_hash bytea NOT NULL,
+    pos_terminal_id uuid,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    ended_at timestamp with time zone,
+    end_reason text,
+    CONSTRAINT ck_user_session_end CHECK (((ended_at IS NULL) = (end_reason IS NULL))),
+    CONSTRAINT ck_user_session_end_reason CHECK ((end_reason = ANY (ARRAY['Logout'::text, 'Expired'::text, 'Revoked'::text, 'Rotated'::text]))),
+    CONSTRAINT ck_user_session_expiry CHECK ((expires_at > created_at)),
+    CONSTRAINT ck_user_session_token CHECK ((octet_length(token_hash) = 32))
+);
+
+
+--
+-- Name: TABLE user_session; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.user_session IS 'Cites: ADR-12, AU-12a, EM-16, RT-293. A server-held session (architecture s7.1): only a hash of its opaque token is kept, so a copy of the database cannot be replayed as a login. Ended once, with the cause, and kept.';
+
+
+--
+-- Name: CONSTRAINT ck_user_session_end ON user_session; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_user_session_end ON public.user_session IS 'Cites: AU-12a, SM-03. An end records when and why together.';
+
+
+--
+-- Name: CONSTRAINT ck_user_session_end_reason ON user_session; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_user_session_end_reason ON public.user_session IS 'Cites: AU-12a, EM-16, SM-47. A sign-out is Logout; an expiry, a revocation (suspension, access removed) or a rotation on a privilege change are session ends with their cause (architecture s7.1).';
+
+
+--
+-- Name: CONSTRAINT ck_user_session_expiry ON user_session; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_user_session_expiry ON public.user_session IS 'Cites: ADR-12. A session expires after it starts.';
+
+
+--
+-- Name: CONSTRAINT ck_user_session_token ON user_session; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_user_session_token ON public.user_session IS 'Cites: ADR-12. The token is kept as its SHA-256 hash, never itself.';
+
+
+--
 -- Name: variant_price; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -4599,6 +5097,14 @@ ALTER TABLE ONLY public.audit_event_type
 
 
 --
+-- Name: audit_redacted_field pk_audit_redacted_field; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.audit_redacted_field
+    ADD CONSTRAINT pk_audit_redacted_field PRIMARY KEY (entity_type, field);
+
+
+--
 -- Name: brand pk_brand; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4695,6 +5201,30 @@ ALTER TABLE ONLY public.document_type
 
 
 --
+-- Name: employee pk_employee; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.employee
+    ADD CONSTRAINT pk_employee PRIMARY KEY (id);
+
+
+--
+-- Name: employee_role_assignment pk_employee_role_assignment; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.employee_role_assignment
+    ADD CONSTRAINT pk_employee_role_assignment PRIMARY KEY (id);
+
+
+--
+-- Name: employee_store_access pk_employee_store_access; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.employee_store_access
+    ADD CONSTRAINT pk_employee_store_access PRIMARY KEY (id);
+
+
+--
 -- Name: inventory_movement pk_inventory_movement; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4740,6 +5270,14 @@ ALTER TABLE ONLY public.payment
 
 ALTER TABLE ONLY public.payment_method
     ADD CONSTRAINT pk_payment_method PRIMARY KEY (id);
+
+
+--
+-- Name: permission pk_permission; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.permission
+    ADD CONSTRAINT pk_permission PRIMARY KEY (key);
 
 
 --
@@ -4796,6 +5334,22 @@ ALTER TABLE ONLY public.refund
 
 ALTER TABLE ONLY public.refund_line
     ADD CONSTRAINT pk_refund_line PRIMARY KEY (id);
+
+
+--
+-- Name: role pk_role; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.role
+    ADD CONSTRAINT pk_role PRIMARY KEY (id);
+
+
+--
+-- Name: role_permission pk_role_permission; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.role_permission
+    ADD CONSTRAINT pk_role_permission PRIMARY KEY (id);
 
 
 --
@@ -4932,6 +5486,22 @@ ALTER TABLE ONLY public.tax_rate
 
 ALTER TABLE ONLY public.unit
     ADD CONSTRAINT pk_unit PRIMARY KEY (id);
+
+
+--
+-- Name: user_account pk_user_account; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_account
+    ADD CONSTRAINT pk_user_account PRIMARY KEY (id);
+
+
+--
+-- Name: user_session pk_user_session; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_session
+    ADD CONSTRAINT pk_user_session PRIMARY KEY (id);
 
 
 --
@@ -5282,6 +5852,36 @@ COMMENT ON CONSTRAINT uq_customer_return_operation ON public.customer_return IS 
 
 
 --
+-- Name: employee uq_employee_id_organization; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.employee
+    ADD CONSTRAINT uq_employee_id_organization UNIQUE (id, organization_id);
+
+
+--
+-- Name: CONSTRAINT uq_employee_id_organization ON employee; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_employee_id_organization ON public.employee IS 'Cites: BI-14. Lets an account, assignment or grant prove, by foreign key, that its employee is of its organization.';
+
+
+--
+-- Name: employee uq_employee_number; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.employee
+    ADD CONSTRAINT uq_employee_number UNIQUE (organization_id, employee_number);
+
+
+--
+-- Name: CONSTRAINT uq_employee_number ON employee; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_employee_number ON public.employee IS 'Cites: EM-05. The employee number is unique per organization (employee-domain s2).';
+
+
+--
 -- Name: inventory_movement uq_inventory_movement_balance_sequence; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5477,6 +6077,21 @@ COMMENT ON CONSTRAINT uq_pos_terminal_code ON public.pos_terminal IS 'Cites: PT-
 
 
 --
+-- Name: pos_terminal uq_pos_terminal_id_organization; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.pos_terminal
+    ADD CONSTRAINT uq_pos_terminal_id_organization UNIQUE (id, organization_id);
+
+
+--
+-- Name: CONSTRAINT uq_pos_terminal_id_organization ON pos_terminal; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_pos_terminal_id_organization ON public.pos_terminal IS 'Cites: BI-14. Lets a till session prove, by foreign key, that its terminal is of its organization.';
+
+
+--
 -- Name: pos_terminal uq_pos_terminal_id_store; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5639,6 +6254,36 @@ ALTER TABLE ONLY public.refund
 --
 
 COMMENT ON CONSTRAINT uq_refund_provider_reference ON public.refund IS 'Cites: PY-15, RT-480. A provider refund transaction is recorded once.';
+
+
+--
+-- Name: role uq_role_id_organization; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.role
+    ADD CONSTRAINT uq_role_id_organization UNIQUE (id, organization_id);
+
+
+--
+-- Name: CONSTRAINT uq_role_id_organization ON role; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_role_id_organization ON public.role IS 'Cites: BI-14. Lets a grant or assignment prove, by foreign key, that its role is of its organization.';
+
+
+--
+-- Name: role uq_role_name; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.role
+    ADD CONSTRAINT uq_role_name UNIQUE (organization_id, name);
+
+
+--
+-- Name: CONSTRAINT uq_role_name ON role; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_role_name ON public.role IS 'Cites: AC-04. A role name identifies one role in its organization.';
 
 
 --
@@ -6107,6 +6752,51 @@ COMMENT ON CONSTRAINT uq_unit_id_organization ON public.unit IS 'Cites: RT-001, 
 
 
 --
+-- Name: user_account uq_user_account_employee; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_account
+    ADD CONSTRAINT uq_user_account_employee UNIQUE (employee_id);
+
+
+--
+-- Name: CONSTRAINT uq_user_account_employee ON user_account; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_user_account_employee ON public.user_account IS 'Cites: EM-01, EM-02. At most one login per employee.';
+
+
+--
+-- Name: user_account uq_user_account_identity; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_account
+    ADD CONSTRAINT uq_user_account_identity UNIQUE (id, employee_id, organization_id);
+
+
+--
+-- Name: CONSTRAINT uq_user_account_identity ON user_account; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_user_account_identity ON public.user_account IS 'Cites: EM-02. Lets a session prove, by foreign key, whose login it is.';
+
+
+--
+-- Name: user_session uq_user_session_token; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_session
+    ADD CONSTRAINT uq_user_session_token UNIQUE (token_hash);
+
+
+--
+-- Name: CONSTRAINT uq_user_session_token ON user_session; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_user_session_token ON public.user_session IS 'Cites: ADR-12. One session per token.';
+
+
+--
 -- Name: variant_price uq_variant_price_effective; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -6349,6 +7039,20 @@ COMMENT ON INDEX public.ix_storage_location_attribution_store IS 'Cites: BI-14, 
 
 
 --
+-- Name: ix_user_session_employee_live; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_user_session_employee_live ON public.user_session USING btree (employee_id) WHERE (ended_at IS NULL);
+
+
+--
+-- Name: INDEX ix_user_session_employee_live; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.ix_user_session_employee_live IS 'Cites: EM-16, SM-47. Finds an employee''s live sessions to end them at once.';
+
+
+--
 -- Name: ix_warehouse_store; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -6433,6 +7137,34 @@ COMMENT ON INDEX public.uq_customer_one_walk_in IS 'Cites: CU-01. One shared wal
 
 
 --
+-- Name: uq_employee_role_assignment_live; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_employee_role_assignment_live ON public.employee_role_assignment USING btree (employee_id, role_id, store_id) NULLS NOT DISTINCT WHERE (revoked_at IS NULL);
+
+
+--
+-- Name: INDEX uq_employee_role_assignment_live; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.uq_employee_role_assignment_live IS 'Cites: MS-11. An employee holds a role in a given scope at most once at a time.';
+
+
+--
+-- Name: uq_employee_store_access_live; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_employee_store_access_live ON public.employee_store_access USING btree (employee_id, store_id) WHERE (revoked_at IS NULL);
+
+
+--
+-- Name: INDEX uq_employee_store_access_live; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.uq_employee_store_access_live IS 'Cites: EM-12. One live access per employee per store.';
+
+
+--
 -- Name: uq_inventory_movement_adjustment_line_once; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -6489,6 +7221,20 @@ COMMENT ON INDEX public.uq_product_barcode_one_primary IS 'Cites: PR-08. At most
 
 
 --
+-- Name: uq_role_permission_live; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_role_permission_live ON public.role_permission USING btree (role_id, permission_key) WHERE (revoked_at IS NULL);
+
+
+--
+-- Name: INDEX uq_role_permission_live; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.uq_role_permission_live IS 'Cites: AC-02. A role holds a key at most once at a time.';
+
+
+--
 -- Name: uq_storage_location_one_default; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -6500,6 +7246,20 @@ CREATE UNIQUE INDEX uq_storage_location_one_default ON public.storage_location U
 --
 
 COMMENT ON INDEX public.uq_storage_location_one_default IS 'Cites: MS-17, RT-057. At most one Default location per warehouse (organization-model s5: one per warehouse).';
+
+
+--
+-- Name: uq_user_account_username; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_user_account_username ON public.user_account USING btree (organization_id, lower((username)::text));
+
+
+--
+-- Name: INDEX uq_user_account_username; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.uq_user_account_username IS 'Cites: EM-02. A username identifies one login in its organization, whatever its case (OQ-025).';
 
 
 --
@@ -6850,6 +7610,104 @@ CREATE TRIGGER tg_document_number_sequence_forward BEFORE UPDATE ON public.docum
 --
 
 COMMENT ON TRIGGER tg_document_number_sequence_forward ON public.document_number_sequence IS 'Cites: BI-42. Document-number counters only move forward.';
+
+
+--
+-- Name: employee tg_employee_audit; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_employee_audit AFTER INSERT OR UPDATE OF status ON public.employee FOR EACH ROW EXECUTE FUNCTION public.audit_state_transition('Employee');
+
+
+--
+-- Name: TRIGGER tg_employee_audit ON employee; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_employee_audit ON public.employee IS 'Cites: D-06, EM-10, SM-50. Employee.StateChange and Employee.Terminate (s22.9).';
+
+
+--
+-- Name: employee_role_assignment tg_employee_role_assignment_audit; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_employee_role_assignment_audit AFTER INSERT OR UPDATE OF revoked_by ON public.employee_role_assignment FOR EACH ROW EXECUTE FUNCTION public.audit_role_assignment();
+
+
+--
+-- Name: TRIGGER tg_employee_role_assignment_audit ON employee_role_assignment; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_employee_role_assignment_audit ON public.employee_role_assignment IS 'Cites: AU-03, RT-020. Every permission change of an employee is audited.';
+
+
+--
+-- Name: employee_role_assignment tg_employee_role_assignment_revocation; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_employee_role_assignment_revocation BEFORE UPDATE ON public.employee_role_assignment FOR EACH ROW EXECUTE FUNCTION public.record_revocation();
+
+
+--
+-- Name: TRIGGER tg_employee_role_assignment_revocation ON employee_role_assignment; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_employee_role_assignment_revocation ON public.employee_role_assignment IS 'Cites: RT-020, BI-40. A removal is recorded once.';
+
+
+--
+-- Name: employee tg_employee_state_machine; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_employee_state_machine BEFORE INSERT OR UPDATE OF status ON public.employee FOR EACH ROW EXECUTE FUNCTION public.enforce_state_transition('Employee', 'status');
+
+
+--
+-- Name: TRIGGER tg_employee_state_machine ON employee; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_employee_state_machine ON public.employee IS 'Cites: SM-48a, SM-02, EM-08. An employee is created Active and moves only along the edges of state-machines s22.9; Terminated leads only to Archived.';
+
+
+--
+-- Name: employee tg_employee_status_stamp; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_employee_status_stamp BEFORE UPDATE OF status ON public.employee FOR EACH ROW EXECUTE FUNCTION public.stamp_status_change();
+
+
+--
+-- Name: TRIGGER tg_employee_status_stamp ON employee; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_employee_status_stamp ON public.employee IS 'Cites: SM-03, RT-353. Server time for each status change.';
+
+
+--
+-- Name: employee_store_access tg_employee_store_access_revocation; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_employee_store_access_revocation BEFORE UPDATE ON public.employee_store_access FOR EACH ROW EXECUTE FUNCTION public.record_revocation();
+
+
+--
+-- Name: TRIGGER tg_employee_store_access_revocation ON employee_store_access; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_employee_store_access_revocation ON public.employee_store_access IS 'Cites: EM-15, BI-40. A revocation is recorded once.';
+
+
+--
+-- Name: employee tg_employee_termination; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_employee_termination BEFORE UPDATE OF status ON public.employee FOR EACH ROW EXECUTE FUNCTION public.forbid_termination_with_open_shift();
+
+
+--
+-- Name: TRIGGER tg_employee_termination ON employee; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_employee_termination ON public.employee IS 'Cites: EM-10. No termination with an open drawer.';
 
 
 --
@@ -7343,6 +8201,34 @@ COMMENT ON TRIGGER tg_refund_whole ON public.refund IS 'Cites: RR-43, PY-27. Che
 
 
 --
+-- Name: role tg_role_archival; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_role_archival BEFORE UPDATE ON public.role FOR EACH ROW EXECUTE FUNCTION public.record_archival();
+
+
+--
+-- Name: TRIGGER tg_role_archival ON role; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_role_archival ON public.role IS 'Cites: BI-40. A role''s archival is recorded once, with server time.';
+
+
+--
+-- Name: role_permission tg_role_permission_revocation; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_role_permission_revocation BEFORE UPDATE ON public.role_permission FOR EACH ROW EXECUTE FUNCTION public.record_revocation();
+
+
+--
+-- Name: TRIGGER tg_role_permission_revocation ON role_permission; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_role_permission_revocation ON public.role_permission IS 'Cites: PC-01, BI-40. A revocation is recorded once.';
+
+
+--
 -- Name: sale tg_sale_audit; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -7595,6 +8481,34 @@ COMMENT ON TRIGGER tg_unit_quantity_kind ON public.unit IS 'Cites: PR-14, RT-491
 
 
 --
+-- Name: user_account tg_user_account_password; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_user_account_password BEFORE UPDATE OF password_hash ON public.user_account FOR EACH ROW EXECUTE FUNCTION public.stamp_password_change();
+
+
+--
+-- Name: TRIGGER tg_user_account_password ON user_account; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_user_account_password ON public.user_account IS 'Cites: EM-04. Server time for each password change.';
+
+
+--
+-- Name: user_session tg_user_session_end; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_user_session_end BEFORE UPDATE ON public.user_session FOR EACH ROW EXECUTE FUNCTION public.record_session_end();
+
+
+--
+-- Name: TRIGGER tg_user_session_end ON user_session; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_user_session_end ON public.user_session IS 'Cites: AU-12a. The end of a session is written once.';
+
+
+--
 -- Name: variant_price tg_variant_price_audit; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -7773,6 +8687,21 @@ COMMENT ON CONSTRAINT fk_cash_drawer_terminal ON public.cash_drawer IS 'Cites: C
 
 
 --
+-- Name: cash_shift fk_cash_shift_closed_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cash_shift
+    ADD CONSTRAINT fk_cash_shift_closed_by FOREIGN KEY (closed_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT fk_cash_shift_closed_by ON cash_shift; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_cash_shift_closed_by ON public.cash_shift IS 'Cites: BI-23, EM-11, AU-05. Who did it is an employee of record; employees are never deleted, so the reference holds.';
+
+
+--
 -- Name: cash_shift fk_cash_shift_drawer; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7785,6 +8714,51 @@ ALTER TABLE ONLY public.cash_shift
 --
 
 COMMENT ON CONSTRAINT fk_cash_shift_drawer ON public.cash_shift IS 'Cites: CD-05, RT-005, RT-122. A cash shift needs a drawer, and the drawer belongs to the shift''s terminal and store. A terminal without a drawer has no cash shift.';
+
+
+--
+-- Name: cash_shift fk_cash_shift_opened_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cash_shift
+    ADD CONSTRAINT fk_cash_shift_opened_by FOREIGN KEY (opened_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT fk_cash_shift_opened_by ON cash_shift; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_cash_shift_opened_by ON public.cash_shift IS 'Cites: BI-23, EM-11, AU-05. Who did it is an employee of record; employees are never deleted, so the reference holds.';
+
+
+--
+-- Name: cash_shift fk_cash_shift_status_changed_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cash_shift
+    ADD CONSTRAINT fk_cash_shift_status_changed_by FOREIGN KEY (status_changed_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT fk_cash_shift_status_changed_by ON cash_shift; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_cash_shift_status_changed_by ON public.cash_shift IS 'Cites: BI-23, EM-11, AU-05. Who did it is an employee of record; employees are never deleted, so the reference holds.';
+
+
+--
+-- Name: cash_transaction fk_cash_transaction_created_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cash_transaction
+    ADD CONSTRAINT fk_cash_transaction_created_by FOREIGN KEY (created_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT fk_cash_transaction_created_by ON cash_transaction; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_cash_transaction_created_by ON public.cash_transaction IS 'Cites: BI-23, EM-11, AU-05. Who did it is an employee of record; employees are never deleted, so the reference holds.';
 
 
 --
@@ -7848,6 +8822,21 @@ COMMENT ON CONSTRAINT fk_cash_transaction_shift ON public.cash_transaction IS 'C
 
 
 --
+-- Name: category fk_category_archived_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.category
+    ADD CONSTRAINT fk_category_archived_by FOREIGN KEY (archived_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT fk_category_archived_by ON category; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_category_archived_by ON public.category IS 'Cites: BI-23, EM-11, AU-05. Who did it is an employee of record; employees are never deleted, so the reference holds.';
+
+
+--
 -- Name: category fk_category_organization; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7875,6 +8864,21 @@ ALTER TABLE ONLY public.category
 --
 
 COMMENT ON CONSTRAINT fk_category_parent ON public.category IS 'Cites: PR-04, RT-026. At most one parent, in the same organization.';
+
+
+--
+-- Name: checkout fk_checkout_created_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.checkout
+    ADD CONSTRAINT fk_checkout_created_by FOREIGN KEY (created_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT fk_checkout_created_by ON checkout; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_checkout_created_by ON public.checkout IS 'Cites: BI-23, EM-11, AU-05. Who did it is an employee of record; employees are never deleted, so the reference holds.';
 
 
 --
@@ -7938,6 +8942,36 @@ COMMENT ON CONSTRAINT fk_customer_return_cancel_reason ON public.customer_return
 
 
 --
+-- Name: customer_return fk_customer_return_created_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.customer_return
+    ADD CONSTRAINT fk_customer_return_created_by FOREIGN KEY (created_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT fk_customer_return_created_by ON customer_return; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_customer_return_created_by ON public.customer_return IS 'Cites: BI-23, EM-11, AU-05. Who did it is an employee of record; employees are never deleted, so the reference holds.';
+
+
+--
+-- Name: customer_return fk_customer_return_late_approved_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.customer_return
+    ADD CONSTRAINT fk_customer_return_late_approved_by FOREIGN KEY (late_approved_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT fk_customer_return_late_approved_by ON customer_return; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_customer_return_late_approved_by ON public.customer_return IS 'Cites: BI-23, EM-11, AU-05. Who did it is an employee of record; employees are never deleted, so the reference holds.';
+
+
+--
 -- Name: customer_return fk_customer_return_late_reason; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7998,6 +9032,21 @@ COMMENT ON CONSTRAINT fk_customer_return_line_sale_line ON public.customer_retur
 
 
 --
+-- Name: customer_return fk_customer_return_posted_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.customer_return
+    ADD CONSTRAINT fk_customer_return_posted_by FOREIGN KEY (posted_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT fk_customer_return_posted_by ON customer_return; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_customer_return_posted_by ON public.customer_return IS 'Cites: BI-23, EM-11, AU-05. Who did it is an employee of record; employees are never deleted, so the reference holds.';
+
+
+--
 -- Name: customer_return fk_customer_return_sale; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -8010,6 +9059,21 @@ ALTER TABLE ONLY public.customer_return
 --
 
 COMMENT ON CONSTRAINT fk_customer_return_sale ON public.customer_return IS 'Cites: RR-08, RR-13, BI-16. A return references exactly one sale, of the same store.';
+
+
+--
+-- Name: customer_return fk_customer_return_status_changed_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.customer_return
+    ADD CONSTRAINT fk_customer_return_status_changed_by FOREIGN KEY (status_changed_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT fk_customer_return_status_changed_by ON customer_return; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_customer_return_status_changed_by ON public.customer_return IS 'Cites: BI-23, EM-11, AU-05. Who did it is an employee of record; employees are never deleted, so the reference holds.';
 
 
 --
@@ -8055,6 +9119,186 @@ ALTER TABLE ONLY public.document_number_sequence
 --
 
 COMMENT ON CONSTRAINT fk_document_number_sequence_type ON public.document_number_sequence IS 'Cites: BI-42, ADR-21. Numbering is per document type, from the closed set.';
+
+
+--
+-- Name: employee fk_employee_home_store; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.employee
+    ADD CONSTRAINT fk_employee_home_store FOREIGN KEY (home_store_id, organization_id) REFERENCES public.store(id, organization_id);
+
+
+--
+-- Name: CONSTRAINT fk_employee_home_store ON employee; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_employee_home_store ON public.employee IS 'Cites: BI-14. A home store of the employee''s own organization; descriptive, granting nothing (EM-06).';
+
+
+--
+-- Name: employee fk_employee_organization; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.employee
+    ADD CONSTRAINT fk_employee_organization FOREIGN KEY (organization_id) REFERENCES public.organization(id);
+
+
+--
+-- Name: CONSTRAINT fk_employee_organization ON employee; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_employee_organization ON public.employee IS 'Cites: RT-001. An employee belongs to one organization.';
+
+
+--
+-- Name: employee_role_assignment fk_employee_role_assignment_assigned_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.employee_role_assignment
+    ADD CONSTRAINT fk_employee_role_assignment_assigned_by FOREIGN KEY (assigned_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT fk_employee_role_assignment_assigned_by ON employee_role_assignment; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_employee_role_assignment_assigned_by ON public.employee_role_assignment IS 'Cites: BI-23, EM-11, AU-05. Who did it is an employee of record; employees are never deleted, so the reference holds.';
+
+
+--
+-- Name: employee_role_assignment fk_employee_role_assignment_employee; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.employee_role_assignment
+    ADD CONSTRAINT fk_employee_role_assignment_employee FOREIGN KEY (employee_id, organization_id) REFERENCES public.employee(id, organization_id);
+
+
+--
+-- Name: CONSTRAINT fk_employee_role_assignment_employee ON employee_role_assignment; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_employee_role_assignment_employee ON public.employee_role_assignment IS 'Cites: BI-14. The employee is of the assignment''s organization.';
+
+
+--
+-- Name: employee_role_assignment fk_employee_role_assignment_revoked_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.employee_role_assignment
+    ADD CONSTRAINT fk_employee_role_assignment_revoked_by FOREIGN KEY (revoked_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT fk_employee_role_assignment_revoked_by ON employee_role_assignment; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_employee_role_assignment_revoked_by ON public.employee_role_assignment IS 'Cites: BI-23, EM-11, AU-05. Who did it is an employee of record; employees are never deleted, so the reference holds.';
+
+
+--
+-- Name: employee_role_assignment fk_employee_role_assignment_role; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.employee_role_assignment
+    ADD CONSTRAINT fk_employee_role_assignment_role FOREIGN KEY (role_id, organization_id) REFERENCES public.role(id, organization_id);
+
+
+--
+-- Name: CONSTRAINT fk_employee_role_assignment_role ON employee_role_assignment; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_employee_role_assignment_role ON public.employee_role_assignment IS 'Cites: BI-14. The role is of the assignment''s organization.';
+
+
+--
+-- Name: employee_role_assignment fk_employee_role_assignment_store; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.employee_role_assignment
+    ADD CONSTRAINT fk_employee_role_assignment_store FOREIGN KEY (store_id, organization_id) REFERENCES public.store(id, organization_id);
+
+
+--
+-- Name: CONSTRAINT fk_employee_role_assignment_store ON employee_role_assignment; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_employee_role_assignment_store ON public.employee_role_assignment IS 'Cites: MS-11, BI-14. A store-scoped assignment names a store of the organization; none means organization-wide.';
+
+
+--
+-- Name: employee fk_employee_status_changed_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.employee
+    ADD CONSTRAINT fk_employee_status_changed_by FOREIGN KEY (status_changed_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT fk_employee_status_changed_by ON employee; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_employee_status_changed_by ON public.employee IS 'Cites: BI-23, EM-11, AU-05. Who did it is an employee of record; employees are never deleted, so the reference holds.';
+
+
+--
+-- Name: employee_store_access fk_employee_store_access_employee; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.employee_store_access
+    ADD CONSTRAINT fk_employee_store_access_employee FOREIGN KEY (employee_id, organization_id) REFERENCES public.employee(id, organization_id);
+
+
+--
+-- Name: CONSTRAINT fk_employee_store_access_employee ON employee_store_access; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_employee_store_access_employee ON public.employee_store_access IS 'Cites: BI-14. The employee is of the store''s organization.';
+
+
+--
+-- Name: employee_store_access fk_employee_store_access_granted_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.employee_store_access
+    ADD CONSTRAINT fk_employee_store_access_granted_by FOREIGN KEY (granted_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT fk_employee_store_access_granted_by ON employee_store_access; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_employee_store_access_granted_by ON public.employee_store_access IS 'Cites: BI-23, EM-11, AU-05. Who did it is an employee of record; employees are never deleted, so the reference holds.';
+
+
+--
+-- Name: employee_store_access fk_employee_store_access_revoked_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.employee_store_access
+    ADD CONSTRAINT fk_employee_store_access_revoked_by FOREIGN KEY (revoked_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT fk_employee_store_access_revoked_by ON employee_store_access; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_employee_store_access_revoked_by ON public.employee_store_access IS 'Cites: BI-23, EM-11, AU-05. Who did it is an employee of record; employees are never deleted, so the reference holds.';
+
+
+--
+-- Name: employee_store_access fk_employee_store_access_store; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.employee_store_access
+    ADD CONSTRAINT fk_employee_store_access_store FOREIGN KEY (store_id, organization_id) REFERENCES public.store(id, organization_id);
+
+
+--
+-- Name: CONSTRAINT fk_employee_store_access_store ON employee_store_access; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_employee_store_access_store ON public.employee_store_access IS 'Cites: EM-12, RT-001. Access to one store of the organization.';
 
 
 --
@@ -8268,6 +9512,21 @@ COMMENT ON CONSTRAINT fk_inventory_movement_variant ON public.inventory_movement
 
 
 --
+-- Name: inventory_transaction fk_inventory_transaction_created_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.inventory_transaction
+    ADD CONSTRAINT fk_inventory_transaction_created_by FOREIGN KEY (created_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT fk_inventory_transaction_created_by ON inventory_transaction; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_inventory_transaction_created_by ON public.inventory_transaction IS 'Cites: BI-23, EM-11, AU-05. Who did it is an employee of record; employees are never deleted, so the reference holds.';
+
+
+--
 -- Name: inventory_transaction fk_inventory_transaction_store; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -8298,6 +9557,21 @@ COMMENT ON CONSTRAINT fk_organization_currency ON public.organization IS 'Cites:
 
 
 --
+-- Name: organization fk_organization_deactivated_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.organization
+    ADD CONSTRAINT fk_organization_deactivated_by FOREIGN KEY (deactivated_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT fk_organization_deactivated_by ON organization; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_organization_deactivated_by ON public.organization IS 'Cites: BI-23, EM-11, AU-05. Who did it is an employee of record; employees are never deleted, so the reference holds.';
+
+
+--
 -- Name: payment fk_payment_checkout; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -8310,6 +9584,21 @@ ALTER TABLE ONLY public.payment
 --
 
 COMMENT ON CONSTRAINT fk_payment_checkout ON public.payment IS 'Cites: PY-46, PY-54, RT-122. An attempt belongs to one checkout, so to its terminal, drawer, shift and store.';
+
+
+--
+-- Name: payment fk_payment_created_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.payment
+    ADD CONSTRAINT fk_payment_created_by FOREIGN KEY (created_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT fk_payment_created_by ON payment; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_payment_created_by ON public.payment IS 'Cites: BI-23, EM-11, AU-05. Who did it is an employee of record; employees are never deleted, so the reference holds.';
 
 
 --
@@ -8373,6 +9662,21 @@ COMMENT ON CONSTRAINT fk_payment_method_type ON public.payment IS 'Cites: PY-03,
 
 
 --
+-- Name: payment fk_payment_status_changed_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.payment
+    ADD CONSTRAINT fk_payment_status_changed_by FOREIGN KEY (status_changed_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT fk_payment_status_changed_by ON payment; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_payment_status_changed_by ON public.payment IS 'Cites: BI-23, EM-11, AU-05. Who did it is an employee of record; employees are never deleted, so the reference holds.';
+
+
+--
 -- Name: payment fk_payment_store; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -8403,6 +9707,21 @@ COMMENT ON CONSTRAINT fk_pos_terminal_location ON public.pos_terminal IS 'Cites:
 
 
 --
+-- Name: pos_terminal fk_pos_terminal_status_changed_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.pos_terminal
+    ADD CONSTRAINT fk_pos_terminal_status_changed_by FOREIGN KEY (status_changed_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT fk_pos_terminal_status_changed_by ON pos_terminal; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_pos_terminal_status_changed_by ON public.pos_terminal IS 'Cites: BI-23, EM-11, AU-05. Who did it is an employee of record; employees are never deleted, so the reference holds.';
+
+
+--
 -- Name: pos_terminal fk_pos_terminal_store; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -8415,6 +9734,21 @@ ALTER TABLE ONLY public.pos_terminal
 --
 
 COMMENT ON CONSTRAINT fk_pos_terminal_store ON public.pos_terminal IS 'Cites: PT-02, RT-001. A terminal belongs to one store, always; the application cannot move it.';
+
+
+--
+-- Name: product_barcode fk_product_barcode_archived_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.product_barcode
+    ADD CONSTRAINT fk_product_barcode_archived_by FOREIGN KEY (archived_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT fk_product_barcode_archived_by ON product_barcode; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_product_barcode_archived_by ON public.product_barcode IS 'Cites: BI-23, EM-11, AU-05. Who did it is an employee of record; employees are never deleted, so the reference holds.';
 
 
 --
@@ -8463,6 +9797,36 @@ COMMENT ON CONSTRAINT fk_product_category ON public.product IS 'Cites: PR-04. A 
 
 
 --
+-- Name: product fk_product_status_changed_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.product
+    ADD CONSTRAINT fk_product_status_changed_by FOREIGN KEY (status_changed_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT fk_product_status_changed_by ON product; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_product_status_changed_by ON public.product IS 'Cites: BI-23, EM-11, AU-05. Who did it is an employee of record; employees are never deleted, so the reference holds.';
+
+
+--
+-- Name: product_variant fk_product_variant_archived_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.product_variant
+    ADD CONSTRAINT fk_product_variant_archived_by FOREIGN KEY (archived_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT fk_product_variant_archived_by ON product_variant; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_product_variant_archived_by ON public.product_variant IS 'Cites: BI-23, EM-11, AU-05. Who did it is an employee of record; employees are never deleted, so the reference holds.';
+
+
+--
 -- Name: product_variant fk_product_variant_base_unit; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -8508,6 +9872,21 @@ COMMENT ON CONSTRAINT fk_product_variant_tax_category ON public.product_variant 
 
 
 --
+-- Name: reason_code fk_reason_code_archived_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.reason_code
+    ADD CONSTRAINT fk_reason_code_archived_by FOREIGN KEY (archived_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT fk_reason_code_archived_by ON reason_code; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_reason_code_archived_by ON public.reason_code IS 'Cites: BI-23, EM-11, AU-05. Who did it is an employee of record; employees are never deleted, so the reference holds.';
+
+
+--
 -- Name: reason_code fk_reason_code_organization; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -8523,6 +9902,21 @@ COMMENT ON CONSTRAINT fk_reason_code_organization ON public.reason_code IS 'Cite
 
 
 --
+-- Name: refund fk_refund_approved_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.refund
+    ADD CONSTRAINT fk_refund_approved_by FOREIGN KEY (approved_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT fk_refund_approved_by ON refund; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_refund_approved_by ON public.refund IS 'Cites: BI-23, EM-11, AU-05. Who did it is an employee of record; employees are never deleted, so the reference holds.';
+
+
+--
 -- Name: refund fk_refund_cancel_reason; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -8535,6 +9929,21 @@ ALTER TABLE ONLY public.refund
 --
 
 COMMENT ON CONSTRAINT fk_refund_cancel_reason ON public.refund IS 'Cites: BI-25. A cancelled refund carries a reason code of the organization (s22.7: cancel needs a reason).';
+
+
+--
+-- Name: refund fk_refund_created_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.refund
+    ADD CONSTRAINT fk_refund_created_by FOREIGN KEY (created_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT fk_refund_created_by ON refund; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_refund_created_by ON public.refund IS 'Cites: BI-23, EM-11, AU-05. Who did it is an employee of record; employees are never deleted, so the reference holds.';
 
 
 --
@@ -8673,6 +10082,21 @@ COMMENT ON CONSTRAINT fk_refund_shift ON public.refund IS 'Cites: PY-27, CD-19. 
 
 
 --
+-- Name: refund fk_refund_status_changed_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.refund
+    ADD CONSTRAINT fk_refund_status_changed_by FOREIGN KEY (status_changed_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT fk_refund_status_changed_by ON refund; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_refund_status_changed_by ON public.refund IS 'Cites: BI-23, EM-11, AU-05. Who did it is an employee of record; employees are never deleted, so the reference holds.';
+
+
+--
 -- Name: refund fk_refund_store; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -8685,6 +10109,111 @@ ALTER TABLE ONLY public.refund
 --
 
 COMMENT ON CONSTRAINT fk_refund_store ON public.refund IS 'Cites: RT-001. A refund belongs to a store of its organization.';
+
+
+--
+-- Name: refund fk_refund_submitted_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.refund
+    ADD CONSTRAINT fk_refund_submitted_by FOREIGN KEY (submitted_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT fk_refund_submitted_by ON refund; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_refund_submitted_by ON public.refund IS 'Cites: BI-23, EM-11, AU-05. Who did it is an employee of record; employees are never deleted, so the reference holds.';
+
+
+--
+-- Name: role fk_role_archived_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.role
+    ADD CONSTRAINT fk_role_archived_by FOREIGN KEY (archived_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT fk_role_archived_by ON role; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_role_archived_by ON public.role IS 'Cites: BI-23, EM-11, AU-05. Who did it is an employee of record; employees are never deleted, so the reference holds.';
+
+
+--
+-- Name: role fk_role_organization; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.role
+    ADD CONSTRAINT fk_role_organization FOREIGN KEY (organization_id) REFERENCES public.organization(id);
+
+
+--
+-- Name: CONSTRAINT fk_role_organization ON role; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_role_organization ON public.role IS 'Cites: RT-001. A role belongs to one organization.';
+
+
+--
+-- Name: role_permission fk_role_permission_granted_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.role_permission
+    ADD CONSTRAINT fk_role_permission_granted_by FOREIGN KEY (granted_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT fk_role_permission_granted_by ON role_permission; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_role_permission_granted_by ON public.role_permission IS 'Cites: BI-23, EM-11, AU-05. Who did it is an employee of record; employees are never deleted, so the reference holds.';
+
+
+--
+-- Name: role_permission fk_role_permission_key; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.role_permission
+    ADD CONSTRAINT fk_role_permission_key FOREIGN KEY (permission_key) REFERENCES public.permission(key);
+
+
+--
+-- Name: CONSTRAINT fk_role_permission_key ON role_permission; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_role_permission_key ON public.role_permission IS 'Cites: AC-02, D-01. Only a catalogue key can be granted.';
+
+
+--
+-- Name: role_permission fk_role_permission_revoked_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.role_permission
+    ADD CONSTRAINT fk_role_permission_revoked_by FOREIGN KEY (revoked_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT fk_role_permission_revoked_by ON role_permission; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_role_permission_revoked_by ON public.role_permission IS 'Cites: BI-23, EM-11, AU-05. Who did it is an employee of record; employees are never deleted, so the reference holds.';
+
+
+--
+-- Name: role_permission fk_role_permission_role; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.role_permission
+    ADD CONSTRAINT fk_role_permission_role FOREIGN KEY (role_id, organization_id) REFERENCES public.role(id, organization_id);
+
+
+--
+-- Name: CONSTRAINT fk_role_permission_role ON role_permission; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_role_permission_role ON public.role_permission IS 'Cites: RT-001. A grant belongs to a role of its organization.';
 
 
 --
@@ -8730,6 +10259,21 @@ ALTER TABLE ONLY public.sale
 --
 
 COMMENT ON CONSTRAINT fk_sale_customer ON public.sale IS 'Cites: CU-01. Never null: a walk-in is a customer record of the same organization.';
+
+
+--
+-- Name: sale fk_sale_employee; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sale
+    ADD CONSTRAINT fk_sale_employee FOREIGN KEY (employee_id) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT fk_sale_employee ON sale; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_sale_employee ON public.sale IS 'Cites: RT-122, BI-23. The employee who made the sale is an employee of record.';
 
 
 --
@@ -8823,6 +10367,36 @@ COMMENT ON CONSTRAINT fk_sale_store ON public.sale IS 'Cites: RT-001, ORG-04, RT
 
 
 --
+-- Name: shift_count fk_shift_count_acknowledged_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.shift_count
+    ADD CONSTRAINT fk_shift_count_acknowledged_by FOREIGN KEY (acknowledged_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT fk_shift_count_acknowledged_by ON shift_count; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_shift_count_acknowledged_by ON public.shift_count IS 'Cites: BI-23, EM-11, AU-05. Who did it is an employee of record; employees are never deleted, so the reference holds.';
+
+
+--
+-- Name: shift_count fk_shift_count_counted_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.shift_count
+    ADD CONSTRAINT fk_shift_count_counted_by FOREIGN KEY (counted_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT fk_shift_count_counted_by ON shift_count; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_shift_count_counted_by ON public.shift_count IS 'Cites: BI-23, EM-11, AU-05. Who did it is an employee of record; employees are never deleted, so the reference holds.';
+
+
+--
 -- Name: shift_count fk_shift_count_reason; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -8898,6 +10472,21 @@ COMMENT ON CONSTRAINT fk_state_machine_edge_from ON public.state_machine_edge IS
 
 
 --
+-- Name: state_machine_edge fk_state_machine_edge_permission; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.state_machine_edge
+    ADD CONSTRAINT fk_state_machine_edge_permission FOREIGN KEY (permission_key) REFERENCES public.permission(key);
+
+
+--
+-- Name: CONSTRAINT fk_state_machine_edge_permission ON state_machine_edge; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_state_machine_edge_permission ON public.state_machine_edge IS 'Cites: AC-02, D-01. Only a catalogue key.';
+
+
+--
 -- Name: state_machine_edge fk_state_machine_edge_to; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -8925,6 +10514,51 @@ ALTER TABLE ONLY public.state_machine_state
 --
 
 COMMENT ON CONSTRAINT fk_state_machine_state_audit_type ON public.state_machine_state IS 'Cites: AU-12, D-06. The event a creation records, from the s22 Audit column; null where the contract records none.';
+
+
+--
+-- Name: state_machine_state fk_state_machine_state_permission; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.state_machine_state
+    ADD CONSTRAINT fk_state_machine_state_permission FOREIGN KEY (creation_permission_key) REFERENCES public.permission(key);
+
+
+--
+-- Name: CONSTRAINT fk_state_machine_state_permission ON state_machine_state; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_state_machine_state_permission ON public.state_machine_state IS 'Cites: AC-02, D-01. Only a catalogue key.';
+
+
+--
+-- Name: stock_adjustment fk_stock_adjustment_approved_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.stock_adjustment
+    ADD CONSTRAINT fk_stock_adjustment_approved_by FOREIGN KEY (approved_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT fk_stock_adjustment_approved_by ON stock_adjustment; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_stock_adjustment_approved_by ON public.stock_adjustment IS 'Cites: BI-23, EM-11, AU-05. Who did it is an employee of record; employees are never deleted, so the reference holds.';
+
+
+--
+-- Name: stock_adjustment fk_stock_adjustment_created_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.stock_adjustment
+    ADD CONSTRAINT fk_stock_adjustment_created_by FOREIGN KEY (created_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT fk_stock_adjustment_created_by ON stock_adjustment; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_stock_adjustment_created_by ON public.stock_adjustment IS 'Cites: BI-23, EM-11, AU-05. Who did it is an employee of record; employees are never deleted, so the reference holds.';
 
 
 --
@@ -9033,6 +10667,21 @@ COMMENT ON CONSTRAINT fk_stock_adjustment_reason ON public.stock_adjustment IS '
 
 
 --
+-- Name: stock_adjustment fk_stock_adjustment_status_changed_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.stock_adjustment
+    ADD CONSTRAINT fk_stock_adjustment_status_changed_by FOREIGN KEY (status_changed_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT fk_stock_adjustment_status_changed_by ON stock_adjustment; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_stock_adjustment_status_changed_by ON public.stock_adjustment IS 'Cites: BI-23, EM-11, AU-05. Who did it is an employee of record; employees are never deleted, so the reference holds.';
+
+
+--
 -- Name: stock_adjustment fk_stock_adjustment_store; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -9045,6 +10694,21 @@ ALTER TABLE ONLY public.stock_adjustment
 --
 
 COMMENT ON CONSTRAINT fk_stock_adjustment_store ON public.stock_adjustment IS 'Cites: RT-001, MS-01. An adjustment belongs to one store.';
+
+
+--
+-- Name: stock_adjustment fk_stock_adjustment_submitted_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.stock_adjustment
+    ADD CONSTRAINT fk_stock_adjustment_submitted_by FOREIGN KEY (submitted_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT fk_stock_adjustment_submitted_by ON stock_adjustment; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_stock_adjustment_submitted_by ON public.stock_adjustment IS 'Cites: BI-23, EM-11, AU-05. Who did it is an employee of record; employees are never deleted, so the reference holds.';
 
 
 --
@@ -9075,6 +10739,21 @@ ALTER TABLE ONLY public.stock_balance
 --
 
 COMMENT ON CONSTRAINT fk_stock_balance_variant ON public.stock_balance IS 'Cites: PR-01, RT-021. Only a variant is stocked.';
+
+
+--
+-- Name: storage_location_attribution fk_storage_location_attribution_created_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.storage_location_attribution
+    ADD CONSTRAINT fk_storage_location_attribution_created_by FOREIGN KEY (created_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT fk_storage_location_attribution_created_by ON storage_location_attribution; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_storage_location_attribution_created_by ON public.storage_location_attribution IS 'Cites: BI-23, EM-11, AU-05. Who did it is an employee of record; employees are never deleted, so the reference holds.';
 
 
 --
@@ -9138,6 +10817,21 @@ COMMENT ON CONSTRAINT fk_store_currency ON public.store IS 'Cites: BI-01, BI-11.
 
 
 --
+-- Name: store fk_store_deactivated_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.store
+    ADD CONSTRAINT fk_store_deactivated_by FOREIGN KEY (deactivated_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT fk_store_deactivated_by ON store; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_store_deactivated_by ON public.store IS 'Cites: BI-23, EM-11, AU-05. Who did it is an employee of record; employees are never deleted, so the reference holds.';
+
+
+--
 -- Name: store fk_store_organization; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -9150,6 +10844,21 @@ ALTER TABLE ONLY public.store
 --
 
 COMMENT ON CONSTRAINT fk_store_organization ON public.store IS 'Cites: RT-001, RT-269. A store belongs to exactly one organization, which may have many.';
+
+
+--
+-- Name: store_payment_method fk_store_payment_method_changed_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.store_payment_method
+    ADD CONSTRAINT fk_store_payment_method_changed_by FOREIGN KEY (changed_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT fk_store_payment_method_changed_by ON store_payment_method; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_store_payment_method_changed_by ON public.store_payment_method IS 'Cites: BI-23, EM-11, AU-05. Who did it is an employee of record; employees are never deleted, so the reference holds.';
 
 
 --
@@ -9183,6 +10892,21 @@ COMMENT ON CONSTRAINT fk_store_payment_method_store ON public.store_payment_meth
 
 
 --
+-- Name: store_setting_version fk_store_setting_version_created_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.store_setting_version
+    ADD CONSTRAINT fk_store_setting_version_created_by FOREIGN KEY (created_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT fk_store_setting_version_created_by ON store_setting_version; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_store_setting_version_created_by ON public.store_setting_version IS 'Cites: BI-23, EM-11, AU-05. Who did it is an employee of record; employees are never deleted, so the reference holds.';
+
+
+--
 -- Name: store_setting_version fk_store_setting_version_store; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -9195,6 +10919,21 @@ ALTER TABLE ONLY public.store_setting_version
 --
 
 COMMENT ON CONSTRAINT fk_store_setting_version_store ON public.store_setting_version IS 'Cites: RT-001, MS-01. Settings belong to one store.';
+
+
+--
+-- Name: store_variant_price fk_store_variant_price_created_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.store_variant_price
+    ADD CONSTRAINT fk_store_variant_price_created_by FOREIGN KEY (created_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT fk_store_variant_price_created_by ON store_variant_price; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_store_variant_price_created_by ON public.store_variant_price IS 'Cites: BI-23, EM-11, AU-05. Who did it is an employee of record; employees are never deleted, so the reference holds.';
 
 
 --
@@ -9273,6 +11012,21 @@ COMMENT ON CONSTRAINT fk_tax_rate_category ON public.tax_rate IS 'Cites: PR-37. 
 
 
 --
+-- Name: tax_rate fk_tax_rate_created_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.tax_rate
+    ADD CONSTRAINT fk_tax_rate_created_by FOREIGN KEY (created_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT fk_tax_rate_created_by ON tax_rate; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_tax_rate_created_by ON public.tax_rate IS 'Cites: BI-23, EM-11, AU-05. Who did it is an employee of record; employees are never deleted, so the reference holds.';
+
+
+--
 -- Name: unit fk_unit_organization; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -9285,6 +11039,66 @@ ALTER TABLE ONLY public.unit
 --
 
 COMMENT ON CONSTRAINT fk_unit_organization ON public.unit IS 'Cites: PR-15. Units are organization-global.';
+
+
+--
+-- Name: user_account fk_user_account_employee; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_account
+    ADD CONSTRAINT fk_user_account_employee FOREIGN KEY (employee_id, organization_id) REFERENCES public.employee(id, organization_id);
+
+
+--
+-- Name: CONSTRAINT fk_user_account_employee ON user_account; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_user_account_employee ON public.user_account IS 'Cites: EM-02, BI-23. A login belongs to one employee of its organization: never a shared account.';
+
+
+--
+-- Name: user_session fk_user_session_account; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_session
+    ADD CONSTRAINT fk_user_session_account FOREIGN KEY (user_account_id, employee_id, organization_id) REFERENCES public.user_account(id, employee_id, organization_id);
+
+
+--
+-- Name: CONSTRAINT fk_user_session_account ON user_session; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_user_session_account ON public.user_session IS 'Cites: EM-02, AU-05. A session is one login''s, and so one employee''s.';
+
+
+--
+-- Name: user_session fk_user_session_terminal; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_session
+    ADD CONSTRAINT fk_user_session_terminal FOREIGN KEY (pos_terminal_id, organization_id) REFERENCES public.pos_terminal(id, organization_id);
+
+
+--
+-- Name: CONSTRAINT fk_user_session_terminal ON user_session; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_user_session_terminal ON public.user_session IS 'Cites: AU-10, HD-18. The till a session was opened at, in its organization.';
+
+
+--
+-- Name: variant_price fk_variant_price_created_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.variant_price
+    ADD CONSTRAINT fk_variant_price_created_by FOREIGN KEY (created_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT fk_variant_price_created_by ON variant_price; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_variant_price_created_by ON public.variant_price IS 'Cites: BI-23, EM-11, AU-05. Who did it is an employee of record; employees are never deleted, so the reference holds.';
 
 
 --
@@ -9315,6 +11129,21 @@ ALTER TABLE ONLY public.variant_price
 --
 
 COMMENT ON CONSTRAINT fk_variant_price_variant ON public.variant_price IS 'Cites: RT-021. Prices belong to variants, never to products.';
+
+
+--
+-- Name: variant_standard_cost fk_variant_standard_cost_created_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.variant_standard_cost
+    ADD CONSTRAINT fk_variant_standard_cost_created_by FOREIGN KEY (created_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT fk_variant_standard_cost_created_by ON variant_standard_cost; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_variant_standard_cost_created_by ON public.variant_standard_cost IS 'Cites: BI-23, EM-11, AU-05. Who did it is an employee of record; employees are never deleted, so the reference holds.';
 
 
 --
@@ -9396,4 +11225,5 @@ INSERT INTO public.schema_migrations (version) VALUES
     ('20260930160000'),
     ('20260930161000'),
     ('20260930170000'),
-    ('20261001100000');
+    ('20261001100000'),
+    ('20261001110000');

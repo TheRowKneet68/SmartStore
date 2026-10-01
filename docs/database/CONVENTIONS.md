@@ -177,6 +177,11 @@ Onboarding order is therefore organization, then its first employee, then store 
 `audit_event.actor_id` and `effective_actor_id` (domain 6) are the authenticated principal taken from the audit
 context (§17), not `*_by` columns. Domain 7 decides whether they reference `employee`; a failed sign-in has no actor.
 
+**Domain 7 (2026-10-01).** Every `*_by` column, and `sale.employee_id`, now references `employee (id)`. The migration
+adds a key to every such column in the catalog, so a new one cannot be forgotten, and `schema-rules.test.ts` asserts
+that none lacks one. A new table's `*_by` column adds its own key in its own migration. `audit_event.actor_id` does not
+reference `employee`, deliberately ([D7](D7-EMPLOYEE-ROLE-PERMISSION.md) §5).
+
 ## 12. Guards that depend on tables designed later
 
 Some rules are defined by the *existence of rows* that a later domain creates: `ORG-01`/`ORG-02` (the organization's
@@ -201,8 +206,8 @@ Each domain document lists the guards it leaves pending, and the domain that clo
 | `WH-02` | A central-warehouse location never goes negative | Domain 3 |
 | `MS-16`, `MS-19`, `D-03` | A movement's store is the location's warehouse store, or a store attributed to the central location | Domain 3 |
 | `SP-55`, `BI-41` | A sale with a posted return cannot be voided | The migration that builds voids (OQ-017); until then no sale can be voided (`SS044`) |
-| `AU-05`, `BI-33` | A document's `*_by` columns equal the authenticated principal of the change (the audit context's actor) | Domain 7, with the employee table |
-| `AU-09`, `RT-295` | Personal fields are redacted in an audit event's `before` and `after` at write time | Domain 7, which brings the first personal data (the employee) |
+| `AU-05`, `BI-33` | A document's `*_by` columns equal the authenticated principal of the change (the audit context's actor) | Domain 7, with the employee table. **Superseded 2026-10-01 (domain 7):** assigned to the one authorization gate (architecture §8.2, Step 3), which sets the audit context and the document's actor from the same session. The database keeps the actors' existence (keys to `employee`). |
+| `AU-09`, `RT-295` | Personal fields are redacted in an audit event's `before` and `after` at write time | Domain 7, which brings the first personal data (the employee). **Done** (`audit_redacted_field`, `audit_redact()`). |
 
 ## 13. Citations
 
@@ -243,7 +248,7 @@ standard leaves to implementations and PostgreSQL does not use:
 
 | Code | Meaning | Raised by |
 |---|---|---|
-| `SS001` | A recorded fact (who and when) cannot be rewritten | `record_deactivation()`, `customer_return_before_write()`, `refund_before_write()` |
+| `SS001` | A recorded fact (who and when) cannot be rewritten | `record_deactivation()`, `record_archival()`, `record_revocation()`, `record_session_end()`, `customer_return_before_write()`, `refund_before_write()` |
 | `SS002` | A warehouse must have its Default storage location | `assert_warehouse_has_default_location()` |
 | `SS003` | A document-number counter cannot move backwards | `forbid_document_number_decrease()` |
 | `SS004` | Not a legal state for creation, or not an edge of the machine | `enforce_state_transition()` |
@@ -299,6 +304,7 @@ standard leaves to implementations and PostgreSQL does not use:
 | `SS054` | An audited change, or an application event, lacks the authenticated actor, source or correlation id | `write_audit_event()`, `record_audit_event()` |
 | `SS055` | A transition whose contract needs a reason has none from its document or the audit context | `write_audit_event()` |
 | `SS056` | The application tried to record an event type the database writes itself | `record_audit_event()` |
+| `SS057` | An employee with a till shift that is not closed cannot be terminated | `forbid_termination_with_open_shift()` |
 
 Where a refusal names a quantity, an amount or a date, the value is in the error's `DETAIL` field, so the application
 can show it without parsing the message.

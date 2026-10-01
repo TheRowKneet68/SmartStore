@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type pg from 'pg';
-import { inTransaction } from './db.ts';
+import { inTransaction, STAFF_SIZE, staffId } from './db.ts';
 
 /**
  * Test data builders. Everything here is TEST-ONLY.
@@ -13,8 +13,12 @@ export const TEST_TIME_ZONE = 'UTC';
 
 type Db = pg.Pool | pg.PoolClient;
 
-/** Stands in for an employee id until domain 7 adds the employee table and the actor foreign keys. */
-export const actor = (): string => randomUUID();
+let staffUsed = 0;
+/**
+ * An employee of record to name as who did something: the next of the TEST-ONLY staff seeded in the template (db.ts),
+ * so consecutive calls are different people, as separation of duties needs.
+ */
+export const actor = (): string => staffId(1 + (staffUsed++ % (STAFF_SIZE - 1)));
 
 export async function ensureTestCurrency(owner: pg.Pool): Promise<void> {
   await owner.query(

@@ -17,12 +17,20 @@ export interface TestDb {
 const CLONE_LOCK = 7_310_001;
 
 /**
+ * TEST-ONLY staff: an organization whose employees, seeded once in the template (global-setup.ts), stand in as the
+ * people who did things in test documents, since every `*_by` column is an employee of record (D7).
+ */
+export const STAFF_ORGANIZATION = '00000000-0000-4000-8000-00005ea1f000';
+export const STAFF_SIZE = 5000;
+export const staffId = (n: number): string => `00000000-0000-4000-8000-${n.toString(16).padStart(12, '0')}`;
+
+/**
  * The authenticated request context every audited change needs (AU-05, AU-10; docs/database/D6-AUDIT.md). The
  * application sets it per transaction from the signed-in session; test connections carry this TEST-ONLY default from
  * connection start, and tests that need another actor or a reason set their own with set_config(..., true).
  */
 export const TEST_CONTEXT = {
-  actor: '00000000-0000-4000-8000-00000000a0d1',
+  actor: staffId(0),
   correlation: '00000000-0000-4000-8000-00000000c0e1',
   source: 'API',
 } as const;
@@ -72,7 +80,8 @@ export async function createTestDb(): Promise<TestDb> {
       const dropper = new pg.Client({ connectionString: urlFor(ownerUrl, 'postgres') });
       await dropper.connect();
       try {
-        await dropper.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
+        // Not WITH (FORCE), for the reason in global-setup.ts; every pool on the clone has ended by now.
+        await dropper.query(`DROP DATABASE IF EXISTS ${name}`);
       } finally {
         await dropper.end();
       }

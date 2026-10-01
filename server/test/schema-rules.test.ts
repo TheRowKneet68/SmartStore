@@ -77,6 +77,18 @@ const SCOPE: Record<string, 'tenant' | 'organization' | 'store' | 'reference' | 
   audit_event: 'exception',
   audit_chain_head: 'organization',
   audit_chain_link: 'organization',
+  // Domain 7. organization-model s8.1: employees, logins, roles and grants are organization-global; store access is a
+  // fact about one store. MS-11: a role assignment is organization-wide or scoped to one store, so its store_id is
+  // nullable by rule; fk_employee_role_assignment_store proves it when present.
+  employee: 'organization',
+  user_account: 'organization',
+  user_session: 'organization',
+  permission: 'reference',
+  role: 'organization',
+  role_permission: 'organization',
+  employee_role_assignment: 'exception',
+  employee_store_access: 'store',
+  audit_redacted_field: 'reference',
 };
 
 /** Tables the runtime role may DELETE from, each with its authority. Nothing else may be deleted. */
@@ -216,12 +228,35 @@ describe('RT-001, MS-01: every table declares its scope, and store scope is a no
     expect(rows).toHaveLength(1);
   });
 
-  it('MS-29, AU-07: the audit exception is organization-scoped, with its store proven by key when it has one', async () => {
+  it('MS-29, AU-07, MS-11: the audit and role-assignment exceptions are organization-scoped, with their store proven by key when they have one', async () => {
     const cols = await columns();
-    const org = cols.find((x) => x.table_name === 'audit_event' && x.column_name === 'organization_id');
-    expect(org?.is_nullable).toBe('NO');
-    expect((await tablesWithForeignKey('organization_id', 'organization')).has('audit_event')).toBe(true);
-    expect((await tablesWithForeignKey('store_id', 'store')).has('audit_event')).toBe(true);
+    for (const table of ['audit_event', 'employee_role_assignment']) {
+      const org = cols.find((x) => x.table_name === table && x.column_name === 'organization_id');
+      expect(org?.is_nullable, table).toBe('NO');
+      expect((await tablesWithForeignKey('organization_id', 'organization')).has(table) ||
+        (await tablesWithForeignKey('organization_id')).has(table), table).toBe(true);
+      expect((await tablesWithForeignKey('store_id', 'store')).has(table), table).toBe(true);
+    }
+  });
+
+  it('BI-23, CONVENTIONS s11: every column recording who did something references an employee', async () => {
+    const { rows } = await db.owner.query<{ col: string }>(`
+      SELECT c.table_name || '.' || c.column_name AS col
+      FROM information_schema.columns c
+      JOIN information_schema.tables t ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+      WHERE c.table_schema = 'public' AND t.table_type = 'BASE TABLE'
+        AND (c.column_name LIKE '%\\_by' OR (c.table_name, c.column_name) = ('sale', 'employee_id'))
+        AND NOT EXISTS (
+          SELECT 1 FROM pg_constraint con
+          JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = ANY (con.conkey)
+          WHERE con.contype = 'f' AND con.conrelid = format('%I', c.table_name)::regclass
+            AND con.confrelid = 'employee'::regclass AND a.attname = c.column_name)
+      ORDER BY 1`);
+    expect(rows.map((r) => r.col)).toEqual([]);
+    const { rows: count } = await db.owner.query<{ n: string }>(
+      `SELECT count(*) AS n FROM information_schema.columns WHERE table_schema = 'public' AND column_name LIKE '%\\_by'`,
+    );
+    expect(Number(count[0]!.n), 'the register of actor columns is not empty').toBeGreaterThan(40);
   });
 });
 

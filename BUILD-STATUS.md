@@ -198,9 +198,25 @@ Owner-approved with ADR-31 on 2026-09-30 (ADR-31 §13 has the full text):
   - Mutation-checked: 49 of 51 detected. The two truncate guards shadow each other by design; removing both is
     detected.
 
+- 2026-10-01 — **Domain 7 — Employee / Role / Permission.** DESIGNED + IMPLEMENTED (migration) + **TESTED** (273 tests
+  passing on 4 consecutive runs). No application code. [D7 design](docs/database/D7-EMPLOYEE-ROLE-PERMISSION.md).
+  - Employees, with the §22.9 machine; never deleted. Termination is refused while the employee has a till shift that
+    is not closed (`SS057`).
+  - Optional logins. Only an Argon2id hash, or bcrypt of cost 12 or more, is stored. Server-held sessions keep only a
+    token hash and end once, with a cause.
+  - The 117-key permission catalogue, and roles, grants, assignments (organization-wide or per store) and store access,
+    each kept as history by recorded revocations. `employee_holds_permission()` is the one definition of what a grant
+    set allows.
+  - The permission each creation and edge needs is data (architecture §8.4). Its `OPEN DECISION` entries refuse until
+    the owner names a key.
+  - Every `*_by` column and `sale.employee_id` references `employee`. Employee names and contact details are redacted
+    from the audit trail at write time (`AU-09`). Tests name TEST-ONLY staff employees seeded in the test template.
+  - Mutation-checked: 41 of 41 detected, after one added test (see the log).
+  - **Owner decision needed before Step 3 can reactivate an employee, re-enable a till or retry a refund: OQ-025.**
+
 ## In progress
 
-- Domain 7 (Employee / Role / Permission): design document and migration.
+None.
 
 ## Owner actions pending
 
@@ -208,19 +224,21 @@ Owner-approved with ADR-31 on 2026-09-30 (ADR-31 §13 has the full text):
 2. Run `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\db-setup.ps1` once. It asks for the `postgres`
    password locally and writes `.env`. Then `npm ci`, `npm run db:migrate`, `npm test`.
 3. Push `v1-build` at the end of each domain.
+4. Decide what happens to the untracked `SmartStore.zip` (210 MB) at the repository root. It is not ignored, so every
+   commit has to exclude it by name.
 
 Until then, tests run on a scratch PostgreSQL 17.11 cluster and a portable Node 26 in the session scratch directory
 (ADR-31 §14). Nothing on the owner's PostgreSQL service is touched.
 
 ## Next
 
-1. **Domain 7 — Employee / Role / Permission.** Includes:
-   - the actor foreign keys of CONVENTIONS §11;
-   - the transition permission table (architecture §8.4), where the `OPEN DECISION` keys of OQ-018 and OQ-023
-     refuse;
-   - the two audit guards pending in CONVENTIONS §12: `*_by` columns equal the authenticated principal, and personal
-     fields are redacted.
-3. Then Step 3, implementation, in the order in the working agreements.
+1. **Step 3: implementation**, in the order of the working agreements (1, 7, 6, 2, 3, 4, 5). **It starts when the
+   owner confirms.** The continuation protocol pasted on 2026-10-01 forbids application code, and the owner's reply
+   to the question it raised was read as covering only the finishing of Domain 7.
+   - Owner decisions needed along the way: OQ-018 before the card path; OQ-023 before any refund is paid; OQ-025
+     before an employee is reactivated, a till re-enabled or a refund retried.
+   - Step 3 builds the one authorization gate (architecture §8.2). Two guards moved there from the database: it sets
+     the audit context, and it binds every `*_by` column to the signed-in employee (CONVENTIONS §12).
 
 Update this file after every step, including steps that failed and were abandoned.
 
@@ -321,3 +339,54 @@ Append-only. One dated line per step, including failed and abandoned attempts.
       time zone). A test was added for each.
   Decisions stated for the owner, in OQ-024 and D6 §3: the vocabulary gaps (`Cash.In`, reading the log, master data
   and configuration), `AU-02` against `AU-20`, the reading of "on exit", and the tender's event.
+- 2026-10-01 — Session recovery under a pasted "continuation protocol" that assumed C-06 was still open and Phase 3
+  unauthorized, and so forbade migrations and code. Repository evidence, which the protocol says wins, contradicts
+  both premises. Read-only inspection:
+  - **C-06 is closed.** Commit `446aea6` closed it on the owner's acceptance. `measure-c06.ps1` passes today (all
+    asserted checks): 1161 rules `mapped`, 0 `inferred`, a two-way bijection, ten batches summing to 342, and 175
+    drafted rows (RT-355..RT-529). The disclosed limits stand: the per-rule reasoning was lost and rebuilt
+    mechanically, and 49 rule identities are not reconstructable.
+  - **Phase 3 is authorized** by Constitution §35 (commit `31f3f70`), and ADR-31 was approved. Domains 1 to 6 are
+    committed; Domain 7 is uncommitted (see In progress).
+  - **One discrepancy, recorded and not resolved.** C-06 review §15 reports 48 coverage rows resolving to an OUT OF
+    SCOPE row. The file measures 50 canonical homes (52 counting any listed home) at every commit since the rebuild
+    baseline `bc96f2d`, so the gap predates the closure. `requirements-traceability.md` is byte-identical to its
+    state at `15e27ac`: no Phase 3 work has touched it.
+  - **An untracked `SmartStore.zip` (210 MB) appeared at the root at 00:49.** It was not made by this session, it is
+    not ignored by `.gitignore`, and it must not be committed.
+
+  Nothing was continued: the pasted protocol forbids migrations and code, and there is no open C-06 row to work on.
+  The only change was to this file. Exact next operation, once the owner says which instruction governs:
+  - **Continue the v1 build:**
+    1. Add a test that a revoked assignment grants nothing (P21).
+    2. Re-run mutations P09 and P15.
+    3. Record Domain 7 as done here.
+    4. Commit.
+    5. Remind the owner to push.
+  - **Stop Phase 3 work:** leave the Domain 7 files uncommitted, delete nothing, and ask what should happen to them.
+
+  Must not be done without that answer: committing the Domain 7 migration, or re-opening C-06, which is recorded as
+  closed on owner acceptance.
+- 2026-10-01 — The owner answered "claude --continue". It was read as **continue the v1 build**, the first option
+  offered, whose scope ended at finishing Domain 7, committing, and the owner pushing. Domain 7 was finished.
+  Failed attempts, each fixed before commit:
+  (1) `COMMENT ON INDEX x ON table` is not PostgreSQL syntax (the form is `COMMENT ON INDEX x IS`). The same mistake
+      was made more than once. Each time the template migration failed and no test ran.
+  (2) A bash heredoc mangled the generator script for the mutation plan. It was rewritten as a Node script with the
+      file tool.
+  (3) The first mutation run detected 38 of 41:
+      - **P21 survived, a test gap.** The only test that revoked an assignment did so after the employee's store
+        access had gone, so the result never depended on the revocation. A test now revokes an assignment and nothing
+        else.
+      - **P09 and P15 were inconclusive.** The test run failed before any test: dropping the template gave `42501`
+        "permission denied to terminate process".
+      - **The root cause was found, not retried around.** Autovacuum visits the freshly seeded template about a
+        minute after seeding. `DROP DATABASE … WITH (FORCE)` run by a role that is not a superuser cannot end an
+        autovacuum worker. Back-to-back runs, as in a mutation run, start in that window.
+      - **The fix.** Both drops in the harness (the template, and each test file's clone) are now plain
+        `DROP DATABASE`, which stops autovacuum itself.
+      - **The proof.** A probe that waited for an autovacuum worker inside a database reproduced `42501` with
+        `FORCE`, and dropped the database in 251 ms without it.
+      - The re-run detected all three: 41 of 41.
+  Result: 273 tests passing on 4 consecutive runs. Decisions stated for the owner are in D7 §8 and OQ-025. Step 3 was
+  not started (see Next).
