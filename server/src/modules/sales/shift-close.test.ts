@@ -72,6 +72,10 @@ async function trading() {
 }
 type Trading = Awaited<ReturnType<typeof trading>>;
 
+/** Someone holding every key of this feature but one: proves the route asks for that one, and no other. */
+const KEYS = ['Sale.Create', 'Shift.Open', 'Shift.Close', 'Cash.Variance.Acknowledge', 'Cash.Count.View'];
+const allBut = (t: Trading, key: string) => t.staff(KEYS.filter((k) => k !== key));
+
 const shiftMove = (as: Headers, subject: string, event: string, payload?: object) =>
   call('POST', '/transitions', as, { machine: 'Shift', event, subject, ...(payload ? { payload } : {}) });
 const shiftStatus = async (shift: string) =>
@@ -161,13 +165,16 @@ describe('the count (CD-20, CD-21, CD-22, CD-31, SM-57; RT-243, RT-244, RT-526)'
     expect(edit, 'the runtime role cannot rewrite a count').toBe('42501');
   });
 
-  it('CD-20, AC-01, CD-04: counting needs Shift.Close, a whole non-negative amount, and the shift of this store', async () => {
+  it('CD-20, AC-01, CD-04, MS-02: counting needs Shift.Close, a whole non-negative amount, and the shift of this store', async () => {
     const t = await trading();
     await shiftMove(t.cashier.as, t.shift, 'begin count');
-    expect((await count(t, 2_250, t.manager.as)).statusCode, 'no Shift.Close').toBe(403);
+    expect((await count(t, 2_250, (await allBut(t, 'Shift.Close')).as)).statusCode, 'every key but Shift.Close').toBe(403);
     expect((await count(t, -1)).statusCode, 'never negative').toBe(400);
     expect((await call('POST', `/stores/${t.storeId}/shifts/${t.shift}/counts`, t.cashier.as, { countedAmount: 12.5 })).statusCode, 'minor units').toBe(400);
     expect((await count(t, 2_250, t.cashier.as, randomUUID())).statusCode, 'no such shift here').toBe(404);
+    const other = await trading();
+    expect((await count(t, 2_250, other.cashier.as, t.shift, other.storeId)).statusCode, "this shift, through another organization's store").toBe(404);
+    expect((await db.app.query('SELECT 1 FROM shift_count WHERE cash_shift_id = $1', [t.shift])).rows).toHaveLength(0);
   });
 });
 
@@ -179,8 +186,8 @@ describe('acknowledging a variance (CD-23, CD-24, BI-25; RT-245; OQ-020)', () =>
     const t = await trading();
     await shiftMove(t.cashier.as, t.shift, 'begin count');
     const pass = (await count(t, 2_200)).json();
-    const refused = await acknowledge(t, pass.id, t.reason, t.cashier.as);
-    expect(refused.statusCode, 'the counter here holds no Cash.Variance.Acknowledge').toBe(403);
+    const refused = await acknowledge(t, pass.id, t.reason, (await allBut(t, 'Cash.Variance.Acknowledge')).as);
+    expect(refused.statusCode, 'every key but Cash.Variance.Acknowledge').toBe(403);
     const done = await acknowledge(t, pass.id, t.reason);
     expect(done.statusCode).toBe(200);
     expect(done.json()).toMatchObject({ id: pass.id, variance: -50, acknowledgedBy: t.manager.id, reasonCodeId: t.reason, acknowledgedAt: expect.any(String) });
@@ -205,6 +212,8 @@ describe('acknowledging a variance (CD-23, CD-24, BI-25; RT-245; OQ-020)', () =>
     expect((await acknowledge(t, pass.id, undefined)).statusCode, 'no reason').toBe(400);
     const theirs = await trading();
     expect((await acknowledge(t, pass.id, theirs.reason)).json().error.code, "another organization's reason").toBe('invalid_reference');
+    await ok('POST', `/reason-codes/${theirs.reason}/archive`, theirs.owner, {});
+    expect((await acknowledge(t, pass.id, theirs.reason)).json().error.code, "s24.3: another organization's reason says nothing of its state").toBe('invalid_reference');
     await ok('POST', `/reason-codes/${t.reason}/archive`, t.owner, {});
     expect((await acknowledge(t, pass.id, t.reason)).json().error.code, 'an archived reason').toBe('SS024');
     const unacknowledged = await db.app.query('SELECT acknowledged_by FROM shift_count WHERE id = $1', [pass.id]);
@@ -231,12 +240,20 @@ describe('acknowledging a variance (CD-23, CD-24, BI-25; RT-245; OQ-020)', () =>
     expect((await acknowledge(t, pass.id, t.reason, both.as)).json()).toMatchObject({ countedBy: both.id, acknowledgedBy: both.id });
   });
 
-  it('MS-04: only a count of this shift, in this store, is acknowledged', async () => {
+  it('MS-02, MS-04: only a count of this shift, in this store, is acknowledged', async () => {
     const t = await trading();
     await shiftMove(t.cashier.as, t.shift, 'begin count');
     const pass = (await count(t, 2_200)).json();
     expect((await acknowledge(t, randomUUID(), t.reason)).statusCode, 'no such count').toBe(404);
     expect((await acknowledge(t, pass.id, t.reason, t.manager.as, randomUUID())).statusCode, 'no such shift here').toBe(404);
+    const other = await trading();
+    await shiftMove(other.cashier.as, other.shift, 'begin count');
+    const theirs = (await count(other, 2_200)).json();
+    expect((await acknowledge(t, theirs.id, t.reason)).statusCode, "another shift's count, named under this shift").toBe(404);
+    const through = await call('POST', `/stores/${other.storeId}/shifts/${t.shift}/counts/${pass.id}/acknowledge`, other.manager.as, { reasonCodeId: other.reason });
+    expect(through.statusCode, "this shift, through another organization's store").toBe(404);
+    const untouched = await db.app.query('SELECT acknowledged_by FROM shift_count WHERE id = ANY($1)', [[pass.id, theirs.id]]);
+    expect(untouched.rows).toEqual([{ acknowledged_by: null }, { acknowledged_by: null }]);
   });
 });
 
@@ -283,6 +300,8 @@ describe('the close (s22.11 close; CD-20, CD-23, CD-25, SM-57; RT-526, RT-244, R
     expect(uncounted.statusCode).toBe(409);
     expect(uncounted.json().error.code, 'Open does not go straight to Closed').toBe('illegal_transition');
     await shiftMove(t.cashier.as, t.shift, 'begin count');
+    const outsider = await close(t, 1_000, (await allBut(t, 'Shift.Close')).as);
+    expect(outsider.statusCode, 's8.4, s24.3: the permission is checked before anything about the count is said').toBe(403);
     const noCount = await close(t, 1_000);
     expect(noCount.statusCode).toBe(409);
     expect(noCount.json().error).toEqual({ code: 'not_counted', message: 'Count the drawer before closing the shift.' });
@@ -307,7 +326,7 @@ describe('the close (s22.11 close; CD-20, CD-23, CD-25, SM-57; RT-526, RT-244, R
     expect((await close(t, 1_000)).json().state).toBe('Closed');
   });
 
-  it('CD-25, SM-57: the close is decided on the latest pass: a later pass needs its own acknowledgement, and a matching recount closes', async () => {
+  it('CD-25, SM-57, AU-05: the close is decided on the latest pass: a later pass needs its own acknowledgement, and a matching recount closes, in the name of whoever closes', async () => {
     const t = await trading();
     await shiftMove(t.cashier.as, t.shift, 'begin count');
     const first = (await count(t, 2_200)).json();
@@ -315,7 +334,11 @@ describe('the close (s22.11 close; CD-20, CD-23, CD-25, SM-57; RT-526, RT-244, R
     const second = (await count(t, 2_300)).json();
     expect((await close(t, 1_000)).json().error).toMatchObject({ code: 'variance_unacknowledged', countId: second.id });
     await count(t, 2_250);
-    expect((await close(t, 1_000)).json().state).toBe('Closed');
+    const closer = await t.staff(['Shift.Close']);
+    expect((await close(t, 1_000, closer.as)).json().state).toBe('Closed');
+    const shift = await db.app.query('SELECT closed_by, status_changed_by FROM cash_shift WHERE id = $1', [t.shift]);
+    expect(shift.rows, 'the closer, not the cashier who opened it').toEqual([{ closed_by: closer.id, status_changed_by: closer.id }]);
+    expect(await closingFloats(t.shift)).toEqual([{ direction: 'Out', amount: '1000', created_by: closer.id }]);
   });
 
   it('SM-04, SM-57: closing again changes nothing and declares no second float; a closed shift takes no further count or acknowledgement', async () => {
@@ -403,7 +426,9 @@ describe('the shift screen (CD-30, CD-31; RT-527, RT-243; actors-and-roles s2.10
 
   it("actors-and-roles s2.10, MS-02: reading counts needs Cash.Count.View in the store, and finds only this store's shifts", async () => {
     const t = await trading();
-    expect((await screen(t, t.cashier.as)).statusCode, 'counting the drawer is not reading its history').toBe(403);
+    const others = await allBut(t, 'Cash.Count.View');
+    expect((await screen(t, others.as)).statusCode, 'every key but Cash.Count.View').toBe(403);
+    expect((await call('GET', `/stores/${t.storeId}/shifts`, others.as)).statusCode, 'the list too').toBe(403);
     expect((await screen(t, t.manager.as, randomUUID())).statusCode, 'no such shift').toBe(404);
     const other = await trading();
     expect((await screen(t, t.manager.as, other.shift)).statusCode, "another organization's shift, asked through this store").toBe(404);

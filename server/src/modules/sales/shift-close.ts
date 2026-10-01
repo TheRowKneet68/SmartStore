@@ -7,7 +7,8 @@ import { auditContext, type Access, type Principal } from '../../http/gate.ts';
 import type { MachineBinding } from '../../http/transitions.ts';
 
 // CD-20: the close declares the float handed to the next shift, in whole minor units (ADR-04); zero is a declaration.
-const Closing = z.object({ closingFloat: z.number().int().safe().min(0) });
+// zod 4's int() admits only safe integers, so the amount reaches bigint exactly; safe() would repeat the same check.
+const Closing = z.object({ closingFloat: z.number().int().min(0) });
 
 /**
  * Before `Reconciling → Closed` (§22.11 close): the latest pass decides (`SM-57`). There must be one (`CD-20`), and its
@@ -67,7 +68,7 @@ const ShiftRef = z.object({ storeId: z.uuid(), shiftId: z.uuid() });
 const CountRef = z.object({ storeId: z.uuid(), shiftId: z.uuid(), countId: z.uuid() });
 const Acknowledgement = z.object({ reasonCodeId: z.uuid() });
 // CD-04: a counted amount is an observation of cash, in whole minor units (ADR-04), never negative.
-const NewCount = z.object({ countedAmount: z.number().int().safe().min(0) });
+const NewCount = z.object({ countedAmount: z.number().int().min(0) });
 
 /** One counting pass as the server recorded it: the expected amount and the variance are the database's (`CD-22`). */
 const COUNT = `c.id, c.pass_number AS "passNumber", c.counted_amount AS "countedAmount", c.expected_amount AS "expectedAmount",

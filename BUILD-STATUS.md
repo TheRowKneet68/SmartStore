@@ -322,19 +322,29 @@ Step 3 rules, given by the owner on 2026-10-01 with "start Step 3":
   - **`IV-23`**: a bounded lock wait on contended balances, `LOCK_TIMEOUT_MS`, the fifth required setting (OQ-027).
   - Mutation-checked: 21 of 21 detected, after 7 tests were added or strengthened (see the log).
 
+- 2026-10-01 — **Shift close, `CD-20`..`CD-25`, inside Domain 4: application layer.** IMPLEMENTED + **TESTED**
+  (25 tests; 403 server tests passing). [D4 §9](docs/database/D4-SALE-PAYMENT.md). Built on the owner's brief of
+  2026-10-01, in six committed steps.
+  - Begin count and the close are on the transition endpoint, under `Shift.Close` (§22.11). The endpoint gained two
+    options: per-event payloads, validated before authorization (architecture §18.1, §24.2); and work that runs after
+    the permission check.
+  - Built:
+    - the blind count (`CD-21`, `CD-22`, `CD-31`);
+    - acknowledging a variance (`CD-23`, `CD-24`, `BI-25`);
+    - the close, with its declared float written as a `ClosingFloat` row (`CD-20`, `CD-25`, `RT-526`);
+    - the shift screen (`CD-30`, `RT-527`).
+  - **Not built, each recorded:**
+    - the denomination breakdown (decision row 8);
+    - auto-close within a tolerance, and the second approver (row 9, OQ-020). The numbers do not exist;
+    - a loss recorded as a cash `Adjustment` (`CD-24`). D4 §8 defers `CD-15`..`CD-17`;
+    - reopen (`CD-26`, OQ-014).
+  - Mutation-checked: 47 of 47 detected on the final code. That took 9 strengthened tests and one doubled check
+    removed (see the log).
+  - **Two schema gaps found and reported, not fixed** (the brief excluded migrations). See Next.
+
 ## In progress
 
-**Shift close, `CD-20`..`CD-25`**, on the owner's brief of 2026-10-01: a single objective, inside Domain 4. Another
-agent works in parallel on `web/**`. This work stages explicit paths only. Steps:
-
-1. Begin count (`Open → Reconciling`, `Shift.Close`) on the transition endpoint. **Done.**
-2. The blind count: a pass, revealing expected and variance only after submission (`CD-21`, `CD-22`). **Done.**
-3. Acknowledging a variance (`Cash.Variance.Acknowledge`, a reason, once; `CD-23`). **Done.**
-4. The close, declaring the closing float (`CD-20`, `CD-25`). **Done.**
-5. The read that answers it (`CD-30`, `Cash.Count.View`). **Done.**
-6. The mutation check, and the docs.
-
-Code: `server/src/modules/sales/shift-close.ts`. Tests: `server/src/modules/sales/shift-close.test.ts`.
+Nothing. The shift close (`CD-20`..`CD-25`) is finished and committed: see Done and the log.
 
 Earlier note, still true: Domain 3 is finished and committed.
 
@@ -385,8 +395,17 @@ Until then, tests run on a scratch PostgreSQL 17.11 cluster and a portable Node 
      `server/src/modules/catalog/scan.ts`.
    - Tests: `server/src/modules/sales/sales.test.ts`, `server/src/modules/catalog/catalog.test.ts`.
    - Harness: the session scratch directory's `mutate-app.mjs`, with a new `plan-d4-app.mjs`.
+   - The slice's schemas write `z.number().int().safe()`. In zod 4.6.5 `int()` and `safe()` are one check, so the
+     check will meet removing either as an equivalent mutant, as the shift close did. Drop `.safe()` in
+     `products.ts`, `till.ts` and `sales.ts` before the run.
    - Then the rest of Domain 4:
-     - closing a shift, with the blind count, the variance and its acknowledgement (§22.11, `CD-20`..`CD-25`);
+     - ~~closing a shift~~: done (see Done);
+     - two guards the shift close found missing in the schema, each a small migration. The shift-close brief excluded
+       migrations, so they were reported, not written:
+       - a closed shift's `closed_by` and `status_changed_by` can be rewritten by the runtime role, unaudited.
+         `SM-57` makes a closed shift immutable, and `AU-05` takes the actor from the authenticated identity;
+       - the database accepts an archived reason code on a count's acknowledgement. Only the route refuses it
+         (`SS024`'s rule).
      - the till's other edges (disable, retire);
      - reading sales;
      - the receipt status.
@@ -791,3 +810,36 @@ Append-only. One dated line per step, including failed and abandoned attempts.
     moved to the OQ-014 test, which concerns reopening.
 
     Root `npm test`: server 403, web 20. `npm run typecheck` clean.
+- 2026-10-01 — **Shift close, step 6 of 6: the mutation check and the docs.**
+  - **Planning the 47 mutants (one per guard) found 9 gaps.** A test was strengthened for each before any run:
+    - each of the 4 keyed routes is refused to someone holding every other key of the feature. Before this, a mutant
+      swapping in another key the same people held would have survived;
+    - another organization's shift, counted through its own store, is refused;
+    - another shift's count, named under this shift, is refused;
+    - this shift, acknowledged through another organization's store, is refused;
+    - another organization's archived reason answers `invalid_reference`, not `SS024`, so its state stays hidden
+      (§24.3);
+    - a closer who did not open the shift is recorded as the closer, in `closed_by` and in the float's `created_by`
+      (`AU-05`);
+    - someone without `Shift.Close` who tries to close an uncounted shift is refused before anything about the count
+      is said.
+  - **Run 1:** 45 of 47 detected.
+    - **C11 and C17 survived.** Both removed `.int()` from `z.number().int().safe().min(0)`.
+    - They were equivalent mutants, not missing tests. In zod 4.6.5, `int()` and `safe()` are the same check: both
+      refuse 12.5 and 2^53, verified directly.
+    - Fix: the repeated `.safe()` was dropped from the shift close's two schemas.
+    - The same doubled check is in `products.ts`, `till.ts` and `sales.ts`. That is outside this brief, so it is
+      recorded in Next.
+  - **Run 2, on the final code:** 47 of 47 detected, and every file was restored byte for byte. The plan is
+    `plan-shift-close.mjs` in the session scratch directory.
+    - `git diff --stat faa3115 -- server/src/http/transitions.ts` is empty.
+    - On `shift-close.ts`, the same diff shows only the two schema lines and one comment line.
+  - **A probe** verified two schema gaps. It was a temporary test, run once; the test file was restored byte for
+    byte. Both gaps are reported, not fixed, because the brief excluded migrations. D4 §9 and Next describe them:
+    - the runtime role can rewrite `closed_by` and `status_changed_by` on a closed shift, with no audit event
+      (2 events before, 2 after);
+    - the database accepts an archived reason on a count's acknowledgement.
+  - **Docs:** D4 §9, the shift close's application layer and its mutation check.
+
+    Root `npm test`, the full suite: server 23 files and 403 tests, web 2 files and 20 tests, all passing.
+    `npm run typecheck` is clean for both workspaces.

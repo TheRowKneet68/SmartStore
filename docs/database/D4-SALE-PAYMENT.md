@@ -182,3 +182,105 @@ cash rounding (`SP-25`, `SP-26`); weighed lines (`SP-16`..`SP-20`); `NoSale` (`R
 and their thresholds (`CD-15`..`CD-17`); denomination counts (`CD-27`..`CD-29`, `UX-32`); shift reopen (`CD-26`);
 customer management (`CU-02`..`CU-38`); device telemetry (`SM-60a`, `PT-04`); the provider adapter, reconciliation job
 and receipt rendering (application, Step 3).
+
+## 9. Application layer: the shift close (Step 3, 2026-10-01)
+
+This section covers the shift close only. The rest of Domain 4's application code adds its own section.
+
+| State | What |
+|---|---|
+| **IMPLEMENTED** | `CD-20`..`CD-25`: begin count, the blind count, acknowledging a variance, and the close with its declared float. Also the shift screen that answers them (`CD-30`, `CD-31`). Code: `server/src/modules/sales/shift-close.ts`, and two options of the transition endpoint (`server/src/http/transitions.ts`) |
+| **TESTED** | `server/src/modules/sales/shift-close.test.ts` (25 tests). 403 server tests pass in all |
+| **Not built** | See "Not built" below |
+
+| Step | Route | Key |
+|---|---|---|
+| Begin count, `Open → Reconciling` | `POST /transitions { machine: "Shift", event: "begin count", subject }` | `Shift.Close`, from the edge (§22.11) |
+| Count one pass | `POST /stores/:storeId/shifts/:shiftId/counts { countedAmount }` | `Shift.Close` (`CD-20`) |
+| Acknowledge a pass's variance | `POST /stores/:storeId/shifts/:shiftId/counts/:countId/acknowledge { reasonCodeId }` | `Cash.Variance.Acknowledge` (`CD-23`) |
+| Close, `Reconciling → Closed` | `POST /transitions { machine: "Shift", event: "close", subject, payload: { closingFloat } }` | `Shift.Close`, from the edge (§22.11) |
+| The shift screen | `GET /stores/:storeId/shifts/:shiftId`; `GET /stores/:storeId/shifts?status=&limit=` | `Cash.Count.View` (actors-and-roles §2.10) |
+
+- **The count is blind** (`CD-21`, `CD-31`, `RT-243`). Nothing reveals the expected amount before a pass is
+  submitted. The pass's own response is the first place it appears, as the database computed it at the count
+  (`CD-22`). The shift screen's figures come only from submitted passes.
+- **A recount is a new pass** (`SM-57`). Earlier passes stand. The close, the screen's answers and its next step all
+  follow the latest pass. Counts and acknowledgements lock the shift and happen only while it is `Reconciling`.
+- **Acknowledgement** (`CD-23`, `BI-25`, `RT-245`):
+  - only a non-zero variance is acknowledged;
+  - it needs a live reason code of the organization, and is written once (`SS001`);
+  - the variance stays as counted (`CD-24`);
+  - under OQ-020 the tolerance is zero and no second approver is required.
+
+  It is recorded on the count row: who, when and why. The AU-12 vocabulary has no event type for it, AU-03's floor
+  does not require one, and AU-12c forbids adding one opportunistically, so no audit event is written.
+- **The close** (`CD-20`, `CD-25`, `RT-526`):
+  - the latest pass must exist (`not_counted`);
+  - its variance must be zero or acknowledged (`variance_unacknowledged`, which carries the count's id);
+  - then the declared float is written as a `ClosingFloat` movement out of the drawer, by the closer, and
+    `closed_by` is the closer.
+
+  The database checks all three conditions again (`SS042`), stamps `closed_at`, and audits `Shift.Close`. Closing
+  again changes nothing and writes no second float (`SM-04`).
+- **Payloads on the transition endpoint** (architecture §18.1):
+  - a binding declares the payload an event carries. It is validated before the subject is read or the permission
+    checked, so a malformed close is a 400 whoever sends it (§24.2);
+  - work the edge needs runs after the permission check, so someone who may not close learns nothing about the count
+    (§8.4, §24.3).
+- **The shift screen** (`CD-30`, `RT-527`) gives four answers:
+  - `expected`;
+  - `counted`;
+  - `variance`, with `tolerance` (0 under OQ-020);
+  - `why`: the reason, who acknowledged it and when, and `next`: `begin count`, `count`, `acknowledge`, `close`, or
+    nothing once closed.
+
+  The detail adds every pass. The opening and closing floats are not shown, because `CD-30` limits the screen to its
+  four answers.
+- **OQ-014.** `reopen` and `Reconciling → Open` have no edge row, so the endpoint refuses both (`illegal_transition`),
+  even for the Owner. `CD-26` is not built.
+
+**Decisions, stated so they can be reversed:**
+- Counting and closing go by key, not by person: anyone with `Shift.Close` in the store may count or close a shift,
+  not only the cashier who opened it. `CD-20` names the key.
+- The declared closing float has no upper bound (OQ-029).
+- One person holding both keys may count and acknowledge the same pass. No second approver applies until a threshold
+  exists (OQ-020).
+
+**Not built:**
+- The denomination breakdown that `RT-526` asks for. §8 defers `CD-27`..`CD-29`, and building it needs a migration.
+- Auto-close within a tolerance, and the second approver (OQ-020). The numbers do not exist.
+- A loss recorded as a cash `Adjustment` (`CD-24`). §8 defers the other cash transaction types (`CD-15`..`CD-17`).
+- Reopen (`CD-26`, OQ-014).
+
+**Found in the schema, reported and not changed** (the shift-close brief excluded migrations). A temporary probe,
+run once and removed, verified both:
+- **A closed shift's actor columns can be rewritten.** The runtime role can change `closed_by` and
+  `status_changed_by` on a `Closed` shift, and no audit event records it (2 events before the change, 2 after). No
+  trigger freezes them. `SM-57` makes a closed shift immutable, and `AU-05` takes the actor from the authenticated
+  identity.
+- **An archived reason is accepted at the database.** `shift_count_before_write` does not call
+  `assert_reason_code_live`, as other reasoned rows do. The route's `SS024` check is the only guard, and mutant C22
+  proves it is tested.
+
+**Mutation check (2026-10-01).** 47 mutations, one per guard, all detected on the final code, and every file was
+restored byte for byte:
+- the transition endpoint's two options (5): the payload is validated, before authorization; the edge's work runs,
+  only after the permission check; a shift's organization is its store's;
+- the close (12): a count is required, by name; an unacknowledged variance blocks and an acknowledged one does not;
+  the latest pass decides; the float is written, as declared, by the closer; `closed_by`; the float's schema and the
+  payload's declaration;
+- counting and acknowledging (11): this store's shift; `Open` and other states refused by name; the count's schema;
+  the counter; this shift's count; nothing to acknowledge; the organization's live reason; the acknowledger;
+- the shift screen (15): the latest pass; each next step; `why`; the tolerance; the list's store, status, order and
+  limit; the detail's store; the history's shift and order;
+- each route's key (4).
+
+Planning found 9 gaps, and a test was strengthened for each before the first run:
+- each route asks for its own key, and is refused to someone holding every other key of the feature;
+- another organization's shift, count and archived reason are refused through a real store;
+- a closer who is not the opener is recorded as the closer;
+- the permission is checked before anything about the count is said.
+
+The first run detected 45 of 47. The 2 survivors removed `.int()` from `z.number().int().safe()`. They were equivalent
+mutants, not missing tests: in zod 4.6.5 `int()` and `safe()` are the same check, as verified on 12.5 and 2^53.
+Dropping the repeated `.safe()` made each schema one check, and the second run detected all 47.
