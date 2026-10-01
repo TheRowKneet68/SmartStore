@@ -362,7 +362,7 @@ Steps:
    (`UX-34`). **Done.**
 3. **U3:** the shift close at the till: begin count, the blind count, the variance, acknowledge or recount, and the
    close (`UX-33`, `UX-34`, `CD-20`..`CD-25`). **Done.**
-4. **U4:** the manager's shift review (`CD-30`), under `Cash.Count.View`.
+4. **U4:** the manager's shift review (`CD-30`), under `Cash.Count.View`. **Done.**
 5. **U5**, after the web agent's tests of `Sale.tsx` land:
    - the payment panel (`UX-14`);
    - user and system errors styled apart (`UX-59`);
@@ -935,3 +935,25 @@ Append-only. One dated line per step, including failed and abandoned attempts.
     is fetched before the count, and what the count sends.
 
     Root `npm test`: server 405, web 39 (4 files). `npm run typecheck` clean.
+- 2026-10-01 — **UI, step 4 of 5: the manager's shift review.**
+  - **Server:** the shift screen names its till and its people, where it had given ids:
+    - who opened and who closed the shift;
+    - who counted each pass;
+    - who acknowledged a difference, which is `CD-30`'s "approver".
+
+    It uses the workspace's name form. This is a stated decision, recorded in D4 §9: holders of `Cash.Count.View`
+    see these names. The test names the cashier, manager and closer apart, so no join can borrow another's name.
+    Mutation check of the joins: 7 of 7 detected, restored byte for byte (`plan-u4.mjs`).
+  - **Web:** new file `web/src/back/Shifts.tsx`, shown when signed in away from a till.
+    - It offers only the sections the person may use: "Shifts" under `Cash.Count.View`, "Till set-up" under
+      `Device.View` (`UX-05`, `UX-08`). With both, they are tabs, the current one marked in weight and underline.
+    - The list shows each shift's till, opener and status in words beside a symbol, then expected, counted, and the
+      difference in words. A shift not yet counted shows only dashes (`CD-30`, `CD-31`, `UX-52`).
+    - The detail shows the four answers, what happens now, and every count as it stands (`SM-57`). A difference
+      waiting for an acknowledgement can be acknowledged there, with a reason, by someone allowed to (`CD-23`,
+      `BI-25`). That way a cashier without the key is not stuck at the till.
+  - **Tests:** 1 server, 6 in `web/src/back/Shifts.test.tsx`, and 2 more in `web/src/App.test.tsx`.
+  - **Fixed on the way:** React warned that the status-filter test ended before the filtered list rendered (an update
+    "not wrapped in act"). The test now waits for the list. The whole web suite runs without a warning.
+
+    Root `npm test`: server 406, web 47 (5 files). `npm run typecheck` clean.

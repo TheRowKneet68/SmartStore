@@ -599,6 +599,29 @@ form.panel > button[type='submit'],
   text-align: left;
 }
 
+/* ------------------------------------------------------------------ sections away from the till */
+
+/* The section shown is marked by a thick underline and bold text, not by colour alone (UX-52). */
+.tabs {
+  display: flex;
+  gap: 0.5rem;
+  max-width: 60rem;
+  margin: 1rem auto 0;
+  padding: 0 0.25rem;
+}
+
+.tabs button {
+  border-color: transparent;
+  border-bottom: 4px solid transparent;
+  border-radius: 0;
+  background: transparent;
+}
+
+.tabs button[aria-current='page'] {
+  border-bottom-color: var(--ink);
+  font-weight: 800;
+}
+
 /* ------------------------------------------------------------------ tables of records */
 
 .records {

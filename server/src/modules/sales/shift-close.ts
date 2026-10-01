@@ -83,18 +83,28 @@ const Listing = z.object({
   limit: z.coerce.number().int().min(1).max(500).default(100),
 });
 
+/** An employee as the screens name one: the same name the workspace shows them (identity/sessions.ts). */
+const nameOf = (e: string) => `coalesce(${e}.preferred_name, ${e}.first_name) || ' ' || ${e}.last_name`;
+
 /**
  * A shift with its latest pass, the one its close is decided on (`SM-57`). The figures come only from a submitted
- * pass: before one, nothing says what the drawer should hold (`CD-21`, `CD-31`, `RT-243`).
+ * pass: before one, nothing says what the drawer should hold (`CD-21`, `CD-31`, `RT-243`). The till and the people are
+ * named, because the screen's fourth answer names the approver (`CD-30`).
  */
 const SCREEN = `
-  SELECT s.id, s.status, s.pos_terminal_id AS "terminalId", s.opened_by AS "openedBy", s.opened_at AS "openedAt",
-         s.closed_by AS "closedBy", s.closed_at AS "closedAt",
+  SELECT s.id, s.status, s.pos_terminal_id AS "terminalId", t.label AS "terminalLabel",
+         s.opened_by AS "openedBy", ${nameOf('o')} AS "openedByName", s.opened_at AS "openedAt",
+         s.closed_by AS "closedBy", ${nameOf('d')} AS "closedByName", s.closed_at AS "closedAt",
          c.expected_amount AS expected, c.counted_amount AS counted, c.variance,
-         c.reason_code_id AS "reasonCodeId", r.name AS reason, c.acknowledged_by AS "acknowledgedBy", c.acknowledged_at AS "acknowledgedAt"
+         c.reason_code_id AS "reasonCodeId", r.name AS reason, c.acknowledged_by AS "acknowledgedBy",
+         ${nameOf('a')} AS "acknowledgedByName", c.acknowledged_at AS "acknowledgedAt"
   FROM cash_shift s
+  JOIN pos_terminal t ON t.id = s.pos_terminal_id
+  JOIN employee o ON o.id = s.opened_by
+  LEFT JOIN employee d ON d.id = s.closed_by
   LEFT JOIN LATERAL (SELECT * FROM shift_count x WHERE x.cash_shift_id = s.id ORDER BY x.pass_number DESC LIMIT 1) c ON true
-  LEFT JOIN reason_code r ON r.id = c.reason_code_id`;
+  LEFT JOIN reason_code r ON r.id = c.reason_code_id
+  LEFT JOIN employee a ON a.id = c.acknowledged_by`;
 
 interface ScreenRow {
   status: string;
@@ -103,6 +113,7 @@ interface ScreenRow {
   reasonCodeId: string | null;
   reason: string | null;
   acknowledgedBy: string | null;
+  acknowledgedByName: string | null;
   acknowledgedAt: string | null;
 }
 
@@ -114,7 +125,7 @@ interface ScreenRow {
  * - A closed shift has no next step: reopening is undecided (OQ-014).
  */
 function answers(row: ScreenRow) {
-  const { reasonCodeId, reason, acknowledgedBy, acknowledgedAt, ...shift } = row;
+  const { reasonCodeId, reason, acknowledgedBy, acknowledgedByName, acknowledgedAt, ...shift } = row;
   let next: string | null = null;
   if (row.status === 'Open') next = 'begin count';
   else if (row.status === 'Reconciling') {
@@ -124,7 +135,7 @@ function answers(row: ScreenRow) {
   return {
     ...shift,
     tolerance: TOLERANCE,
-    why: acknowledgedBy === null ? null : { reasonCodeId, reason, acknowledgedBy, acknowledgedAt },
+    why: acknowledgedBy === null ? null : { reasonCodeId, reason, acknowledgedBy, acknowledgedByName, acknowledgedAt },
     next,
   };
 }
@@ -221,7 +232,9 @@ export async function shiftCloseRoutes(app: FastifyInstance, options: { pool: pg
     const { rows } = await pool.query<ScreenRow>(`${SCREEN} WHERE s.id = $1 AND s.store_id = $2`, [shiftId, request.storeId]);
     if (rows[0] === undefined) throw new AppError(404, 'not_found', 'There is no such shift in this store.');
     const passes = await pool.query(
-      `SELECT ${COUNT}, r.name AS reason FROM shift_count c LEFT JOIN reason_code r ON r.id = c.reason_code_id
+      `SELECT ${COUNT}, r.name AS reason, ${nameOf('k')} AS "countedByName", ${nameOf('a')} AS "acknowledgedByName"
+       FROM shift_count c JOIN employee k ON k.id = c.counted_by
+       LEFT JOIN employee a ON a.id = c.acknowledged_by LEFT JOIN reason_code r ON r.id = c.reason_code_id
        WHERE c.cash_shift_id = $1 ORDER BY c.pass_number`,
       [shiftId],
     );

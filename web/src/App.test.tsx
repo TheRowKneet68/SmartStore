@@ -110,6 +110,26 @@ describe('the till shell (UX-35, UX-52, UX-07, UX-08)', () => {
     expect(fetch).toHaveBeenCalledWith('/api/v1/transitions', expect.objectContaining({ method: 'POST' }));
   });
 
+  it('UX-05, UX-08: away from a till, someone with Cash.Count.View sees the shifts, and only the sections they may use', async () => {
+    const manager = { ...atTill, terminal: null, stores: [{ ...store, permissions: ['Cash.Count.View'] }] };
+    serve({ 'GET /api/v1/session': manager, 'GET /api/v1/stores/s1/shifts': { items: [] } });
+    render(<App />);
+    expect(await screen.findByRole('heading', { name: 'Shifts' })).toBeTruthy();
+    expect(screen.queryByRole('navigation', { name: 'Back office' }), 'one section needs no tabs').toBeNull();
+    expect(screen.queryByText('Set up this browser as a till')).toBeNull();
+  });
+
+  it('UX-05, UX-52: with both, the sections are tabs, and the one shown is marked in text weight and underline, not colour alone', async () => {
+    const manager = { ...atTill, terminal: null, stores: [{ ...store, permissions: ['Cash.Count.View', 'Device.View'] }] };
+    serve({ 'GET /api/v1/session': manager, 'GET /api/v1/stores/s1/shifts': { items: [] }, 'GET /api/v1/stores/s1/terminals': { items: [] } });
+    render(<App />);
+    const tabs = await screen.findByRole('navigation', { name: 'Back office' });
+    expect(screen.getByRole('button', { name: 'Shifts' }).getAttribute('aria-current')).toBe('page');
+    fireEvent.click(screen.getByRole('button', { name: 'Till set-up' }));
+    expect(await screen.findByRole('heading', { name: 'Set up this browser as a till' })).toBeTruthy();
+    expect(tabs.querySelector('[aria-current="page"]')?.textContent).toBe('Till set-up');
+  });
+
   it('UX-07, MS-05: an employee with no store access sees an empty workspace that says who to ask', async () => {
     serve({ 'GET /api/v1/session': { ...atTill, stores: [], terminal: null } });
     render(<App />);

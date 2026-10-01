@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { api, ApiError, type Workspace } from './lib/api.ts';
 import { parseMoney, type Currency } from './lib/money.ts';
+import { ShiftReview } from './back/Shifts.tsx';
 import { SaleScreen } from './pos/Sale.tsx';
 import { BeginCount, CountDrawer } from './pos/ShiftClose.tsx';
 
@@ -119,7 +120,7 @@ function SignedIn({ workspace, onSignedOut }: { workspace: Workspace; onSignedOu
             <p>You have no access to a store yet. Ask the owner or a manager to give you access.</p>
           </section>
         ) : workspace.terminal === null ? (
-          <TillSetup storeId={store.id} canSetUp={store.permissions.includes('Device.View')} onDone={signOut} />
+          <BackOffice store={store} onTillSet={signOut} />
         ) : (
           <ShiftGate
             storeId={store.id}
@@ -156,6 +157,39 @@ function DrawerState({ shift }: { shift: TillShift | null | undefined }) {
       <span aria-hidden="true">{symbol}</span>
       <span>{words}</span>
     </span>
+  );
+}
+
+type Store = Workspace['stores'][number];
+
+/**
+ * Away from a till: only the work this person may do in the store is offered, and nothing they may not (UX-05, UX-08).
+ * Reviewing shifts needs Cash.Count.View; setting up a till needs Device.View. With neither, the page says so.
+ */
+function BackOffice({ store, onTillSet }: { store: Store; onTillSet: () => void }) {
+  const sections = [
+    ...(store.permissions.includes('Cash.Count.View') ? [['shifts', 'Shifts'] as const] : []),
+    ...(store.permissions.includes('Device.View') ? [['till', 'Till set-up'] as const] : []),
+  ];
+  const [section, setSection] = useState<string>(sections[0]?.[0] ?? 'till');
+  const currency = { code: store.currencyCode, exponent: store.minorUnitExponent };
+  return (
+    <>
+      {sections.length > 1 && (
+        <nav className="tabs" aria-label="Back office">
+          {sections.map(([key, label]) => (
+            <button key={key} type="button" aria-current={section === key ? 'page' : undefined} onClick={() => setSection(key)}>
+              {label}
+            </button>
+          ))}
+        </nav>
+      )}
+      {section === 'shifts' ? (
+        <ShiftReview storeId={store.id} currency={currency} canAcknowledge={store.permissions.includes('Cash.Variance.Acknowledge')} />
+      ) : (
+        <TillSetup storeId={store.id} canSetUp={store.permissions.includes('Device.View')} onDone={onTillSet} />
+      )}
+    </>
   );
 }
 

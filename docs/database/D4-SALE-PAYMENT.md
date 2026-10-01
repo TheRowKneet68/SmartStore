@@ -245,6 +245,13 @@ This section covers the shift close only. The rest of Domain 4's application cod
 - The declared closing float has no upper bound (OQ-029).
 - One person holding both keys may count and acknowledge the same pass. No second approver applies until a threshold
   exists (OQ-020).
+- **Added with the UI, 2026-10-01:** the shift screen names its till and its people, where it had given ids:
+  - who opened and who closed the shift;
+  - who counted each pass;
+  - who acknowledged a difference, which is `CD-30`'s "approver".
+
+  Anyone with `Cash.Count.View` in the store sees these names, using the same name form as the workspace. No rule
+  restricts names on an operational record. `Employee.View` covers managing employee records.
 
 **Not built:**
 - The denomination breakdown that `RT-526` asks for. §8 defers `CD-27`..`CD-29`, and building it needs a migration.

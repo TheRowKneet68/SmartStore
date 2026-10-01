@@ -415,6 +415,28 @@ describe('the shift screen (CD-30, CD-31; RT-527, RT-243; actors-and-roles s2.10
     expect((await screen(t)).json()).toMatchObject({ status: 'Closed', closedBy: t.cashier.id, closedAt: expect.any(String), variance: -50, next: null });
   });
 
+  it('CD-30, RT-527: the screen names the till and the people: who opened, counted and closed, and the approver of a difference', async () => {
+    const t = await trading();
+    await db.owner.query("UPDATE employee SET preferred_name = 'Cass' WHERE id = $1", [t.cashier.id]);
+    await db.owner.query("UPDATE employee SET preferred_name = 'Mona' WHERE id = $1", [t.manager.id]);
+    const closer = await t.staff(['Shift.Close']);
+    await db.owner.query("UPDATE employee SET preferred_name = 'Cole' WHERE id = $1", [closer.id]);
+    await shiftMove(t.cashier.as, t.shift, 'begin count');
+    const short = (await count(t, 2_200)).json();
+    await acknowledge(t, short.id, t.reason);
+    await close(t, 1_000, closer.as);
+    const shown = (await screen(t)).json();
+    expect(shown).toMatchObject({
+      terminalLabel: 'Till 1',
+      openedByName: 'Cass Employee',
+      closedByName: 'Cole Employee',
+      why: { reason: 'Drawer short', acknowledgedBy: t.manager.id, acknowledgedByName: 'Mona Employee' },
+    });
+    expect(shown.passes).toEqual([expect.objectContaining({ countedByName: 'Cass Employee', acknowledgedByName: 'Mona Employee' })]);
+    const listed = (await call('GET', `/stores/${t.storeId}/shifts`, t.manager.as)).json().items[0];
+    expect(listed).toMatchObject({ terminalLabel: 'Till 1', openedByName: 'Cass Employee', why: { acknowledgedByName: 'Mona Employee' } });
+  });
+
   it('CD-30, CD-25, SM-57: the latest pass answers, and every pass stands in the variance history, in order, with its acknowledgement', async () => {
     const t = await trading();
     await shiftMove(t.cashier.as, t.shift, 'begin count');
