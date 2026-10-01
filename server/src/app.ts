@@ -3,6 +3,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import type pg from 'pg';
 import { errorHandler } from './http/errors.ts';
 import { registerGate, type Authenticate } from './http/gate.ts';
+import { healthRoutes } from './http/health.ts';
 import { transitionRoutes } from './http/transitions.ts';
 import { productMachine, productRoutes } from './modules/catalog/products.ts';
 import { catalogReferenceRoutes } from './modules/catalog/reference.ts';
@@ -50,6 +51,9 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   if (options.ownsPool === true) app.addHook('onClose', async () => options.pool.end());
 
   registerGate(app, options.pool, options.authenticate ?? sessionAuthenticator(options.pool));
+
+  // Liveness and readiness: outside the versioned API, because they are not part of it.
+  await app.register(healthRoutes, { pool: options.pool });
 
   // Versioned from the first release (architecture §18.4).
   const v1 = { prefix: '/api/v1', pool: options.pool };

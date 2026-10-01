@@ -496,8 +496,10 @@ sets the order. Phase A (housekeeping and the push) is done.
    - manual weigh entry. **Blocked** (OQ-032): it needs a forward-only migration for the line's weight source
      (`PR-27`) and its reason (`PR-28`), which Phase D is not authorized for, and the store's threshold, a number
      `/docs` does not give;
-   - the onboarding wrapper;
-   - health and readiness endpoints;
+   - the onboarding wrapper. **Waiting** (2026-10-02): another session has uncommitted changes in
+     `server/src/onboarding.ts`, `cli/onboard.ts` (D-15) and `web/src/App.tsx`, which this would touch. It resumes
+     once that work is committed;
+   - health and readiness endpoints. **Done:** `GET /health` and `GET /ready`;
    - consistent paging on every list;
    - housekeeping jobs, only if no new dependency is needed.
 4. **Phase E, after the key list is approved:**
@@ -1229,3 +1231,32 @@ Append-only. One dated line per step, including failed and abandoned attempts.
     are detected.
     - Two of `plan-d4-app`'s search texts changed with the code: C08, the quote's store, and C09, the scan's key,
       which now matched the new route too. Both were updated, re-run and detected.
+- 2026-10-01 — **Phase D: manual weigh entry, not built.** OQ-032 (committed as `bc1d782` by the owner's session).
+  - `PR-27` and `SP-16` store a weight with its source, and `PR-28` and `SP-18` need a reason for a manual weight
+    above a per-store threshold.
+  - `sale_line` has no column for either, and `/docs` gives no threshold. The migration that would add them is not
+    authorized for Phase D.
+  - A typed decimal quantity would be exactly that unrecorded manual weight, so a sale still takes whole quantities.
+- 2026-10-02 — **A second session works in this tree.** At session start the tree held commits under the owner's git
+  identity:
+  - `8448a7c` merges the web agent's `api.ts` and `Sale.tsx` tests, so the coordination hold on those two files is
+    over;
+  - `6eafe76` fixes a key name in the role templates;
+  - `bc1d782` commits OQ-032.
+  - **Uncommitted work by that session:** D-15 (the deployment currency is NPR with exponent 2) in
+    `OWNER-DECISIONS.md`, OQ-006, `tax-and-currency.md` and onboarding; a new `AGENTS.md`; and a back office in
+    `web/` (products, sales, stock, tills, adjustments, setup).
+  - This session does not stage, revert or edit those files. Its commits stage explicit paths only.
+  - **The shared tree's web suite is red, from that work:** `web/src/back/Products.test.tsx` fails 7 tests, and it
+    and `Setup.test.tsx` do not typecheck. Both files are that session's, uncommitted. Until they land, this session's
+    server-only commits are checked with the server suite and the server typecheck. The web suite is run to show
+    that its only failures are in those files.
+- 2026-10-02 — **Phase D: liveness and readiness.**
+  - `GET /health` answers while the process runs, and touches nothing else.
+  - `GET /ready` answers once the database replies within a second. Otherwise it gives 503 and `{ status:
+    'not_ready' }`, with nothing about why (architecture §24.3, §25.4).
+  - Both are public and outside `/api/v1`, because they are not part of the API. They are not the §25 signals
+    (ledger, auth, invariants, jobs); `ledger:check` and `audit:check` remain those.
+  - `/docs` has no requirement row for a server probe. The owner's brief is the justification.
+  - Tests: 3, including a database that refuses, and one that does not answer: the pool's only connection is held,
+    and the probe still says not ready in about a second. `plan-d-health.mjs`: 4 of 4 detected.
