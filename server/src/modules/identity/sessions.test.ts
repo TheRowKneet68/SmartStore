@@ -278,8 +278,12 @@ describe('a session at a till (PT-01, MS-01, architecture s7.4)', () => {
 
     const elsewhere = await tillWorld(db.app);
     const refused = await signIn({ username: cashier.username, password: PASSWORD, terminalId: elsewhere.terminal });
-    expect(refused.statusCode).toBe(403);
+    expect(refused.statusCode, "another organization's till").toBe(403);
     expect(refused.json().error.code).toBe('sign_in_blocked');
+
+    const colleague = await person(['Sale.Create'], { org: t.org });
+    const notTheirStore = await signIn({ username: colleague.username, password: PASSWORD, terminalId: t.terminal });
+    expect(notTheirStore.statusCode, 'a till of their organization, in a store where they hold nothing').toBe(403);
   });
 });
 

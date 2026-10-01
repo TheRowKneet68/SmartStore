@@ -102,6 +102,8 @@ describe('roles and their grants (AC-01, AC-02, AC-04, PC-01..PC-03)', () => {
     expect(after.json().stores[0].permissions).toEqual(['Sale.View']);
     const history = await db.app.query('SELECT revoked_at IS NOT NULL AS revoked FROM role_permission WHERE role_id = $1 AND permission_key = $2', [id, 'Sale.Create']);
     expect(history.rows, 'kept, as a revocation').toEqual([{ revoked: true }]);
+    const listed = (await call('GET', '/roles', o.as)).json().items.find((r: { id: string }) => r.id === id);
+    expect(listed.keys, 'the role lists only what it grants now').toEqual(['Sale.View']);
     expect((await call('PUT', `/roles/${id}/permissions/Sale.Create`, o.as)).statusCode, 'granted again').toBe(200);
     expect(await holds(holder.id, o.store, 'Sale.Create')).toBe(true);
   });

@@ -175,3 +175,116 @@ The first run turned 38 red:
   - The access review and segregation-of-duties report (`REVIEW-01`, §2.13, `MS-14`).
   - Rostered shifts, attendance and leave (`EM-17`..`EM-32`), which are outside the slice.
   - RFID credentials (`RF-*`), deferred with devices.
+
+## 9. Application layer (Step 3, 2026-10-01)
+
+| State | What |
+|---|---|
+| **IMPLEMENTED** | Sign-in, sessions and sign-out; the gate's session lookup; the workspace; onboarding; employees; logins and passwords; the transition endpoint with the Employee machine; roles, grants, assignments and store access |
+| **TESTED** | `server/src/modules/identity/*.test.ts`, `server/src/onboarding.test.ts`, `server/src/config.test.ts`: 46 tests, 63 in `src/`, 336 in all |
+| **Not built** | The role templates other than the Owner's (OQ-025 item 5); the access review (`REVIEW-01`); a job that records sessions that expire unseen; device credentials (architecture §7.4, deferred with devices) |
+
+§8's "not built: login throttling" is superseded by the throttle below.
+
+**Signing in** (architecture §7, `ADR-12`):
+
+- **Passwords.** Argon2id, built into Node 26, at the OWASP Password Storage Cheat Sheet's first configuration:
+  19 MiB, 2 passes, 1 lane. A sign-in rehashes a password stored at another cost (§7.3).
+- **The response to a failure.** A wrong username and a wrong password get the same answer, after the same work
+  (§24.3).
+- **Throttling** (`SM-49`): a login with too many recent failures is refused, even with the right password, until
+  the window passes. The employee's status is never touched. The failures are the login's `Security.LoginFailed`
+  events. A throttled answer says so, which does reveal that the username exists. That is the usual trade, so that
+  a person who mistyped knows to wait.
+- **Who may sign in.** `Active` and `OnLeave` employees only. `OnLeave` gets a read-only session: the gate refuses
+  every write and every transition (employee-domain §3).
+- **The session.** It is server-held. The cookie is httpOnly, Secure, SameSite=Strict and scoped to `/api`, and the
+  database keeps only the SHA-256 of the 32-byte token. Every request re-checks the session's end, its expiry and
+  the employee's status (§7.5). A session found expired or blocked is ended and recorded.
+- **Rotation.** Signing in again on the same browser rotates the old session out (§7.1). A role assignment or its
+  removal, and a store-access grant or revocation, ends the employee's live sessions (§7.1, `EM-16`). A suspension
+  or termination does the same in its own transaction (`SM-47`).
+- **A role edit signs nobody out** (`PC-03`). Permissions are checked on every request, with no cache, so it applies
+  from the next request.
+- **A session at a till.** A session may bind to a till of the organization, in a store where the employee holds a
+  permission (`PT-01`, `MS-01`). Its source is then `Terminal`, otherwise `UI`.
+- **Usernames** (OQ-025 item 7). A username that matches in more than one organization signs nobody in unless the
+  organization is named.
+- **What is audited** (`AU-03`): sign-ins, failed sign-ins (with no actor), sign-outs, session ends, and every
+  refusal by the gate (`Security.PermissionDenied`, naming the permission that was missing).
+
+**OQ-027.** The session lifetime and the throttle's limit and window are required settings with no defaults. The
+owner sets them.
+
+**Onboarding** (`npm run onboard`) runs one transaction, in the order of CONVENTIONS §11:
+
+- the organization (its currency added if new, never re-scaled);
+- the first employee, with a login;
+- the default store with its first settings: negative stock allowed (`CON-07`), the schema's return settings;
+- the store's warehouse and its sellable Default location;
+- an `Owner` role holding every catalogue key, assigned organization-wide, with access to the store.
+
+The Owner template is the one §4 states without notation: "everything in the organization". It bypasses nothing.
+The first employee is recorded as creating themselves, from a `Job`. The password is read without being echoed.
+
+**The transition endpoint** (architecture §18.1, §8.4): `POST /api/v1/transitions { machine, event, subject }`.
+
+- It locks the subject, then takes the edge from its current state.
+- It checks the permission that edge names. An `OpenDecision` or `System` edge refuses every person (`SM-02d`).
+- A repeat of a transition already made changes nothing (`SM-04`). An illegal one is refused by name (`SM-06`).
+- The database still enforces the edge, records the event, and requires the reason (`SS004`, `SS055`).
+- Who changed it is the session (`AU-05`, `BI-33`).
+- A refusal is recorded after the transaction rolls back.
+
+The Employee machine is the first bound. Later domains bind theirs.
+
+**Routes and their permissions.** All are organization-wide (OQ-025 item 6), because employees, roles and access
+belong to the organization.
+
+| Route | Permission |
+|---|---|
+| `POST /session` | public (signing in) |
+| `GET /session`, `DELETE /session`, `PUT /session/password` | a session (own workspace, sign-out, own password: `EM-03`) |
+| `GET /employees`, `GET /employees/:id`, `GET /employees/:id/stores` | `Employee.View` |
+| `POST /employees` | `Employee.Create` (the §22.9 creation key) |
+| `PATCH /employees/:id` | `Employee.Edit`; descriptive details only (`EM-06`) |
+| `PUT /employees/:id/login` | `Employee.Password.Reset` |
+| `GET /roles`, `GET /employees/:id/roles` | `Role.View` |
+| `POST /roles` | `Role.Create` |
+| `PATCH /roles/:id`, `POST /roles/:id/archive`, `PUT`/`DELETE /roles/:id/permissions/:key` | `Role.Edit` |
+| `POST /employees/:id/roles`, `DELETE /role-assignments/:id` | `Role.Assign` |
+| `POST /employees/:id/stores`, `DELETE /store-access/:id` | `Employee.StoreAccess.Grant` |
+
+**Decisions, stated so they can be reversed:**
+
+- **Giving someone a login needs `Employee.Password.Reset`**, because it sets another person's credential (`EM-04`).
+- **Revoking store access needs the grant key.** The catalogue has no separate revoke key.
+- **Role definitions use `Role.Create` and `Role.Edit`, not `Config.Roles`**, which overlaps them (OQ-028).
+- **Removing a key from a role must state the number of employees it affects** (`PC-02`). The refusal carries that
+  number in `affected`.
+- **Archiving an archived role changes nothing.** It keeps who archived it first.
+
+**Mutation check (2026-10-01).** 50 mutations, and all 50 turned tests red. They covered:
+
+- password hashing (4);
+- sign-in and sessions (17);
+- the gate's read-only, refusal and permission paths (5);
+- the transition endpoint (8);
+- employees (5);
+- roles and access (6);
+- onboarding (2);
+- the required settings (1);
+- the error mapping (2).
+
+Planning the run found six guards that no test reached. A test was added for each:
+- the salt per hash;
+- the subject's lock;
+- who changed a transition;
+- a login on another organization's employee;
+- the role list after a revocation;
+- the required settings.
+
+Two more survived the first run and were fixed:
+- **The store-permission check on a till sign-in** was not reached: the only refused till belonged to another
+  organization.
+- **The actor of a transition** was not reached: the creator and the changer were the same person.

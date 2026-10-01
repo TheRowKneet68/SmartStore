@@ -132,6 +132,11 @@ describe('logins and passwords (EM-02, EM-03, EM-04, SM-49)', () => {
     const taken = await app.inject({ method: 'PUT', url: `/api/v1/employees/${colleague}/login`, headers: m.as, payload: { username: username.toUpperCase(), password: PASSWORD } });
     expect(taken.statusCode).toBe(409);
     expect(taken.json().error.message).toBe('That username is already taken in this organization.');
+
+    const other = await managed(['Employee.Password.Reset']);
+    const foreign = await app.inject({ method: 'PUT', url: `/api/v1/employees/${colleague}/login`, headers: other.as, payload: { username: `x-${randomUUID()}`, password: PASSWORD } });
+    expect(foreign.statusCode, "another organization's employee").toBe(404);
+    expect((await db.app.query('SELECT 1 FROM user_account WHERE employee_id = $1', [colleague])).rows).toHaveLength(0);
   });
 
   it('EM-03, SM-49: an employee changes their own password with the current one; a wrong one counts as a failed sign-in', async () => {
@@ -229,13 +234,17 @@ describe('the transition endpoint, on the Employee machine (architecture s8.4, s
     expect(missing.json().error).toEqual({ code: 'SS055', message: 'This needs a reason. Choose one and try again.' });
     const reason = await insertReasonCode(db.app, m.org);
     const operation = randomUUID();
-    const leave = await transition(m.as, id, 'leave', { reasonCodeId: reason, clientOperationId: operation });
+    // Someone other than the creator, so that who changed it cannot be left over from the creation.
+    const editor = await employeeWithAccess(db.app, m.org, ['Employee.Edit'], { assignedStore: null, accessStores: [] });
+    const leave = await transition(signedInAs(editor, m.org), id, 'leave', { reasonCodeId: reason, clientOperationId: operation });
     expect(leave.json().state).toBe('OnLeave');
+    const row = await db.app.query('SELECT status, status_changed_by FROM employee WHERE id = $1', [id]);
+    expect(row.rows, 'who changed it is the session').toEqual([{ status: 'OnLeave', status_changed_by: editor }]);
     const event = await db.app.query(
       "SELECT actor_id, reason_code_id, client_operation_id FROM audit_event WHERE entity_id = $1 AND event_type = 'Employee.StateChange' ORDER BY seq DESC LIMIT 1",
       [id],
     );
-    expect(event.rows).toEqual([{ actor_id: m.manager, reason_code_id: reason, client_operation_id: operation }]);
+    expect(event.rows).toEqual([{ actor_id: editor, reason_code_id: reason, client_operation_id: operation }]);
   });
 
   it('EM-10, SS057: an employee with a till shift that is not closed cannot be terminated', async () => {
@@ -244,6 +253,30 @@ describe('the transition endpoint, on the Employee machine (architecture s8.4, s
     const refused = await transition(signedInAs(hr, STAFF_ORGANIZATION), t.cashier, 'terminate');
     expect(refused.statusCode).toBe(409);
     expect(refused.json().error.code).toBe('SS057');
+  });
+
+  it('ADR-25: the subject is locked before its edge is chosen, so a concurrent change decides the outcome by name', async () => {
+    const m = await managed(['Employee.Create', 'Employee.Edit']);
+    const id = await newEmployee(m);
+    const reason = await insertReasonCode(db.app, m.org);
+    const holder = await db.app.connect();
+    try {
+      await holder.query('BEGIN');
+      await holder.query('SELECT 1 FROM employee WHERE id = $1 FOR UPDATE', [id]);
+      const pending = transition(m.as, id, 'suspend');
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      await holder.query(`SELECT set_config('smartstore.reason_code_id', $1, true)`, [reason]);
+      await holder.query("UPDATE employee SET status = 'OnLeave', status_changed_by = $2 WHERE id = $1", [id, actor()]);
+      await holder.query('COMMIT');
+      const response = await pending;
+      expect(response.statusCode).toBe(409);
+      expect(response.json().error, 'decided on the state it waited for, not the one it first saw').toEqual({
+        code: 'illegal_transition',
+        message: 'This employee is OnLeave, so it cannot suspend.',
+      });
+    } finally {
+      holder.release();
+    }
   });
 
   it("MS-04, architecture s24.3: another organization's employee is not found, and an unknown machine is refused", async () => {

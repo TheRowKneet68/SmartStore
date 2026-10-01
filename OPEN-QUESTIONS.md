@@ -406,6 +406,19 @@ fallback is a design that holds either answer, not a guess at the answer.
 
   The server refuses to start until the owner sets them in `.env`. Tests use TEST-ONLY values.
 - **Blocked:** running the server until the owner sets them. Nothing in the code waits on the answer.
+- **Also unstated:** any rule for passwords, such as a minimum length. *Meanwhile:* any non-empty password is accepted.
+
+### OQ-028 — `Config.Roles` and `Role.Create`/`Role.Edit` overlap
+
+- **Unknown:** which key governs defining roles.
+  - Actors-and-roles §2.8 has `Role.View`/`Role.Create`/`Role.Edit`, "manage role definitions", and `Role.Assign`.
+  - §2.12 has `Config.Roles`, "change role definitions and assignments".
+  - `SEP-03` says `Config.Roles` and `Role.Assign` should not be held together, which reads as `Config.Roles` covering
+    definitions. That is what `Role.Create`/`Role.Edit` cover.
+- **Why not answerable from `/docs`:** two catalogue keys describe the same action, and choosing which one authorizes
+  it is the owner's (`SM-02d`).
+- *Meanwhile:* the routes ask for the narrower `Role.*` keys (D7 §9). `Config.Roles` authorizes nothing yet.
+- **Blocked:** nothing. Put to the owner with the key list before Domain 5 (working agreement 8).
 
 ## How to use this file
 

@@ -249,6 +249,30 @@ Step 3 rules, given by the owner on 2026-10-01 with "start Step 3":
   - New open question: **OQ-026**, which key manages warehouses and locations. It is for the key list before
     Domain 5.
 
+- 2026-10-01 — **Step 3, Domain 7 — Employee / Role / Permission: application layer.** IMPLEMENTED + **TESTED**
+  (46 new tests, 336 passing). [D7 §9](docs/database/D7-EMPLOYEE-ROLE-PERMISSION.md).
+  - **Signing in.**
+    - Argon2id built into Node 26, rehashed at sign-in when the cost changes.
+    - Server-held sessions: httpOnly, Secure, SameSite=Strict cookie; the database keeps only a hash of the token.
+    - The same answer for a wrong username or password.
+    - A throttle on the login, never on the employee (`SM-49`).
+    - Read-only sessions for staff on leave.
+    - Every request re-checks the session and the employee's status.
+    - Rotation on sign-in. Sessions end on any assignment or access change, and on suspension or termination.
+    - Every sign-in, failure, sign-out, session end and refusal is audited.
+  - **The workspace**: the stores and permissions the employee holds (`MS-01`, `MS-05`, `UX-05`, `UX-08`).
+  - **Onboarding** (`npm run onboard`): the organization, its Owner holding every key, and its default store, in one
+    transaction.
+  - **The transition endpoint** (§18.1, §8.4). It checks the permission the attempted edge names. `OpenDecision`
+    refuses everyone. The Employee machine is bound.
+  - **Management**: employees, logins and passwords, roles and grants (`PC-02` confirmation), assignments, and store
+    access.
+  - Mutation-checked: 50 of 50 detected, after 8 tests were added or strengthened (see the log).
+  - New open questions: **OQ-027** (session lifetime and throttle are required settings, set by the owner) and
+    **OQ-028** (`Config.Roles` overlaps `Role.*`).
+  - **Owner action:** set `SESSION_LIFETIME_MINUTES`, `SIGN_IN_FAILURE_LIMIT` and `SIGN_IN_FAILURE_WINDOW_MINUTES` in
+    `.env` before `npm start` (OQ-027).
+
 ## In progress
 
 None.
@@ -261,22 +285,22 @@ None.
 3. Push `v1-build` at the end of each domain.
 4. Decide what happens to the untracked `SmartStore.zip` (210 MB) at the repository root. It is not ignored, so every
    commit has to exclude it by name.
+5. Set the three security settings in `.env` (OQ-027): `SESSION_LIFETIME_MINUTES`, `SIGN_IN_FAILURE_LIMIT`,
+   `SIGN_IN_FAILURE_WINDOW_MINUTES`. Then run `npm run onboard` once to create the organization, its Owner and its
+   store.
 
 Until then, tests run on a scratch PostgreSQL 17.11 cluster and a portable Node 26 in the session scratch directory
 (ADR-31 §14). Nothing on the owner's PostgreSQL service is touched.
 
 ## Next
 
-1. **Step 3, Domain 7: Employee / Role / Permission.** It covers:
-   - password hashing, with Node 26's built-in Argon2id;
-   - sign-in, sessions and sign-out (architecture §7);
-   - the gate's session lookup and per-request status check (§7.5);
-   - the workspace (`MS-05`, `UX-05`..`UX-07`);
-   - management of employees, roles, assignments and store access;
-   - onboarding of the organization, its first employee (the Owner template: every catalogue key) and its default
-     store.
-2. Then domains 6 and 2, the vertical slice with the performance numbers (working agreement 9), then 3 and 4. Then
-   the permission-key list before Domain 5 (working agreement 8), with OQ-018, OQ-023, OQ-025 and OQ-026.
+1. **Step 3, Domain 6: Audit.**
+   - The audit context is already set per transaction, and sign-in and refusal events are recorded (domains 1 and 7).
+   - What remains: the chain check as a callable job (`audit_chain_breaks()`), and a review of which application events
+     the slice still owes (`AU-03`).
+   - The read path stays deferred (OQ-024).
+2. Then Domain 2, the vertical slice with the performance numbers (working agreement 9), then 3 and 4. Then the
+   permission-key list before Domain 5 (working agreement 8), with OQ-018, OQ-023, OQ-025, OQ-026 and OQ-028.
    - Owner decisions needed along the way: OQ-018 before the card path; OQ-023 before any refund is paid; OQ-025
      before an employee is reactivated, a till re-enabled or a refund retried.
    - Step 3 builds the one authorization gate (architecture §8.2). Two guards moved there from the database: it sets
@@ -450,3 +474,28 @@ Append-only. One dated line per step, including failed and abandoned attempts.
   (4) A PowerShell string replacement on the mutation plan silently matched nothing. The plan was edited with the
       file tool instead.
   The new open question OQ-026 (who manages warehouses and locations) blocks nothing until Domain 5.
+- 2026-10-01 — Step 3, Domain 7 (application layer), in three commits (`26bc545`, `74f817d`, `7d76ad0`) and a fourth
+  for the mutation check. Failed attempts and corrections:
+  (1) **A real bug, found by a test.** The workspace's permission lists arrived as the string
+      `"{Config.Store,Sale.View}"`. `permission.key` is a domain type, and pg does not parse arrays of a domain type.
+      The keys are now cast to `text`.
+  (2) Typecheck: a test helper typed a request payload as `unknown`, which made Fastify's `inject` resolve to its
+      callback overload. The helper's payload is now `object`. The tests had passed at run time.
+  (3) A test expected a second archive of a role to fail with `SS001`. The database treats a repeat by the same
+      person as a no-op, and refuses only a rewrite by someone else. The test was wrong. The route now makes a
+      repeat explicitly idempotent and keeps who archived first (the `SM-04` pattern).
+  (4) Planning the mutation run found six guards no test reached. A test was added for each:
+      - the salt per hash;
+      - the subject's row lock, now proven by the error code a concurrent change produces;
+      - who changed a transition;
+      - a login set on another organization's employee, which would have been a cross-tenant hole had the
+        organization filter been lost;
+      - the role list after a revocation;
+      - that the required settings have no defaults.
+  (5) The first run still let two survive:
+      - the store-permission check on a till sign-in: the only refused till was another organization's;
+      - the transition's actor: the creator and the changer were the same person.
+      Both tests were strengthened, and both mutations are detected.
+  (6) The gate was refactored, which left Domain 1's mutations of its permission check matching nothing. Two
+      mutations of the refactored check were added; both are detected.
+  Result: 336 tests passing; 50 of 50 mutations detected.
