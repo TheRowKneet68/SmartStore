@@ -322,9 +322,20 @@ form.panel > button[type='submit'],
 
 .problem::before,
 .error::before {
-  content: '\26A0  Problem: ';
-  content: '\26A0  Problem: ' / 'Problem: ';
+  content: '\26A0  Check: ';
+  content: '\26A0  Check: ' / 'Check: ';
   font-weight: 800;
+}
+
+/* The server or the network failed: a different colour and different words from a refusal (UX-59). */
+.problem[data-kind='system'] {
+  color: var(--bad);
+  background: var(--bad-tint);
+}
+
+.problem[data-kind='system']::before {
+  content: '\2716  System problem: ';
+  content: '\2716  System problem: ' / 'System problem: ';
 }
 
 .error button {
@@ -452,6 +463,41 @@ form.panel > button[type='submit'],
   margin-top: 0.75rem;
   min-height: 4rem;
   font-size: 1.25rem;
+}
+
+/* The payment step: total due, cash given, and the change or what is still to pay (UX-14, UX-15, UX-17). */
+.tender {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.35rem 1rem;
+  margin: 0.75rem 0 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.tender dt {
+  color: var(--ink-muted);
+  font-weight: 600;
+}
+
+.tender dd {
+  margin: 0;
+  text-align: right;
+  font-weight: 700;
+  font-size: 1.2rem;
+}
+
+.tender .change-due {
+  color: var(--ok);
+  font-size: 1.75rem;
+}
+
+.tender .short {
+  color: var(--warn);
+}
+
+.tender dt.short::before {
+  content: '\26A0  ';
+  content: '\26A0  ' / '';
 }
 
 .cart {

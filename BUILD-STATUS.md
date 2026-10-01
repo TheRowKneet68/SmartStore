@@ -374,6 +374,8 @@ Steps:
    - user and system errors styled apart (`UX-59`);
    - a close that cannot strand a cart (`UX-57`).
 
+   **Done**, as Phase B's fourth step. The web agent's tests had not landed, and the owner directed it.
+
 **Coordination:** the web agent is writing tests for `web/src/lib/api.ts` and `web/src/pos/Sale.tsx`. Both files stay
 untouched until its tests are committed. Commits stage explicit paths only.
 
@@ -445,7 +447,7 @@ sets the order. Phase A (housekeeping and the push) is done.
       - user and system errors styled apart (`UX-59`);
       - a close that cannot strand a cart (`UX-57`).
 
-      Coordinate with the web agent's tests, and stage explicit paths.
+      Coordinate with the web agent's tests, and stage explicit paths. **Done.**
    5. **The slice's mutation check, then Domain 4's full check, once, at the end.**
       - Files: `server/src/modules/sales/sales.ts`, `till.ts`, `payment-methods.ts`, `quotes.ts`, and
         `server/src/modules/catalog/scan.ts`.
@@ -1069,3 +1071,25 @@ Append-only. One dated line per step, including failed and abandoned attempts.
   - **Mutation check:** 24 mutations; 23 detected on the first run. The survivor, P06, showed that no test refused a
     reprint to someone with only `Sale.View`. A test was added, and P06 is now detected. Planning also strengthened 4
     tests (D4 §10).
+- 2026-10-01 — **Phase B, step 4: UI step U5.**
+  - **Coordination:** the web agent's tests of `Sale.tsx` and `api.ts` had not landed, and none of its files was in
+    the tree. The owner's brief directed U5, so `Sale.tsx` was changed. Every existing label, test id and behaviour is
+    kept. The new tests are in `web/src/pos/SaleScreen.test.tsx`, a name apart from the `Sale.test.tsx` that the web
+    agent's brief reserves. The web agent's files were not touched.
+  - **The payment step** (`UX-14`, `UX-15`, `UX-17`) shows the total due, the cash given, and the change or what is
+    still to pay, as the cash is typed.
+    - An empty field is the exact total. Text that is not an amount gives a dash.
+    - An underpayment is named, says what to do, and is not sent. The server refuses one too (`SP-40`).
+  - **Problems are styled by whose they are** (`UX-59`), through one small component, `web/src/lib/Problem.tsx`,
+    used on every screen:
+    - a refusal or a value to correct is an amber "⚠ Check";
+    - a server failure (5xx) or a lost network is a red "✖ System problem", and says the till is still working and
+      nothing on screen was lost.
+  - **No close over a cart** (`UX-57`): the sale screen tells the till how many lines it holds. While there are any,
+    "Close the shift?" says how many items there are and what to do, and offers only "Keep selling".
+  - **A bug the new tests caught:** an exact payment showed its change as "-£0.00". JavaScript's negative zero is
+    printed with a minus sign; the change is now never below a positive zero.
+  - **Tests:** 7 new in `SaleScreen.test.tsx` and 1 in `App.test.tsx`. They also cover `SM-04` (a retried save sends
+    the same operation id) and `BI-30` (the outcome shows the server's amounts).
+  - **Not built:** printing and recording the receipt at the till. The server side is done (D4 §10). Printing needs a
+    printer device, or a browser print flow decided with the owner.

@@ -1,7 +1,8 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { Announcer } from '../lib/Announcer.tsx';
-import { api, ApiError } from '../lib/api.ts';
+import { api } from '../lib/api.ts';
 import { formatMoney, parseMoney, type Currency } from '../lib/money.ts';
+import { check, problemOf, ProblemNotice, type Problem } from '../lib/Problem.tsx';
 
 /** One counting pass as the server recorded it: the expected amount and the variance are the server's (`CD-22`). */
 export interface Pass {
@@ -25,10 +26,11 @@ interface Reason {
 /**
  * Asks before the count begins (`UX-02`): beginning it stops sales at this till until the shift is closed, and there is
  * no way back to trading (OQ-014). It sits above the sale rather than replacing it, so "Keep selling" returns to the
- * cart exactly as it was (`UX-57`), and the safe choice has the focus.
+ * cart exactly as it was (`UX-57`), and the safe choice has the focus. While the cart has items it does not offer to
+ * begin at all: beginning would strand them (`UX-57`).
  */
-export function BeginCount({ shiftId, onBegun, onCancel }: { shiftId: string; onBegun: () => void; onCancel: () => void }) {
-  const [problem, setProblem] = useState<string | null>(null);
+export function BeginCount({ shiftId, cartLines = 0, onBegun, onCancel }: { shiftId: string; cartLines?: number; onBegun: () => void; onCancel: () => void }) {
+  const [problem, setProblem] = useState<Problem | null>(null);
   const [busy, setBusy] = useState(false);
   const begin = async () => {
     setBusy(true);
@@ -36,10 +38,11 @@ export function BeginCount({ shiftId, onBegun, onCancel }: { shiftId: string; on
       await api('POST', '/transitions', { machine: 'Shift', event: 'begin count', subject: shiftId });
       onBegun();
     } catch (e) {
-      setProblem((e as ApiError).message);
+      setProblem(problemOf(e));
       setBusy(false);
     }
   };
+  const items = cartLines === 1 ? 'There is 1 item' : `There are ${cartLines} items`;
   return (
     <section className="notice" data-tone="info" aria-labelledby="begin-title">
       <span className="symbol" aria-hidden="true">
@@ -47,23 +50,22 @@ export function BeginCount({ shiftId, onBegun, onCancel }: { shiftId: string; on
       </span>
       <div>
         <h2 id="begin-title">Close the shift?</h2>
-        <p>
-          Closing starts the count of the drawer. This till takes no more sales until the shift is closed, so finish or
-          clear the current sale first.
-        </p>
+        {cartLines > 0 ? (
+          <p>{items} in the cart. Complete the sale, or remove the items, before closing the shift.</p>
+        ) : (
+          <p>Closing starts the count of the drawer. This till takes no more sales until the shift is closed.</p>
+        )}
         <div className="actions">
           <button type="button" autoFocus onClick={onCancel}>
             Keep selling
           </button>
-          <button type="button" className="primary" onClick={begin} disabled={busy}>
-            {busy ? 'Starting…' : 'Begin counting'}
-          </button>
+          {cartLines === 0 && (
+            <button type="button" className="primary" onClick={begin} disabled={busy}>
+              {busy ? 'Starting…' : 'Begin counting'}
+            </button>
+          )}
         </div>
-        {problem !== null && (
-          <p role="alert" className="error">
-            {problem}
-          </p>
-        )}
+        <ProblemNotice problem={problem} />
       </div>
     </section>
   );
@@ -101,7 +103,7 @@ export function CountDrawer({
   const [float, setFloat] = useState('');
   const [reason, setReason] = useState('');
   const [reasons, setReasons] = useState<Reason[] | null>(null);
-  const [problem, setProblem] = useState<string | null>(null);
+  const [problem, setProblem] = useState<Problem | null>(null);
   const [said, setSaid] = useState('');
   const [busy, setBusy] = useState(false);
   const money = (amount: number) => formatMoney(amount, currency.code, currency.exponent);
@@ -115,14 +117,14 @@ export function CountDrawer({
     if (asksReason && reasons === null) {
       api<{ items: Reason[] }>('GET', '/reason-codes').then(
         (r) => setReasons(r.items),
-        (e: ApiError) => setProblem(e.message),
+        (e: unknown) => setProblem(problemOf(e)),
       );
     }
   }, [asksReason, reasons]);
 
-  const refuse = (message: string) => {
-    setProblem(message);
-    setSaid(message);
+  const refuse = (p: Problem) => {
+    setProblem(p);
+    setSaid(p.message);
   };
   const difference = (p: Pass) => (p.variance < 0 ? `Short by ${money(-p.variance)}` : `Over by ${money(p.variance)}`);
   const verdict = (p: Pass) => (p.variance === 0 ? 'The drawer balances.' : `${difference(p)}.`);
@@ -130,7 +132,7 @@ export function CountDrawer({
   const submitCount = async (event: FormEvent) => {
     event.preventDefault();
     const amount = parseMoney(counted, currency.exponent);
-    if (amount === null) return refuse(`Enter the cash counted, with at most ${currency.exponent} decimal places.`);
+    if (amount === null) return refuse(check(`Enter the cash counted, with at most ${currency.exponent} decimal places.`));
     setBusy(true);
     try {
       const recorded = await api<Pass>('POST', `/stores/${storeId}/shifts/${shiftId}/counts`, { countedAmount: amount });
@@ -138,7 +140,7 @@ export function CountDrawer({
       setProblem(null);
       setSaid(`Counted ${money(recorded.countedAmount)}. Expected ${money(recorded.expectedAmount)}. ${verdict(recorded)}`);
     } catch (e) {
-      refuse((e as ApiError).message);
+      refuse(problemOf(e));
     } finally {
       setBusy(false);
     }
@@ -147,7 +149,7 @@ export function CountDrawer({
   const acknowledge = async (event: FormEvent) => {
     event.preventDefault();
     if (pass === null) return;
-    if (reason === '') return refuse('Choose the reason for the difference.');
+    if (reason === '') return refuse(check('Choose the reason for the difference.'));
     setBusy(true);
     try {
       const recorded = await api<Pass>('POST', `/stores/${storeId}/shifts/${shiftId}/counts/${pass.id}/acknowledge`, { reasonCodeId: reason });
@@ -155,7 +157,7 @@ export function CountDrawer({
       setProblem(null);
       setSaid('Difference acknowledged. The shift can now be closed.');
     } catch (e) {
-      refuse((e as ApiError).message);
+      refuse(problemOf(e));
     } finally {
       setBusy(false);
     }
@@ -166,7 +168,7 @@ export function CountDrawer({
     if (pass === null) return;
     const amount = float.trim() === '' ? null : parseMoney(float, currency.exponent);
     if (amount === null) {
-      return refuse(`Enter the cash left in the drawer for the next shift, with at most ${currency.exponent} decimal places. Enter 0 if none.`);
+      return refuse(check(`Enter the cash left in the drawer for the next shift, with at most ${currency.exponent} decimal places. Enter 0 if none.`));
     }
     setBusy(true);
     try {
@@ -176,7 +178,7 @@ export function CountDrawer({
       setSaid(`Shift closed. ${money(amount)} left in the drawer for the next shift.`);
       onClosed();
     } catch (e) {
-      refuse((e as ApiError).message);
+      refuse(problemOf(e));
     } finally {
       setBusy(false);
     }
@@ -189,11 +191,7 @@ export function CountDrawer({
     setSaid('Count the drawer again. The amount expected is shown after you submit.');
   };
 
-  const shown = problem !== null && (
-    <p role="alert" className="error">
-      {problem}
-    </p>
-  );
+  const shown = <ProblemNotice problem={problem} />;
 
   if (step.kind === 'count') {
     return (

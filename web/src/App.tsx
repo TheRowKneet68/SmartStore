@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { api, ApiError, type Workspace } from './lib/api.ts';
 import { parseMoney, type Currency } from './lib/money.ts';
+import { check, problemOf, ProblemNotice, type Problem } from './lib/Problem.tsx';
 import { ShiftReview } from './back/Shifts.tsx';
 import { SaleScreen } from './pos/Sale.tsx';
 import { BeginCount, CountDrawer } from './pos/ShiftClose.tsx';
@@ -79,7 +80,7 @@ function SignIn({ onSignedIn }: { onSignedIn: (w: Workspace) => void }) {
         </label>
         <button type="submit">Sign in</button>
         {error !== null && (
-          <div role="alert" className="error">
+          <div role="alert" className="problem" data-kind={problemOf(error).system ? 'system' : 'user'}>
             {error.message}
             {error.code === 'sign_in_blocked' && till !== null && (
               <button type="button" onClick={() => (writeTill(null), setError(null))}>
@@ -271,10 +272,12 @@ function ShiftGate({
   onShift: (shift: TillShift | null) => void;
 }) {
   const [float, setFloat] = useState('0');
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<Problem | null>(null);
   const [closing, setClosing] = useState(false);
+  // How many lines the sale's cart holds: the shift is not closed over a cart (UX-57).
+  const [cartLines, setCartLines] = useState(0);
   useEffect(() => {
-    if (canSell) api<{ shift: TillShift | null }>('GET', `/stores/${storeId}/shift`).then((r) => onShift(r.shift), (e: ApiError) => setError(e.message));
+    if (canSell) api<{ shift: TillShift | null }>('GET', `/stores/${storeId}/shift`).then((r) => onShift(r.shift), (e: unknown) => setError(problemOf(e)));
   }, [storeId, canSell, onShift]);
   if (!canSell) {
     return (
@@ -284,10 +287,14 @@ function ShiftGate({
     );
   }
   if (shift === undefined) {
-    return (
+    return error === null ? (
       <p className="panel narrow" role="status">
-        {error ?? 'Loading…'}
+        Loading…
       </p>
+    ) : (
+      <section className="panel narrow">
+        <ProblemNotice problem={error} />
+      </section>
     );
   }
   if (shift !== null && (shift.status === 'Reconciling' || shift.status === 'Closed')) {
@@ -313,6 +320,7 @@ function ShiftGate({
             {closing ? (
               <BeginCount
                 shiftId={shift.id}
+                cartLines={cartLines}
                 onBegun={() => (setClosing(false), onShift({ id: shift.id, status: 'Reconciling' }))}
                 onCancel={() => {
                   setClosing(false);
@@ -327,7 +335,7 @@ function ShiftGate({
             )}
           </div>
         )}
-        <SaleScreen storeId={storeId} currency={currency} />
+        <SaleScreen storeId={storeId} currency={currency} onCartChange={setCartLines} />
       </>
     );
   }
@@ -342,11 +350,11 @@ function ShiftGate({
     event.preventDefault();
     // The float is counted in the store's currency, to its decimal places (BI-01); v1 counts a total (CD-27 deferred).
     const amount = parseMoney(float, currency.exponent);
-    if (amount === null) return setError(`Enter the counted float, with at most ${currency.exponent} decimal places.`);
+    if (amount === null) return setError(check(`Enter the counted float, with at most ${currency.exponent} decimal places.`));
     try {
       onShift((await api<{ shift: TillShift }>('POST', `/stores/${storeId}/shift`, { openingFloat: amount })).shift);
     } catch (e) {
-      setError((e as ApiError).message);
+      setError(problemOf(e));
     }
   };
   return (
@@ -358,11 +366,7 @@ function ShiftGate({
         <input autoFocus inputMode="decimal" autoComplete="off" value={float} onChange={(e) => setFloat(e.target.value)} />
       </label>
       <button type="submit">Open shift</button>
-      {error !== null && (
-        <p role="alert" className="error">
-          {error}
-        </p>
-      )}
+      <ProblemNotice problem={error} />
     </form>
   );
 }

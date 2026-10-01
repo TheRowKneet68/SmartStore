@@ -93,6 +93,33 @@ describe('the till shell (UX-35, UX-52, UX-07, UX-08)', () => {
     expect(screen.getAllByTestId('cart-line'), 'the cart is as it was').toHaveLength(1);
   });
 
+  it('UX-57: while the cart has items, closing the shift offers only "Keep selling", and says why', async () => {
+    const closer = { ...atTill, stores: [{ ...store, permissions: [...store.permissions, 'Shift.Close'] }] };
+    serve({
+      'GET /api/v1/session': closer,
+      'GET /api/v1/stores/s1/shift': { shift: { id: 'sh1', status: 'Open' } },
+      'GET /api/v1/stores/s1/scan/012345678905': {
+        variantId: 'v1',
+        description: 'Oat milk',
+        barcode: '012345678905',
+        price: { amount: 1_250, currencyCode: 'GBP', minorUnitExponent: 2 },
+        quote: 'signed-quote',
+      },
+    });
+    render(<App />);
+    const scan = await screen.findByLabelText('Scan or type a barcode, then Enter');
+    fireEvent.change(scan, { target: { value: '012345678905' } });
+    fireEvent.submit(scan.closest('form')!);
+    await screen.findAllByTestId('cart-line');
+    fireEvent.click(screen.getByRole('button', { name: 'Close shift…' }));
+    expect(screen.getByText('There is 1 item in the cart. Complete the sale, or remove the items, before closing the shift.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Begin counting' }), 'nothing to strand the cart').toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Keep selling' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Oat milk' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close shift…' }));
+    expect(screen.getByRole('button', { name: 'Begin counting' }), 'an empty cart may close').toBeTruthy();
+  });
+
   it('UX-33, UX-35: beginning the count turns the till into its counting mode, and the bar says so', async () => {
     const closer = { ...atTill, stores: [{ ...store, permissions: [...store.permissions, 'Shift.Close'] }] };
     const fetch = serve({

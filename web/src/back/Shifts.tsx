@@ -1,7 +1,8 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { Announcer } from '../lib/Announcer.tsx';
-import { api, ApiError } from '../lib/api.ts';
+import { api } from '../lib/api.ts';
 import { formatMoney, type Currency } from '../lib/money.ts';
+import { check, problemOf, ProblemNotice, type Problem } from '../lib/Problem.tsx';
 
 /** A shift as the shift screen answers for it (`CD-30`): the figures come only from a submitted count (`CD-31`). */
 export interface ShiftAnswers {
@@ -81,7 +82,7 @@ export function ShiftReview({ storeId, currency, canAcknowledge }: { storeId: st
   const [filter, setFilter] = useState('');
   const [shifts, setShifts] = useState<ShiftAnswers[] | null>(null);
   const [open, setOpen] = useState<string | null>(null);
-  const [problem, setProblem] = useState<string | null>(null);
+  const [problem, setProblem] = useState<Problem | null>(null);
   const money = (amount: number) => formatMoney(amount, currency.code, currency.exponent);
 
   useEffect(() => {
@@ -89,7 +90,7 @@ export function ShiftReview({ storeId, currency, canAcknowledge }: { storeId: st
     setShifts(null);
     api<{ items: ShiftAnswers[] }>('GET', `/stores/${storeId}/shifts${filter === '' ? '' : `?status=${filter}`}`).then(
       (r) => setShifts(r.items),
-      (e: ApiError) => setProblem(e.message),
+      (e: unknown) => setProblem(problemOf(e)),
     );
   }, [storeId, filter, open]);
 
@@ -109,11 +110,7 @@ export function ShiftReview({ storeId, currency, canAcknowledge }: { storeId: st
           <option value="Closed">Closed</option>
         </select>
       </label>
-      {problem !== null && (
-        <p role="alert" className="error">
-          {problem}
-        </p>
-      )}
+      <ProblemNotice problem={problem} />
       {shifts === null ? (
         problem === null && <p role="status">Loading…</p>
       ) : shifts.length === 0 ? (
@@ -189,7 +186,7 @@ function ShiftDetail({
   const [shift, setShift] = useState<(ShiftAnswers & { passes: PassRow[] }) | null>(null);
   const [reasons, setReasons] = useState<Reason[] | null>(null);
   const [reason, setReason] = useState('');
-  const [problem, setProblem] = useState<string | null>(null);
+  const [problem, setProblem] = useState<Problem | null>(null);
   const [said, setSaid] = useState('');
   const [busy, setBusy] = useState(false);
   // Bumped to read the shift again after a change made here.
@@ -197,17 +194,17 @@ function ShiftDetail({
   const asks = shift !== null && shift.next === 'acknowledge' && canAcknowledge;
 
   useEffect(() => {
-    api<ShiftAnswers & { passes: PassRow[] }>('GET', `/stores/${storeId}/shifts/${shiftId}`).then(setShift, (e: ApiError) => setProblem(e.message));
+    api<ShiftAnswers & { passes: PassRow[] }>('GET', `/stores/${storeId}/shifts/${shiftId}`).then(setShift, (e: unknown) => setProblem(problemOf(e)));
   }, [storeId, shiftId, version]);
   useEffect(() => {
-    if (asks && reasons === null) api<{ items: Reason[] }>('GET', '/reason-codes').then((r) => setReasons(r.items), (e: ApiError) => setProblem(e.message));
+    if (asks && reasons === null) api<{ items: Reason[] }>('GET', '/reason-codes').then((r) => setReasons(r.items), (e: unknown) => setProblem(problemOf(e)));
   }, [asks, reasons]);
 
   const acknowledge = async (event: FormEvent) => {
     event.preventDefault();
     if (shift === null) return;
     if (reason === '') {
-      setProblem('Choose the reason for the difference.');
+      setProblem(check('Choose the reason for the difference.'));
       return;
     }
     const latest = shift.passes[shift.passes.length - 1]!;
@@ -218,7 +215,7 @@ function ShiftDetail({
       setSaid('Difference acknowledged. The shift can now be closed at the till.');
       setVersion((v) => v + 1);
     } catch (e) {
-      setProblem((e as ApiError).message);
+      setProblem(problemOf(e));
     } finally {
       setBusy(false);
     }
@@ -234,9 +231,7 @@ function ShiftDetail({
       <section className="panel">
         {back}
         {problem !== null ? (
-          <p role="alert" className="error">
-            {problem}
-          </p>
+          <ProblemNotice problem={problem} />
         ) : (
           <p role="status">Loading…</p>
         )}
@@ -289,11 +284,7 @@ function ShiftDetail({
           </button>
         </form>
       )}
-      {problem !== null && (
-        <p role="alert" className="error">
-          {problem}
-        </p>
-      )}
+      <ProblemNotice problem={problem} />
       <h2>Counts</h2>
       {shift.passes.length === 0 ? (
         <p>No count yet.</p>
