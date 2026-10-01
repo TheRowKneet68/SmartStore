@@ -258,8 +258,16 @@ describe('prices and costs (PR-30, PR-32, PR-33, PR-35, PR-36, RT-040, RT-041)',
     const past = await call('POST', `/variants/${s.variant}/prices`, c.as, { amount: 900, effectiveFrom: new Date(Date.now() - 60_000).toISOString() });
     expect(past.json().error.code).toBe('invalid_value');
     expect((await call('POST', `/variants/${s.variant}/prices`, c.as, { amount: 700 })).statusCode, 'at cost is allowed').toBe(201);
+    const later = new Date(Date.now() + 86_400_000).toISOString();
+    const pricer = await employeeWithAccess(db.app, c.org, ['Price.View', 'Price.Edit'], { assignedStore: null, accessStores: [c.store] });
+    await db.app.query("UPDATE employee SET first_name = 'Pia' WHERE id = $1", [pricer]);
+    await created('POST', `/variants/${s.variant}/prices`, signedInAs(pricer, c.org), { amount: 800, effectiveFrom: later });
     const listed = (await call('GET', `/variants/${s.variant}/prices`, c.as)).json().items;
-    expect(listed[0]).toMatchObject({ amount: 700, currencyCode: 'XTS', started: true });
+    expect(listed, 'PR-32: the history, newest first, with who set each version').toEqual([
+      { id: expect.any(String), amount: 800, currencyCode: 'XTS', minorUnitExponent: 2, effectiveFrom: later, started: false, setByName: 'Pia Employee' },
+      { id: expect.any(String), amount: 700, currencyCode: 'XTS', minorUnitExponent: 2, effectiveFrom: expect.any(String), started: true, setByName: 'Test Employee' },
+      { id: expect.any(String), amount: 1_000, currencyCode: 'XTS', minorUnitExponent: 2, effectiveFrom: expect.any(String), started: true, setByName: 'Test Employee' },
+    ]);
   });
 
   it('PR-36: setting a standard cost needs Product.Cost.View as well as Product.Edit', async () => {

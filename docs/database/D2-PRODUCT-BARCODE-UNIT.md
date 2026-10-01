@@ -348,3 +348,21 @@ The catalogue's `Product.*` keys cover "catalog entries", and no key names refer
 - the plural name's own column;
 - each route's key, against someone holding every other manager key;
 - `SS021`'s message.
+
+## 11. Phase D: price history (2026-10-01)
+
+`GET /variants/:id/prices` (`Price.View`) now also answers who set each version (`setByName`), and the currency's
+decimal places (`minorUnitExponent`). The web's price history uses both.
+
+- **The web screen** is "Prices" (`web/src/back/Prices.tsx`), shown with `Product.View` and `Price.View` held
+  organization-wide.
+  - It finds a product by name, a page at a time.
+  - It shows each live variant's versions newest first: scheduled, in force, or replaced (`PR-32`, `RT-041`).
+  - With `Price.Edit`, a new price is set from now or a later time. The server's refusals (zero, the past, below
+    cost: `PR-33`) are shown in its words.
+- **Not shown:** a store's own prices, `PR-30`'s store tier. No route reads them yet.
+- **Limit:** the read answers the 50 newest versions. Paging it belongs to Phase D's "consistent paging on every
+  list".
+- **Mutation check:** the setter's join, 1 of 1 detected; it fails if the reader is named instead.
+  - The decimal places come from the currency row. The test fixtures have one currency, with two places, so a
+    mutant fixing the value at 2 would survive. No check of it is claimed.

@@ -489,7 +489,7 @@ sets the order. Phase A (housekeeping and the push) is done.
    - the identity admin screens. **Done:** People and Roles in the back office, with `GET /permissions` (D7 §10);
    - reference-data edit and archive. **Edit done** (D2 §10). Archive is not specified for brands, units or tax
      categories (OQ-031);
-   - price history;
+   - price history. **Done** (D2 §11);
    - selling by name;
    - manual weigh entry;
    - the onboarding wrapper;
@@ -1198,3 +1198,15 @@ Append-only. One dated line per step, including failed and abandoned attempts.
   - **Decision for veto:** units and brands are changed with `Product.Edit`, as categories are (D2 §10).
   - Tests: 3 server and 7 web (6 for the screen, 1 App). `plan-d-server.mjs`: 11 of 11 detected over both Phase D
     server steps, restored byte for byte.
+- 2026-10-01 — **Phase D: price history.** D2 §11.
+  - **Server:** the existing `GET /variants/:id/prices` also answers who set each version, and the currency's
+    decimal places.
+  - **Web:** "Prices" in the back office, with `Product.View` and `Price.View` held organization-wide.
+    - It finds a product by name, a page at a time.
+    - It shows each live variant's versions newest first: scheduled, in force, or replaced (`PR-32`, `RT-041`).
+    - With `Price.Edit`, a new price is set from now or later. The server's refusals are shown in its words.
+  - **Not shown:** a store's own prices. No route reads them yet.
+  - Tests: the server's price test now lists the whole history, set by two differently named people. 2 web tests.
+    `plan-d-prices.mjs` detected the setter's join, 1 of 1.
+  - **A mutant left unclaimed:** fixing the decimal places at 2 would survive, because the fixtures have one
+    currency, with two places. D2 §11 says so.
