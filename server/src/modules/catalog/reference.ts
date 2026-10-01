@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type pg from 'pg';
 import { z } from 'zod';
 import { withTransaction } from '../../db/pool.ts';
@@ -28,6 +28,13 @@ const NewRate = z.object({
 const NewCategory = z.object({ name: text, parentId: z.uuid().nullable(), sortOrder: z.number().int() });
 const ChangedCategory = z.object({ name: text.optional(), parentId: z.uuid().nullable().optional(), sortOrder: z.number().int().optional() });
 const NewBrand = z.object({ name: text });
+const ChangedUnit = NewUnit.partial();
+const ChangedTaxCategory = NewTaxCategory.partial();
+
+// The columns each kind of row may change (D2 §4's update grants), by request field.
+const UNIT_COLUMNS = { code: 'code', name: 'name', pluralName: 'plural_name', quantityKind: 'quantity_kind', scale: 'scale' };
+const TAX_CATEGORY_COLUMNS = { code: 'code', name: 'name' };
+const BRAND_COLUMNS = { name: 'name' };
 
 const notFound = (what: string) => new AppError(404, 'not_found', `There is no such ${what}.`);
 
@@ -36,6 +43,23 @@ export async function catalogReferenceRoutes(app: FastifyInstance, options: { po
   const { pool } = options;
   const org = (request: { principal: { organizationId: string } | null }) => request.principal!.organizationId;
   const me = (request: { principal: { employeeId: string } | null }) => request.principal!.employeeId;
+
+  /**
+   * Writes the fields sent, and only those, to one row of the caller's organization (D2 §4). Another organization's row
+   * is not found (architecture §24.3). The database keeps each rule a change could break: a unit's kind once used
+   * (`SS021`), a countable unit's decimal places, and every code's and name's uniqueness.
+   */
+  const change = async (request: FastifyRequest, table: string, what: string, columns: Record<string, string>, body: Record<string, unknown>) => {
+    const { id } = Id.parse(request.params);
+    const fields = Object.keys(columns).filter((field) => body[field] !== undefined);
+    if (fields.length === 0) throw new AppError(400, 'invalid_request', 'The request changes nothing.');
+    const sets = fields.map((field, i) => `${columns[field]} = $${i + 3}`).join(', ');
+    const updated = await withTransaction(pool, auditContext(request), (c) =>
+      c.query(`UPDATE ${table} SET ${sets} WHERE id = $1 AND organization_id = $2`, [id, org(request), ...fields.map((field) => body[field])]),
+    );
+    if (updated.rowCount === 0) throw notFound(what);
+    return { id };
+  };
 
   app.get('/units', access('Product.View'), async (request) => {
     const { rows } = await pool.query(
@@ -57,6 +81,9 @@ export async function catalogReferenceRoutes(app: FastifyInstance, options: { po
     );
     return reply.status(201).send({ id: rows[0]!.id });
   });
+
+  /** Changes a unit's code, names, kind or decimal places (`PR-14`, `PR-15`). A used unit's kind is frozen (`RT-491`). */
+  app.patch('/units/:id', access('Product.Edit'), async (request) => change(request, 'unit', 'unit', UNIT_COLUMNS, ChangedUnit.parse(request.body)));
 
   /** Tax categories with each jurisdiction's rate in force (`PR-37`, `RT-047`). */
   app.get('/tax-categories', access('Tax.View'), async (request) => {
@@ -84,6 +111,11 @@ export async function catalogReferenceRoutes(app: FastifyInstance, options: { po
     );
     return reply.status(201).send({ id: rows[0]!.id });
   });
+
+  /** Changes a tax category's code or name. Its rates are never edited: a change of rate is a new version (`RT-047`). */
+  app.patch('/tax-categories/:id', access('Tax.Edit'), async (request) =>
+    change(request, 'tax_category', 'tax category', TAX_CATEGORY_COLUMNS, ChangedTaxCategory.parse(request.body)),
+  );
 
   /**
    * A new rate version, now or later (`RT-047`: a change is a new version, never an edit; `PR-40`: zero is exempt). No
@@ -169,4 +201,7 @@ export async function catalogReferenceRoutes(app: FastifyInstance, options: { po
     );
     return reply.status(201).send({ id: rows[0]!.id });
   });
+
+  /** Renames a brand. It stays unique by name whatever the case (product-domain §3). */
+  app.patch('/brands/:id', access('Product.Edit'), async (request) => change(request, 'brand', 'brand', BRAND_COLUMNS, NewBrand.parse(request.body)));
 }

@@ -174,6 +174,15 @@ describe('the till shell (UX-35, UX-52, UX-07, UX-08)', () => {
     expect(await screen.findByRole('heading', { name: 'Roles' })).toBeTruthy();
   });
 
+  it('UX-05, UX-08: Tax.View held organization-wide adds units, tax and brands, showing only the tax categories', async () => {
+    const accountant = { ...atTill, terminal: null, organization: { ...atTill.organization, permissions: ['Tax.View'] }, stores: [{ ...store, permissions: ['Cash.Count.View'] }] };
+    serve({ 'GET /api/v1/session': accountant, 'GET /api/v1/stores/s1/shifts': { items: [] }, 'GET /api/v1/tax-categories': { items: [] } });
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Units, tax and brands' }));
+    expect(await screen.findByRole('heading', { name: 'Tax categories' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Units' }), 'no Product.View: no units or brands').toBeNull();
+  });
+
   it('UX-07, MS-05: an employee with no store access sees an empty workspace that says who to ask', async () => {
     serve({ 'GET /api/v1/session': { ...atTill, stores: [], terminal: null } });
     render(<App />);

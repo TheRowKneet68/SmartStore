@@ -487,8 +487,8 @@ sets the order. Phase A (housekeeping and the push) is done.
      every read of the log to be audited, and the closed `AU-12` vocabulary has no event type for a read (OQ-024 item
      2; the proposal's last table);
    - the identity admin screens. **Done:** People and Roles in the back office, with `GET /permissions` (D7 §10);
-   - reference-data edit and archive. **Edit written and tested in `web/`**; committed with its server routes. Archive
-     is not specified for brands, units or tax categories (OQ-031);
+   - reference-data edit and archive. **Edit done** (D2 §10). Archive is not specified for brands, units or tax
+     categories (OQ-031);
    - price history;
    - selling by name;
    - manual weigh entry;
@@ -1181,3 +1181,20 @@ Append-only. One dated line per step, including failed and abandoned attempts.
     both of the route's mutants.
   - Not built: an employee's status changes from the People screen (suspend, leave, terminate). The transition
     endpoint has them; reactivation waits for the owner's keys (OQ-025).
+- 2026-10-01 — **Phase D: editing reference data.** D2 §10.
+  - **Server:** `PATCH /units/:id` and `PATCH /brands/:id` (`Product.Edit`), and `PATCH /tax-categories/:id`
+    (`Tax.Edit`). One helper writes only the fields sent, and only on a row of the caller's organization. The
+    database keeps the rules an edit could break: a used unit's kind (`SS021`, which now has its own message), a
+    countable unit's decimal places, and the codes' and names' uniqueness. A rate is never edited: a new rate is a
+    new version (`RT-047`).
+  - **Web:** "Units, tax and brands" in the back office, shown with `Product.View` or `Tax.View` held
+    organization-wide. Units, tax categories with their rates in force, and brands can be listed, added and changed.
+    A new rate can be added from now or from a later time.
+    - An edit sends only what changed.
+    - The screen says three things before the server does: a countable unit's decimal places, a malformed rate,
+      and a form with nothing changed.
+  - **Coordination:** `api.ts` gains `PATCH` in its method list, as the previous entry said it would.
+  - **Archive is not built** for these three: OQ-031.
+  - **Decision for veto:** units and brands are changed with `Product.Edit`, as categories are (D2 §10).
+  - Tests: 3 server and 7 web (6 for the screen, 1 App). `plan-d-server.mjs`: 11 of 11 detected over both Phase D
+    server steps, restored byte for byte.

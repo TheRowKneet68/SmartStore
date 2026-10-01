@@ -3,6 +3,7 @@ import { api, ApiError, type Workspace } from './lib/api.ts';
 import { parseMoney, type Currency } from './lib/money.ts';
 import { check, problemOf, ProblemNotice, type Problem } from './lib/Problem.tsx';
 import { People } from './back/People.tsx';
+import { ReferenceData } from './back/Reference.tsx';
 import { Roles } from './back/Roles.tsx';
 import { ShiftReview } from './back/Shifts.tsx';
 import { SaleScreen } from './pos/Sale.tsx';
@@ -176,6 +177,7 @@ function BackOffice({ store, organization, stores, onTillSet }: { store: Store; 
     ...(store.permissions.includes('Device.View') ? [['till', 'Till set-up'] as const] : []),
     ...(organization.includes('Employee.View') ? [['people', 'People'] as const] : []),
     ...(organization.includes('Role.View') ? [['roles', 'Roles'] as const] : []),
+    ...(organization.includes('Product.View') || organization.includes('Tax.View') ? [['reference', 'Units, tax and brands'] as const] : []),
   ];
   const [section, setSection] = useState<string>(sections[0]?.[0] ?? 'till');
   const currency = { code: store.currencyCode, exponent: store.minorUnitExponent };
@@ -196,6 +198,8 @@ function BackOffice({ store, organization, stores, onTillSet }: { store: Store; 
         <People permissions={organization} stores={stores} />
       ) : section === 'roles' ? (
         <Roles permissions={organization} />
+      ) : section === 'reference' ? (
+        <ReferenceData permissions={organization} />
       ) : (
         <TillSetup storeId={store.id} canSetUp={store.permissions.includes('Device.View')} onDone={onTillSet} />
       )}
