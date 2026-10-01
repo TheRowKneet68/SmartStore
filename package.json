@@ -20,7 +20,7 @@
     "onboard": "npm run onboard --workspace server",
     "audit:check": "npm run audit:check --workspace server",
     "typecheck": "npm run typecheck --workspace server && npm run typecheck --workspace web",
-    "test": "npm test --workspace server",
+    "test": "npm test --workspace server && npm test --workspace web",
     "web": "npm run dev --workspace web",
     "perf": "npm run perf --workspace server",
     "demo": "npm run demo --workspace server",
