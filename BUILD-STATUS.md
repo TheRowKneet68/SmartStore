@@ -381,9 +381,9 @@ untouched until its tests are committed. Commits stage explicit paths only.
 
 Earlier note, still true: Domain 3 is finished and committed.
 
-The slice's Domain 4 code is built and tested but **not yet mutation-checked**. Domain 4's check covers it: see Next.
-The files are `server/src/modules/sales/sales.ts`, `till.ts`, `payment-methods.ts` and `quotes.ts`, and
-`server/src/modules/catalog/scan.ts` as rewritten for the slice.
+The slice's Domain 4 code is **mutation-checked: 36 of 36**, after 15 tests were added (2026-10-01, see the log). The
+files are `server/src/modules/sales/sales.ts`, `till.ts`, `payment-methods.ts` and `quotes.ts`, and
+`server/src/modules/catalog/scan.ts` as rewritten for the slice. Domain 4's full check follows: see Next.
 
 ## Owner actions pending
 
@@ -455,6 +455,9 @@ sets the order. Phase A (housekeeping and the push) is done.
       - Harness: the session scratch directory's `mutate-app.mjs`, with a new `plan-d4-app.mjs`.
       - Drop `.safe()` in `products.ts`, `till.ts` and `sales.ts` first. In zod 4.6.5 `int()` and `safe()` are one
         check, so removing either is an equivalent mutant.
+
+      **The slice's check is done: 36 of 36** (see the log). **Domain 4's full check is next**, once: `plan-d4-app`,
+      `plan-shift-close`, `plan-u2`, `plan-u4`, `plan-b1`, `plan-b3` and `plan-d4-edges`, 126 mutations in all.
    6. **BUILD-STATUS**, and the 5-line summary.
 
    Card payments wait for OQ-018's keys. Until then they are refused.
@@ -1093,3 +1096,25 @@ Append-only. One dated line per step, including failed and abandoned attempts.
     the same operation id) and `BI-30` (the outcome shows the server's amounts).
   - **Not built:** printing and recording the receipt at the till. The server side is done (D4 §10). Printing needs a
     printer device, or a browser print flow decided with the owner.
+- 2026-10-01 — **Phase B, step 5a: the slice's mutation check.** `plan-d4-app.mjs` in the session scratch directory:
+  36 mutations, one per guard, of `sales.ts`, `quotes.ts`, `till.ts`, `payment-methods.ts` and `catalog/scan.ts`.
+  - `.safe()` was dropped first from three money schemas (`products.ts`, `till.ts`, `sales.ts`). In zod 4.6.5 it is
+    the same check as `int()`, so removing either is an equivalent mutant (D4 §9).
+  - **The first run detected 21 of 36.** Each of the 15 survivors was a guard no test reached, so a test was added for
+    each. No check was weakened.
+    - A quote with a part appended (Q03), a tax category with no rate in force yet (S04), a tax-exclusive store (S06),
+      and a service line, which moves no stock (S10).
+    - **S12 looked equivalent, and is not.** The database's key catches a repeat too, but without the early answer a
+      repeat is checked again: a retry after the store stopped taking cash was refused. The test now proves the retry
+      gets its sale.
+    - **The old race test never raced (S13).** The second request always found the first's sale before it reached the
+      key. The test now holds the `checkout` table until both repeats wait at the key, so the loser must answer with
+      the winner's sale.
+    - `Sale.Create` to sell (S15), and another store's sale is not found (S16).
+    - A session at another store's till (T02), the till list (T03), and a second sellable location must be named
+      (T04).
+    - Payment methods: the list, another organization's method, and an unknown one (P01–P03).
+    - **No price at a store (C04)** is reachable, though the database requires a price on an active variant
+      (`RT-042`, `SS008`): `resolve_price()` gives none at a store whose currency differs from the price's.
+  - **The second run detected 15 of 15**, and every file was restored byte for byte. The slice's total is 36 of 36.
+  - 423 server and 55 web tests pass, and both workspaces typecheck. Next: Domain 4's full check, once.

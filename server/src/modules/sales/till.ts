@@ -19,7 +19,7 @@ export const deviceMachine: MachineBinding = {
 const inStore = (key: string): { config: { access: Access } } => ({ config: { access: { kind: 'permission', key, scope: 'store' } } });
 const text = z.string().trim().min(1).max(200);
 const NewTill = z.object({ code: text, label: text, sellFromLocationId: z.uuid().optional() });
-const OpenShift = z.object({ openingFloat: z.number().int().safe().min(0) });
+const OpenShift = z.object({ openingFloat: z.number().int().min(0) });
 
 export interface Till {
   terminalId: string;

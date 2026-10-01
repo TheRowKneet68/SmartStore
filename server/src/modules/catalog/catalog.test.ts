@@ -315,6 +315,22 @@ describe("the till's scan (UX-09, UX-11, UX-25, UX-48, SM-11, RT-124, RT-493, AD
     expect((await scan(c, 'INT-9')).json().error.code).toBe('unclassified');
   });
 
+  it('PR-30, RT-040, RT-042: an item with no price in force at a store is not sold there', async () => {
+    const c = await catalogue();
+    await sellable(c, { value: '96385074', kind: 'EAN8' });
+    // A store in another currency has no price for it: the organization's price is not in that currency (resolve_price).
+    // XXX is ISO 4217's "no currency" code, a TEST-ONLY fixture here.
+    await db.owner.query(`INSERT INTO currency (code, minor_unit_exponent) VALUES ('XXX', 0) ON CONFLICT (code) DO NOTHING`);
+    const abroad = (await db.app.query<{ id: string }>(
+      `INSERT INTO store (organization_id, code, name, time_zone, currency_code) VALUES ($1, $2, 'Abroad', 'UTC', 'XXX') RETURNING id`,
+      [c.org, `S-${randomUUID()}`],
+    )).rows[0]!.id;
+    const there = signedInAs(await employeeWithAccess(db.app, c.org, ['Sale.Create'], { assignedStore: null, accessStores: [abroad] }), c.org);
+    const response = await scan(c, '96385074', there, abroad);
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error).toEqual({ code: 'no_price', message: 'Oat milk — 1 L has no price in force here, so it cannot be sold yet.' });
+  });
+
   it('MS-03, AC-01: scanning needs Sale.Create in that store; another store or organization gets a 403', async () => {
     const c = await catalogue();
     await sellable(c, { value: '4006381333931', kind: 'EAN13' });

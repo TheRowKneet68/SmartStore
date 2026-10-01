@@ -14,7 +14,7 @@ const inStore = (key: string): { config: { access: Access } } => ({ config: { ac
 const NewSale = z.object({
   clientOperationId: z.uuid(),
   lines: z.array(z.object({ quote: z.string().min(1).max(4000), quantity: z.number().int().min(1).max(1_000_000) })).min(1).max(500),
-  cash: z.object({ tendered: z.number().int().safe().min(0) }),
+  cash: z.object({ tendered: z.number().int().min(0) }),
 });
 const SaleRef = z.object({ storeId: z.uuid(), saleId: z.uuid() });
 

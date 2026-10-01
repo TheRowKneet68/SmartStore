@@ -26,7 +26,7 @@ const StoreVariant = z.object({ storeId: z.uuid(), id: z.uuid() });
 const BARCODE_KINDS = ['EAN13', 'EAN8', 'UPC_A', 'UPC_E', 'Code128', 'ITF14', 'GS1-128', 'QR', 'PLU', 'Internal'] as const;
 const Barcode = z.object({ value: z.string().trim().min(1).max(200), kind: z.enum(BARCODE_KINDS) });
 // Integer minor units (ADR-04). The database refuses zero and negatives for a price, negatives for a cost.
-const Money = z.object({ amount: z.number().int().safe(), effectiveFrom: z.iso.datetime({ offset: true }).optional() });
+const Money = z.object({ amount: z.number().int(), effectiveFrom: z.iso.datetime({ offset: true }).optional() });
 const NewProduct = z.object({ categoryId: z.uuid(), brandId: z.uuid().nullable().optional(), name: text, description: text.nullable().optional() });
 const ChangedProduct = z.object({
   categoryId: z.uuid().optional(),
