@@ -370,6 +370,27 @@ COMMENT ON FUNCTION public.assert_checkout_outcome() IS 'Cites: SP-01, PY-37. A 
 
 
 --
+-- Name: assert_count_reason_live(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.assert_count_reason_live() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  PERFORM assert_reason_code_live(NEW.reason_code_id);
+  RETURN NEW;
+END
+$$;
+
+
+--
+-- Name: FUNCTION assert_count_reason_live(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.assert_count_reason_live() IS 'Cites: CD-23, BI-25, BI-40, RT-245. A variance is acknowledged with a live reason code: an archived one is kept for history and takes no new use (SS024), as on every other reasoned row.';
+
+
+--
 -- Name: assert_movement_adjustment_state(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -681,6 +702,31 @@ $$;
 --
 
 COMMENT ON FUNCTION public.assert_sale_complete() IS 'Cites: SP-02, SP-36, SP-40, BI-04, BI-18, RT-119, RT-133, RT-135, RT-136, RT-146, IV-15. At commit, a sale is whole: at least one line; totals are the sums of its lines and follow the tax mode; the settled amounts sum to the total due; no tender is left pending; captured tenders equal the total due; change equals cash tendered beyond cash applied and is disbursed from the drawer; and every stocked line moved exactly its quantity.';
+
+
+--
+-- Name: assert_shift_actors_fixed(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.assert_shift_actors_fixed() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  IF NEW.status IS NOT DISTINCT FROM OLD.status
+     AND (NEW.status_changed_by IS DISTINCT FROM OLD.status_changed_by OR NEW.closed_by IS DISTINCT FROM OLD.closed_by) THEN
+    RAISE EXCEPTION 'who changed shift % and who closed it are recorded by its transitions and cannot be rewritten', OLD.id
+      USING ERRCODE = 'SS001';
+  END IF;
+  RETURN NEW;
+END
+$$;
+
+
+--
+-- Name: FUNCTION assert_shift_actors_fixed(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.assert_shift_actors_fixed() IS 'Cites: SM-57, AU-05, CD-20, BI-08. A shift''s actors are written by its transitions alone: who last changed its status, and who closed it, change only together with the status. A closed shift''s record therefore cannot be rewritten, at any privilege.';
 
 
 --
@@ -7333,6 +7379,20 @@ COMMENT ON TRIGGER tg_audit_event_no_truncate ON public.audit_event IS 'Cites: A
 
 
 --
+-- Name: cash_shift tg_cash_shift_actors_fixed; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_cash_shift_actors_fixed BEFORE UPDATE OF status_changed_by, closed_by ON public.cash_shift FOR EACH ROW EXECUTE FUNCTION public.assert_shift_actors_fixed();
+
+
+--
+-- Name: TRIGGER tg_cash_shift_actors_fixed ON cash_shift; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_cash_shift_actors_fixed ON public.cash_shift IS 'Cites: SM-57, AU-05. Rewriting who acted on a shift, without a transition, is refused (SS001).';
+
+
+--
 -- Name: cash_shift tg_cash_shift_audit; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -8310,6 +8370,20 @@ CREATE TRIGGER tg_shift_count_before_write BEFORE INSERT OR UPDATE ON public.shi
 --
 
 COMMENT ON TRIGGER tg_shift_count_before_write ON public.shift_count IS 'Cites: CD-21, CD-22. Server-computed expected amount and pass number.';
+
+
+--
+-- Name: shift_count tg_shift_count_reason_live; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_shift_count_reason_live BEFORE UPDATE OF reason_code_id ON public.shift_count FOR EACH ROW WHEN ((new.reason_code_id IS NOT NULL)) EXECUTE FUNCTION public.assert_count_reason_live();
+
+
+--
+-- Name: TRIGGER tg_shift_count_reason_live ON shift_count; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_shift_count_reason_live ON public.shift_count IS 'Cites: CD-23, BI-40. An acknowledgement with an archived reason code is refused (SS024).';
 
 
 --
@@ -11226,4 +11300,6 @@ INSERT INTO public.schema_migrations (version) VALUES
     ('20260930161000'),
     ('20260930170000'),
     ('20261001100000'),
-    ('20261001110000');
+    ('20261001110000'),
+    ('20261001120000'),
+    ('20261001120100');

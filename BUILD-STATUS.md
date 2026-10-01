@@ -428,6 +428,8 @@ sets the order. Phase A (housekeeping and the push) is done.
    1. **Two forward-only migrations, with tests,** for the guards the shift close found missing:
       - a shift's `closed_by` and `status_changed_by` cannot be rewritten (`SM-57`, `AU-05`);
       - an archived reason code is refused on a count's acknowledgement (`SS024`'s rule).
+
+      **Done.**
    2. **The till's other edges,** disable and retire, on the transition endpoint (the Device machine, §22.12).
    3. **Reading sales:**
       - a list by date, till and cashier, paged;
@@ -1005,3 +1007,20 @@ Append-only. One dated line per step, including failed and abandoned attempts.
     - no `.env` is tracked.
   - **Pushed:** `git push origin v1-build`, `ab2ce8a..83e752b`. `v1-build` equals `origin/v1-build`.
   - **Next** now follows the brief's phases B to F. Owner action 4 and decision row 7 (the zip) are resolved.
+- 2026-10-01 — **Phase B, step 1: the two guards the shift close found missing.** Migrations are authorized for this
+  phase, forward-only.
+  - **`20261001120000_d4_shift_actors_fixed.sql`:** `status_changed_by` and `closed_by` change only together with a
+    shift's status, at any privilege (`SS001`; `SM-57`, `AU-05`).
+  - **`20261001120100_d4_count_reason_live.sql`:** a count's acknowledgement takes only a live reason (`SS024`;
+    `CD-23`, `BI-40`), through the existing `assert_reason_code_live()`.
+  - **One failed attempt:** the first run stopped at the template build. dbmate requires a `-- migrate:down` block,
+    which I had left out. Both files now end with the repository's forward-only down block, which raises.
+  - **The route's archived-reason check was removed.** It had become a copy of the database's, with the same code and
+    message, so its mutant could only be equivalent. The route still looks the reason up in the caller's organization
+    first, which keeps another organization's archived reason from answering `SS024` (§24.3).
+  - **Tests:** 2 new. A rewrite is refused as the runtime role and as the owner role, on an open shift and on a closed
+    one. An archived reason is refused at the database.
+  - **Mutation check of the new guards:** 5 of 5 detected, restored byte for byte (`plan-b1.mjs`). It includes
+    mutants of the migrations themselves; each test run rebuilds the template.
+  - **`npm run db:migrate`** applied both migrations and rewrote `db/schema.sql`. Its diff is only the new objects and
+    the two migration versions.

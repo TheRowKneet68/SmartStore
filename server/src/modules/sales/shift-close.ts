@@ -188,7 +188,7 @@ export async function shiftCloseRoutes(app: FastifyInstance, options: { pool: pg
    *   acknowledge.
    * - The different approver required "beyond a higher threshold" is not applied, because no threshold is configured
    *   (OQ-020).
-   * - The reason must be a live code of the organization (`SS024`'s rule).
+   * - The reason must be the organization's (checked here) and live (`SS024`, checked by the database).
    */
   app.post('/stores/:storeId/shifts/:shiftId/counts/:countId/acknowledge', inStore('Cash.Variance.Acknowledge'), async (request) => {
     const { shiftId, countId } = CountRef.parse(request.params);
@@ -201,12 +201,11 @@ export async function shiftCloseRoutes(app: FastifyInstance, options: { pool: pg
       if (Number(found.rows[0].variance) === 0) {
         throw new AppError(409, 'nothing_to_acknowledge', 'This count matches the expected amount, so there is no variance to acknowledge.');
       }
-      const reason = await c.query<{ archived: boolean }>(
-        'SELECT archived_at IS NOT NULL AS archived FROM reason_code WHERE id = $1 AND organization_id = $2',
-        [body.reasonCodeId, principal.organizationId],
-      );
-      if (reason.rows[0] === undefined) throw new AppError(422, 'invalid_reference', 'Something this refers to does not exist.');
-      if (reason.rows[0].archived) throw new AppError(409, 'SS024', 'That reason code is archived. Choose a live one.');
+      // Another organization's reason is not found, whatever its state: checked here, because the database's
+      // liveness check would otherwise answer first and say it was archived (architecture §24.3).
+      const reason = await c.query('SELECT 1 FROM reason_code WHERE id = $1 AND organization_id = $2', [body.reasonCodeId, principal.organizationId]);
+      if (reason.rows.length === 0) throw new AppError(422, 'invalid_reference', 'Something this refers to does not exist.');
+      // An archived reason is refused by the database (SS024, tg_shift_count_reason_live).
       await c.query('UPDATE shift_count SET acknowledged_by = $2, reason_code_id = $3 WHERE id = $1', [countId, principal.employeeId, body.reasonCodeId]);
       const acknowledged = (await c.query(`SELECT ${COUNT} FROM shift_count c WHERE c.id = $1`, [countId])).rows[0];
       return { ...acknowledged, tolerance: TOLERANCE };

@@ -393,6 +393,37 @@ describe('the close (s22.11 close; CD-20, CD-23, CD-25, SM-57; RT-526, RT-244, R
   });
 });
 
+describe('guards in the database (SM-57, AU-05, SS024)', () => {
+  const code = (run: Promise<unknown>) => run.then(() => 'accepted', (e: { code?: string }) => e.code);
+
+  it('SM-57, AU-05, SS001: who changed a shift and who closed it change only with its status, at any privilege; a closed shift cannot be rewritten', async () => {
+    const t = await trading();
+    const open = await code(db.app.query('UPDATE cash_shift SET status_changed_by = $2 WHERE id = $1', [t.shift, t.manager.id]));
+    expect(open, 'an open shift: no status change, no new actor').toBe('SS001');
+    await shiftMove(t.cashier.as, t.shift, 'begin count');
+    await count(t, 2_250);
+    await close(t, 1_000);
+    for (const db_ of [db.app, db.owner]) {
+      expect(await code(db_.query('UPDATE cash_shift SET closed_by = $2 WHERE id = $1', [t.shift, t.manager.id])), 'who closed it').toBe('SS001');
+      expect(await code(db_.query('UPDATE cash_shift SET status_changed_by = $2 WHERE id = $1', [t.shift, t.manager.id])), 'who changed it').toBe('SS001');
+    }
+    const row = await db.app.query('SELECT closed_by, status_changed_by FROM cash_shift WHERE id = $1', [t.shift]);
+    expect(row.rows).toEqual([{ closed_by: t.cashier.id, status_changed_by: t.cashier.id }]);
+  });
+
+  it("SS024, BI-25, BI-40: the database itself refuses an archived reason on a count's acknowledgement", async () => {
+    const t = await trading();
+    await shiftMove(t.cashier.as, t.shift, 'begin count');
+    const pass = (await count(t, 2_200)).json();
+    await ok('POST', `/reason-codes/${t.reason}/archive`, t.owner, {});
+    const refused = await code(
+      db.app.query('UPDATE shift_count SET acknowledged_by = $2, reason_code_id = $3 WHERE id = $1', [pass.id, t.manager.id, t.reason]),
+    );
+    expect(refused).toBe('SS024');
+    expect((await db.app.query('SELECT acknowledged_by FROM shift_count WHERE id = $1', [pass.id])).rows).toEqual([{ acknowledged_by: null }]);
+  });
+});
+
 const screen = (t: Trading, as: Headers = t.manager.as, shift = t.shift) => call('GET', `/stores/${t.storeId}/shifts/${shift}`, as);
 
 describe('the shift screen (CD-30, CD-31; RT-527, RT-243; actors-and-roles s2.10 Cash.Count.View)', () => {

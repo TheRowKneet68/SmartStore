@@ -269,6 +269,18 @@ run once and removed, verified both:
   `assert_reason_code_live`, as other reasoned rows do. The route's `SS024` check is the only guard, and mutant C22
   proves it is tested.
 
+**Both closed on 2026-10-01**, once the owner authorized migrations for finishing Domain 4. Each is a forward-only
+migration:
+- `20261001120000_d4_shift_actors_fixed.sql` adds `tg_cash_shift_actors_fixed`. `status_changed_by` and `closed_by`
+  change only together with the status, so a closed shift's actors are fixed at any privilege (`SS001`; `SM-57`,
+  `AU-05`).
+- `20261001120100_d4_count_reason_live.sql` adds `tg_shift_count_reason_live`. An acknowledgement's reason must be
+  live (`SS024`; `CD-23`, `BI-40`).
+
+The route's own archived check became a second copy of the database's, with the same code and message, so it was
+removed. The route still finds the reason in the caller's organization first. Without that, the database's liveness
+check would answer first, and would say whether another organization's reason was archived (§24.3).
+
 **Mutation check (2026-10-01).** 47 mutations, one per guard, all detected on the final code, and every file was
 restored byte for byte:
 - the transition endpoint's two options (5): the payload is validated, before authorization; the edge's work runs,
