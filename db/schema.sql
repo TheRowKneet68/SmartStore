@@ -1671,6 +1671,10 @@ BEGIN
       SELECT l.id INTO v_first FROM stock_adjustment_line l JOIN product_variant v ON v.id = l.variant_id
       WHERE v.base_unit_id = OLD.id LIMIT 1;
     END IF;
+    IF v_first IS NULL THEN
+      SELECT l.id INTO v_first FROM sale_line l JOIN product_variant v ON v.id = l.variant_id
+      WHERE v.base_unit_id = OLD.id LIMIT 1;
+    END IF;
     IF v_first IS NOT NULL THEN
       RAISE EXCEPTION 'unit % is already used (first use: %); its quantity kind cannot change', OLD.id, v_first
         USING ERRCODE = 'SS021';
@@ -1685,7 +1689,7 @@ $$;
 -- Name: FUNCTION freeze_used_quantity_kind(); Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON FUNCTION public.freeze_used_quantity_kind() IS 'Cites: PR-14, RT-491. A unit''s quantity kind is frozen once any movement or document line uses it; the refusal names the first use.';
+COMMENT ON FUNCTION public.freeze_used_quantity_kind() IS 'Cites: PR-14, RT-491. A unit''s quantity kind is frozen once any movement or document line uses it: a movement, a stock adjustment line, or a sale line, which the return and refund lines of a sale follow. The refusal names the first use.';
 
 
 --
@@ -11470,4 +11474,5 @@ INSERT INTO public.schema_migrations (version) VALUES
     ('20261001110000'),
     ('20261001120000'),
     ('20261001120100'),
-    ('20261001130000');
+    ('20261001130000'),
+    ('20261001140000');

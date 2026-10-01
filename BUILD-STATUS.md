@@ -346,8 +346,8 @@ Step 3 rules, given by the owner on 2026-10-01 with "start Step 3":
 
 **Finishing v1, on the owner's brief of 2026-10-01** (phases A to F; see Next).
 - **Phase A is done.** `*.zip` is ignored, and `v1-build` is pushed (`83e752b`).
-- **Phase B, finishing Domain 4, is done but for one gap found after it** (Next, item 1.7). Domain 4's full mutation
-  check detected 126 of 126. Migrations are authorized for Phase B: forward-only, each with `Cites:` comments.
+- **Phase B, finishing Domain 4, is done.** Domain 4's full mutation check detected 126 of 126. A gap found
+  afterwards, a sold service's unit kind, is closed by a forward-only migration (Next, item 1.7; D4 §12).
 - **Phase C is done:** the permission-key proposal waits for the owner's answer.
 - **Phase D is under way.** The audit-log read is not built (OQ-024 item 2). The identity admin screens and the
   reference-data screen are written and tested in `web/`; they are committed with their server routes.
@@ -466,8 +466,9 @@ sets the order. Phase A (housekeeping and the push) is done.
    6. **BUILD-STATUS**, and the 5-line summary. **Done.**
    7. **Found after the check, while preparing Phase D:** a unit's kind is frozen once a movement or a stock
       adjustment line uses it, but not once a sale line does (`PR-14`, `RT-491`: "any movement or document"). A
-      service moves no stock, so a sold service's unit can still change kind. **Next:** a forward-only migration adds
-      the sale line to `freeze_used_quantity_kind()`, with a test and a focused mutation check.
+      service moves no stock, so a sold service's unit can still change kind. **Done:** migration
+      `20261001140000_d4_unit_kind_sale_lines.sql` adds the sale line to `freeze_used_quantity_kind()`, with a test,
+      and its mutant is detected (D4 §12).
 
    Card payments wait for OQ-018's keys. Until then they are refused.
 2. **Phase C:** write `docs/architecture/PERMISSION-KEY-PROPOSAL.md` (working agreement 8).
@@ -1148,3 +1149,9 @@ Append-only. One dated line per step, including failed and abandoned attempts.
   - **OQ-031 raised:** `/docs` gives no archive to brands, units or tax categories, which the brief's Phase D lists
     to "edit/archive". Editing is unblocked.
   - Phase C is done: the permission-key proposal is committed (`776d318`) and waits for the owner.
+- 2026-10-01 — **Phase B, step 7: a sale line freezes its unit's kind** (`PR-14`, `RT-491`). D4 §12.
+  - Migration `20261001140000_d4_unit_kind_sale_lines.sql` replaces `freeze_used_quantity_kind()` with a third
+    branch, for sale lines. Return and refund lines always follow a sale line of the same variant, so they need none.
+    `npm run db:migrate` applied it and rewrote `db/schema.sql`.
+  - The service-sale test now proves the sold service's unit cannot change kind (`SS021`). Its mutant, the branch
+    switched off, is detected (`plan-b7.mjs`), and the file was restored byte for byte.

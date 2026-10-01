@@ -391,3 +391,18 @@ every file was restored byte for byte.
 
 The plans and their harness, `mutate-app.mjs`, are in the session's scratch directory. The harness restores each file
 byte for byte. Each run rebuilds the test database from the migrations, so a migration's mutants are real.
+
+## 12. A sale line freezes its unit's kind (2026-10-01)
+
+`PR-14` and `RT-491` freeze a unit's quantity kind once "any movement or document" uses it. Domain 3's
+`freeze_used_quantity_kind()` checked only movements and stock adjustment lines.
+- A stocked sale writes a movement, so it was covered.
+- A service writes none. A sold service's unit could therefore still change kind, and its sale lines would then read
+  as a different kind of quantity.
+
+Migration `20261001140000_d4_unit_kind_sale_lines.sql` gives the function a third branch, for sale lines. A return
+line or a refund line always follows a sale line of the same variant, so no other document table needs a branch. The
+refusal is still `SS021`, and names the first use.
+
+- **Test:** `sales.test.ts`. A service is sold once, and its unit then cannot change kind.
+- **Mutation check:** 1 of 1 detected (`plan-b7.mjs`). Without the branch, the change goes through.

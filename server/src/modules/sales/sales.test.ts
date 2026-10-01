@@ -177,7 +177,7 @@ describe('a cash sale at the till (s22.6, SP-01, SP-02, PY-38, RT-119)', () => {
     expect((await db.app.query('SELECT 1 FROM checkout WHERE store_id = $1', [s.storeId])).rows).toEqual([]);
   });
 
-  it('PR-15, IV-15: a service is sold without moving stock; the stocked line beside it moves', async () => {
+  it("PR-15, IV-15, PR-14, RT-491: a service is sold without moving stock, the stocked line beside it moves, and the sale freezes the service unit's kind", async () => {
     const s = await shop();
     await openShift(s);
     const service = (await ok('POST', '/units', s.owner, { code: 'SVC', name: 'Service', quantityKind: 'Service', scale: 0 })).id as string;
@@ -187,6 +187,9 @@ describe('a cash sale at the till (s22.6, SP-01, SP-02, PY-38, RT-119)', () => {
     expect(response.statusCode, response.body).toBe(201);
     const moved = await db.app.query('SELECT variant_id FROM inventory_movement WHERE sale_id = $1', [response.json().saleId]);
     expect(moved.rows).toEqual([{ variant_id: s.bread }]);
+    // The sale line is the service unit's only use: no movement or adjustment line names it.
+    const changed = await db.app.query("UPDATE unit SET quantity_kind = 'Countable' WHERE id = $1", [service]).then(() => 'changed', (e: { code?: string }) => e.code);
+    expect(changed, 'sold once, so its kind cannot change').toBe('SS021');
   });
 
   it('RT-124, EC-07: a line keeps the price it was quoted, though the price changes before the sale is saved', async () => {
