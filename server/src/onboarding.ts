@@ -56,6 +56,7 @@ export interface Onboarded {
  * - One default store with the organization's currency and time zone (organization-model §9; D1 §2). It allows negative
  *   stock (`CON-07`: the v1 default for stores). Its return window and default disposition are the schema's (D5).
  * - Its warehouse has the Default location, which is sellable (organization-model §5).
+ * - The organization's walk-in customer, which a sale with no named customer is recorded against (`CU-01`).
  */
 export async function onboard(pool: pg.Pool, input: OnboardingInput): Promise<Onboarded> {
   const owner = randomUUID();
@@ -101,6 +102,8 @@ export async function onboard(pool: pg.Pool, input: OnboardingInput): Promise<On
     });
     await assignRole(c, { employeeId: owner, roleId: role, organizationId, storeId: null, assignedBy: owner });
     await grantStoreAccess(c, { employeeId: owner, storeId, organizationId, grantedBy: owner });
+    // CU-01: the walk-in record every sale without a named customer needs; one per organization.
+    await c.query(`INSERT INTO customer (organization_id, is_walk_in, display_name) VALUES ($1, true, 'Walk-in')`, [organizationId]);
     return { organizationId, ownerEmployeeId: owner, storeId, warehouseId, defaultLocationId };
   });
 }

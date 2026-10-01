@@ -8,6 +8,7 @@ const pool = createPool(config.DATABASE_URL);
 const app = await buildApp({
   pool,
   logger: true,
+  quoteMaxAgeMinutes: config.QUOTE_MAX_AGE_MINUTES,
   session: {
     lifetimeMinutes: config.SESSION_LIFETIME_MINUTES,
     failureLimit: config.SIGN_IN_FAILURE_LIMIT,

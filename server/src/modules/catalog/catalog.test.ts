@@ -218,7 +218,7 @@ describe('prices and costs (PR-30, PR-32, PR-33, PR-35, PR-36, RT-040, RT-041)',
     const storePricer = signedInAs(await employeeWithAccess(db.app, c.org, ['Price.Edit'], { assignedStore: c.store, accessStores: [c.store] }), c.org);
     expect((await call('POST', `/variants/${s.variant}/prices`, storePricer, { amount: 1_300 })).statusCode, 'not the default').toBe(403);
     expect((await call('POST', `/stores/${c.store}/variants/${s.variant}/prices`, storePricer, { amount: 1_100 })).statusCode).toBe(201);
-    expect((await scan(c, '012345678905')).json().price).toEqual({ amount: 1_100, currencyCode: 'XTS', minorUnitExponent: 2, source: 'store' });
+    expect((await scan(c, '012345678905')).json().price).toEqual({ amount: 1_100, currencyCode: 'XTS', minorUnitExponent: 2 });
   });
 });
 
@@ -251,7 +251,7 @@ describe("the till's scan (UX-09, UX-11, UX-25, UX-48, SM-11, RT-124, RT-493, AD
     const tomorrow = new Date(Date.now() + 86_400_000).toISOString();
     await created('POST', `/variants/${s.variant}/prices`, c.as, { amount: 1_400, effectiveFrom: tomorrow });
     await created('POST', `/stores/${c.store}/variants/${s.variant}/prices`, c.as, { amount: 1_300, effectiveFrom: tomorrow });
-    expect((await scan(c, '012345678905')).json().price).toMatchObject({ amount: 1_250, source: 'organization' });
+    expect((await scan(c, '012345678905')).json().price).toEqual({ amount: 1_250, currencyCode: 'XTS', minorUnitExponent: 2 });
   });
 
   it('SM-11, PR-46, PR-48: a Discontinued product still sells; an archived variant does not, and archiving it again changes nothing', async () => {
@@ -290,8 +290,9 @@ describe("the till's scan (UX-09, UX-11, UX-25, UX-48, SM-11, RT-124, RT-493, AD
         description: 'Oat milk — 1 L',
         barcode: '012345678905',
         unit: { code: expect.any(String), quantityKind: 'Countable', scale: 0 },
-        price: { amount: 1_250, currencyCode: 'XTS', minorUnitExponent: 2, source: 'organization' },
+        price: { amount: 1_250, currencyCode: 'XTS', minorUnitExponent: 2 },
         quotedAt: expect.any(String),
+        quote: expect.any(String),
       });
     }
     expect((await scan(c, '12345678905')).statusCode, 'a dropped leading zero finds nothing, never something wrong').toBe(404);

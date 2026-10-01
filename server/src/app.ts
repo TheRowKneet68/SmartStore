@@ -12,10 +12,16 @@ import { employeeMachine, employeeRoutes } from './modules/identity/employees.ts
 import { identityRoutes } from './modules/identity/routes.ts';
 import { sessionAuthenticator, type SessionPolicy } from './modules/identity/sessions.ts';
 import { organizationRoutes } from './modules/organization/routes.ts';
+import { paymentMethodRoutes } from './modules/sales/payment-methods.ts';
+import { quoteSigner } from './modules/sales/quotes.ts';
+import { saleRoutes } from './modules/sales/sales.ts';
+import { deviceMachine, tillRoutes } from './modules/sales/till.ts';
 
 export interface AppOptions {
   pool: pg.Pool;
   session: SessionPolicy;
+  /** How long a scan's price quote stays valid for the sale (OQ-027). */
+  quoteMaxAgeMinutes: number;
   /** How a request's principal is found: the session cookie. Tests may substitute their own. */
   authenticate?: Authenticate;
   logger?: boolean;
@@ -41,14 +47,18 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
 
   // Versioned from the first release (architecture §18.4).
   const v1 = { prefix: '/api/v1', pool: options.pool };
+  const quotes = quoteSigner();
   await app.register(identityRoutes, { ...v1, session: options.session });
   await app.register(employeeRoutes, { ...v1, session: options.session });
   await app.register(accessRoutes, v1);
   await app.register(organizationRoutes, v1);
   await app.register(catalogReferenceRoutes, v1);
   await app.register(productRoutes, v1);
-  await app.register(scanRoutes, v1);
-  await app.register(transitionRoutes, { ...v1, machines: [employeeMachine, productMachine] });
+  await app.register(scanRoutes, { ...v1, quotes });
+  await app.register(tillRoutes, v1);
+  await app.register(paymentMethodRoutes, v1);
+  await app.register(saleRoutes, { ...v1, quotes, quoteMaxAgeMinutes: options.quoteMaxAgeMinutes });
+  await app.register(transitionRoutes, { ...v1, machines: [employeeMachine, productMachine, deviceMachine] });
 
   await app.ready();
   return app;

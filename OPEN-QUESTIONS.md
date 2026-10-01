@@ -239,6 +239,11 @@ fallback is a design that holds either answer, not a guess at the answer.
   "payment captured" among its effects), but the submit edge that creates the payment is also unkeyed.
 - **Meanwhile:** the schema carries the machine unchanged. **The owner needs to name these keys before the card path
   is built.**
+- **Step 3 reading, 2026-10-01, stated so the owner can veto it.** §22.6 lists "payment captured" among the side
+  effects of completing a sale (`Sale.Create`), "all in one transaction". So a **cash** tender exists only inside the
+  sale's completion transaction, and its creation, authorization and capture there are that transition's side effects,
+  authorized by `Sale.Create`. No cash payment is ever submitted or captured on its own. Card submit, capture and void
+  remain separate transitions with `OPEN DECISION` permissions, and the gate refuses them.
 
 ### OQ-019 — Which location a till sells from
 
@@ -407,6 +412,11 @@ fallback is a design that holds either answer, not a guess at the answer.
   The server refuses to start until the owner sets them in `.env`. Tests use TEST-ONLY values.
 - **Blocked:** running the server until the owner sets them. Nothing in the code waits on the answer.
 - **Also unstated:** any rule for passwords, such as a minimum length. *Meanwhile:* any non-empty password is accepted.
+- **Added 2026-10-01: how long a price quote stays valid.**
+  - `RT-124` fixes a line's price at the moment it is added. D4 §3 has the scan sign each quote and the application
+    bound its age, so an old quote cannot be replayed at an old price.
+  - No document gives the bound. *Meanwhile:* a fourth required setting, `QUOTE_MAX_AGE_MINUTES`, with no default.
+  - A cart older than that must be rescanned.
 
 ### OQ-028 — `Config.Roles` and `Role.Create`/`Role.Edit` overlap
 

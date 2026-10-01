@@ -23,6 +23,7 @@ const Environment = z.object({
   SESSION_LIFETIME_MINUTES: wholeMinutes,
   SIGN_IN_FAILURE_LIMIT: z.coerce.number().int().min(1),
   SIGN_IN_FAILURE_WINDOW_MINUTES: wholeMinutes,
+  QUOTE_MAX_AGE_MINUTES: wholeMinutes,
 });
 
 export type Config = z.infer<typeof Environment>;
