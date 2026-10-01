@@ -18,7 +18,7 @@ import { organizationRoutes } from './modules/organization/routes.ts';
 import { paymentMethodRoutes } from './modules/sales/payment-methods.ts';
 import { quoteSigner } from './modules/sales/quotes.ts';
 import { saleRoutes } from './modules/sales/sales.ts';
-import { shiftMachine } from './modules/sales/shift-close.ts';
+import { shiftCloseRoutes, shiftMachine } from './modules/sales/shift-close.ts';
 import { deviceMachine, tillRoutes } from './modules/sales/till.ts';
 
 export interface AppOptions {
@@ -64,6 +64,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   await app.register(tillRoutes, v1);
   await app.register(paymentMethodRoutes, v1);
   await app.register(saleRoutes, { ...v1, quotes, quoteMaxAgeMinutes: options.quoteMaxAgeMinutes, lockTimeoutMs: options.lockTimeoutMs });
+  await app.register(shiftCloseRoutes, v1);
   await app.register(reasonRoutes, v1);
   await app.register(adjustmentRoutes, v1);
   await app.register(stockRoutes, v1);

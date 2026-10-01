@@ -119,3 +119,54 @@ describe('beginning the count (s22.11 begin count; CD-20, CD-21, BI-39)', () => 
     expect(await shiftStatus(t.shift)).toBe('Open');
   });
 });
+
+const count = (t: Trading, countedAmount: number, as: Headers = t.cashier.as, shift = t.shift, store = t.storeId) =>
+  call('POST', `/stores/${store}/shifts/${shift}/counts`, as, { countedAmount });
+
+describe('the count (CD-20, CD-21, CD-22, CD-31, SM-57; RT-243, RT-244, RT-526)', () => {
+  it('CD-20, SS042: the drawer is counted only while the shift is being counted', async () => {
+    const t = await trading();
+    const early = await count(t, 2_250);
+    expect(early.statusCode).toBe(409);
+    expect(early.json().error).toEqual({
+      code: 'not_counting',
+      message: 'This shift is Open. Begin the count before counting the drawer.',
+    });
+    const rows = await db.app.query('SELECT 1 FROM shift_count WHERE cash_shift_id = $1', [t.shift]);
+    expect(rows.rows).toHaveLength(0);
+  });
+
+  it('CD-21, CD-22, CD-31, RT-243, RT-244: a submitted count reveals the expected amount and the variance, counted minus expected, both from the server', async () => {
+    const t = await trading();
+    await shiftMove(t.cashier.as, t.shift, 'begin count');
+    const short = await count(t, 2_200);
+    expect(short.statusCode).toBe(201);
+    // Expected = the float 1000 + the 1250 of cash applied to the sale (CD-06); nothing the client sent.
+    expect(short.json()).toMatchObject({ passNumber: 1, countedAmount: 2_200, expectedAmount: 2_250, variance: -50, countedBy: t.cashier.id, acknowledgedBy: null });
+    const over = await count(t, 2_300);
+    expect(over.json()).toMatchObject({ passNumber: 2, countedAmount: 2_300, expectedAmount: 2_250, variance: 50 });
+  });
+
+  it('SM-57, RT-244, CD-24: a recount is a new pass; the earlier pass stands, and no counted amount is ever edited', async () => {
+    const t = await trading();
+    await shiftMove(t.cashier.as, t.shift, 'begin count');
+    const first = (await count(t, 2_000)).json();
+    await count(t, 2_250);
+    const passes = await db.app.query('SELECT pass_number, counted_amount FROM shift_count WHERE cash_shift_id = $1 ORDER BY pass_number', [t.shift]);
+    expect(passes.rows).toEqual([
+      { pass_number: 1, counted_amount: '2000' },
+      { pass_number: 2, counted_amount: '2250' },
+    ]);
+    const edit = await db.app.query('UPDATE shift_count SET counted_amount = 2250 WHERE id = $1', [first.id]).catch((e: { code?: string }) => e.code);
+    expect(edit, 'the runtime role cannot rewrite a count').toBe('42501');
+  });
+
+  it('CD-20, AC-01, CD-04: counting needs Shift.Close, a whole non-negative amount, and the shift of this store', async () => {
+    const t = await trading();
+    await shiftMove(t.cashier.as, t.shift, 'begin count');
+    expect((await count(t, 2_250, t.manager.as)).statusCode, 'no Shift.Close').toBe(403);
+    expect((await count(t, -1)).statusCode, 'never negative').toBe(400);
+    expect((await call('POST', `/stores/${t.storeId}/shifts/${t.shift}/counts`, t.cashier.as, { countedAmount: 12.5 })).statusCode, 'minor units').toBe(400);
+    expect((await count(t, 2_250, t.cashier.as, randomUUID())).statusCode, 'no such shift here').toBe(404);
+  });
+});

@@ -328,7 +328,7 @@ Step 3 rules, given by the owner on 2026-10-01 with "start Step 3":
 agent works in parallel on `web/**`. This work stages explicit paths only. Steps:
 
 1. Begin count (`Open → Reconciling`, `Shift.Close`) on the transition endpoint. **Done.**
-2. The blind count: a pass, revealing expected and variance only after submission (`CD-21`, `CD-22`).
+2. The blind count: a pass, revealing expected and variance only after submission (`CD-21`, `CD-22`). **Done.**
 3. Acknowledging a variance (`Cash.Variance.Acknowledge`, a reason, once; `CD-23`).
 4. The close, declaring the closing float (`CD-20`, `CD-25`).
 5. The read that answers it (`CD-30`, `Cash.Count.View`).
@@ -695,3 +695,16 @@ Append-only. One dated line per step, including failed and abandoned attempts.
     schema has no denomination tables: D4 deferred `CD-27`..`CD-29`, with counts as totals in v1. Adding them is a
     migration, which the brief excludes, so the count is a total and the breakdown is a decision for the owner (see
     "Decisions the owner needs to make").
+- 2026-10-01 — **Shift close, step 2 of 6: the blind count.**
+  - **Built:** `POST /stores/:storeId/shifts/:shiftId/counts { countedAmount }`, under `Shift.Close` in the store
+    (`CD-20`). It locks the shift and refuses unless the shift is `Reconciling` (`not_counting`; the database's
+    `SS042` is the backstop). It then inserts one pass. Only the response reveals the expected amount and the
+    variance, both computed by the database (`CD-21`, `CD-22`, `CD-31`, `RT-243`, `RT-244`). A recount is a new pass,
+    and the earlier one stands (`SM-57`).
+  - **Tests:** 4 new:
+    - counting before the count begins is refused;
+    - 2200 counted against 2250 expected gives −50, and 2300 gives +50, as passes 1 and 2;
+    - earlier passes stand, and the runtime role cannot rewrite a counted amount (`42501`);
+    - `Shift.Close`, whole non-negative minor units, and the shift of this store are required.
+
+    Root `npm test`: server 385, web 20.
