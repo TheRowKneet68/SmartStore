@@ -94,3 +94,61 @@ than a regression. It was not touched. The web slice was run on its own to confi
   to match.
 - **No `RT-xxx` row covers displaying or keying an amount.** `money.test.ts` cites the governing prose instead. A
   requirement row for money display and entry would close this properly.
+
+---
+
+## 2026-10-01 — Step 3, Domain 4, Part B: the API client and the sale screen
+
+Work moved into the separate worktree `D:\smartstore-routine` on branch `routine/web-tests`, branched at `faa3115`.
+Rationale: Claude owns `server/**` and was mid-flight on shift-close step 6, and a shared index made even disjoint files
+risky to commit. This branch touches only `web/**` and this log.
+
+**`web/src/lib/api.test.ts` (`3c40d6e`), 11 tests.** Errors carry the server's extra fields through to `ApiError.details`,
+because that is what lets a screen name the shift it should mention instead of showing a bare message.
+
+**`web/src/pos/Sale.test.tsx` (`b042e3c`), 17 tests.** Driven through a stubbed `globalThis.fetch`, not a stubbed `api`
+module. Mocking `api` would only prove the screen calls a function the test replaced; stubbing the network exercises
+screen, client and response shape together, which is where the real failures live.
+
+**Verified.** `npm test --workspace web` 48/48 passed across three consecutive runs, no flakes. `npm run typecheck`
+clean for server and web. `npm test` at this worktree's root was deliberately **not** used: the worktree has no `.env`
+and no database, so the server half cannot run here. Full root tests belong to `D:\SmartStore`, after the shift-close
+sources are restored.
+
+### Failures hit, and what each one actually was
+
+1. **Committed while typecheck was failing.** Ten strict-null errors from `noUncheckedIndexedAccess`, all of them
+   indexing `savedBodies()[n]` or `cartLines()[n]`. Green tests were not sufficient; I should have run typecheck before
+   committing. Fixed by routing every index through `sent(n)` and `cartLine(n)`, which raise on a missing element
+   instead of answering about `undefined`, then amended. History does not hold the broken state.
+2. **`toHaveTextContent` does not exist here.** It is a `@testing-library/jest-dom` matcher and that package is
+   deliberately not installed. I used it anyway. Replaced with plain `.textContent` assertions. Do not add the
+   dependency; `toContain` on `textContent` is enough.
+3. **Two assertions were wrong about the code, not the screen.**
+   - I expected `9999` units at `$2.50` to read `$24,975.00`. It reads **`$24,997.50`**. The clamp is correct; my
+     arithmetic was not.
+   - I asserted that an empty scan field never reaches the network. It never does, but the hand-off to the cash field
+     only happens once a cart exists to pay for; with an empty cart focus correctly stays put. The test now scans
+     first, then asserts the call count is unchanged.
+
+   Both were corrected in the test. Neither needed a code change.
+4. **`getByText(/Sale \d+ completed/)` was ambiguous**, because the outcome heading and the `role="status"` live region
+   both report that the sale completed. That repetition is the point of `RT-339`/`UX-51`, so the query became
+   role-scoped to the heading instead of the screen being changed to suit a test.
+
+### Findings handed back, not fixed here
+
+- **Two cart lines of the same product are indistinguishable to a screen reader.** Both quantity inputs carry
+  `aria-label="Quantity of Oat milk 1 L"`, so `getByLabelText` throws "found multiple elements". Nothing in the
+  reviewed rules requires a position in the label, so this was not changed unilaterally. Recommend the label carry the
+  line's position. The tests work around it with `within(cartLine(n))`.
+- **`web/src/lib/money.ts` citation.** Still open and unchanged; see the section above.
+
+### How a stray file reached the other worktree
+
+A PowerShell fix-up script called `[System.IO.File]::ReadAllText($p)` with a relative path. The .NET API resolves
+relative paths against the **process** working directory, not the PowerShell location, so the read failed, `$t` became
+`$null`, and the following `WriteAllText` created a **0-byte** `web/src/pos/Sale.test.tsx` inside `D:\SmartStore` —
+the other worktree, owned by Claude. It was untracked and empty, so it was deleted and nothing was lost. Had Claude
+run `git add -A`, that stray file would have landed in the shift-close commit. Use absolute paths for .NET file calls,
+and prefer the file tools over shell text substitution.
