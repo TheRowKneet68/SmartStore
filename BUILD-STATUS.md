@@ -1,6 +1,6 @@
 # Build Status
 
-**Last updated:** 2026-10-01
+**Last updated:** 2026-10-02
 
 ## Phase
 
@@ -517,6 +517,9 @@ sets the order. Phase A (housekeeping and the push) is done.
    - typecheck, tests, perf, ledger check and audit check, measured against the p95 ≤ 100 ms budget;
    - a "what is left before a real store can use this" list. It names GAP-044, GATE-Q2-LICENCE and GAP-038 as release
      blockers, not engineering ones.
+
+   **Run 2026-10-02, before Phase E,** because Phase E waits for the owner. The list is
+   `notes/WHAT-IS-LEFT.md`, and the numbers are appended to ADR-31. Run it again after Phase E.
 
 Step 3 builds the one authorization gate (architecture §8.2). Two guards moved there from the database: it sets the
 audit context, and it binds every `*_by` column to the signed-in employee (CONVENTIONS §12).
@@ -1295,3 +1298,21 @@ Append-only. One dated line per step, including failed and abandoned attempts.
   - `OPEN-QUESTIONS.md` held the other session's uncommitted OQ-006 resolution, which rests on its uncommitted D-15.
     Only item 8 was staged: the staged copy is the committed file plus the new item, built with
     `git hash-object` and `git update-index`. The working file keeps both changes.
+- 2026-10-02 — **Phase F, run before Phase E**, because Phase E waits for the owner. `notes/WHAT-IS-LEFT.md`.
+  - **Typecheck:** the server passes. The web fails only in the other session's uncommitted `Products.test.tsx` and
+    `Setup.test.tsx`.
+  - **Tests:** server 435 of 435. Web 143 of 150; all 7 failures are in the other session's uncommitted
+    `Products.test.tsx`.
+  - **`ledger:check`:** every balance agrees with its ledger. **`audit:check`:** the chain is intact. Both ran on the
+    deployment database, which holds little data.
+  - **Perf** (100,000 variants; `PERF_CHROMIUM` named the machine's Chromium 1234; nothing was downloaded):
+    - scan-to-cart, HTTP: p95 5.1 ms;
+    - scan-to-cart in the browser: p95 24.1 ms;
+    - both meet p95 ≤ 100 ms;
+    - sale-save, 10 lines, cash: p95 69.1 ms (max 190.8 ms). That meets the proposed 100 ms, but is 2.5 times the
+      first run's 27.1 ms.
+  - **On the sale-save rise:** nothing in its path changed, and the environment did. The Node on the path is now
+    v26.7.0, where the first run used a portable 26.10.0, and seeding took 12.6 minutes. A re-run on the first setup
+    comes before calling it a regression. Appended to ADR-31 as a dated re-measurement.
+  - **The list** names the release blockers (`GAP-044`, `GATE-Q2-LICENCE`, `GAP-038`) and the owner answers that
+    unblock building. It also lists the engineering left, and what v1 leaves out by decision.
