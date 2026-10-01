@@ -304,3 +304,16 @@ decision; each entry is either a version pin or a correction of a fact in the pr
 session scratch directory, because the installed Node is 25.8.2. PostgreSQL 17.11: a scratch cluster on
 `127.0.0.1:54329`, started from the installed PostgreSQL 17 binaries, with `scram-sha-256` enforced for both
 smartstore roles. The owner's `postgresql-x64-17` service was not touched and its superuser password was not needed.
+
+## 15. Implementation notes — 2026-10-01, Step 3
+
+**Append-only.** Sections 1 to 14 are unchanged. Nothing here changes the owner's decision.
+
+| Item | Proposal said | What was done, and why |
+|---|---|---|
+| fastify, zod | 5.12.5, 4.6.5 (§3) | Installed at exactly those versions, both older than the 7-day release-age window |
+| tsx | Dev-time TS runner (§3) | **Not installed.** Node 26 runs the TypeScript sources directly by stripping types: `npm start` is `node src/main.ts`, and `npm run dev` is `node --watch src/main.ts`. `tsconfig.json` sets `erasableSyntaxOnly`, so the type checker refuses any syntax Node cannot strip, such as enums and parameter properties. One dependency fewer, and no build step |
+| Route permissions | "an `onRoute` hook lets the server refuse to start if any route lacks a declared permission" (§4.2) | Built (`server/src/http/gate.ts`). The server also refuses to start if a declared key is missing from the `permission` catalogue, or if a store-scoped route names no `:storeId` |
+| Request validation | zod (§3) | zod schemas parse the body in each handler. Unknown fields are dropped, so a client cannot supply a `*_by` column (`AU-05`, `BI-33`) |
+| `int8` | Number only when `Number.isSafeInteger`, otherwise throw (§2) | Built as a per-pool type parser, so test pools and anything else in the process keep pg's defaults |
+| Session lookup | Domain 7 (§10) | The gate takes the principal lookup as a function. Until domain 7, nobody is signed in, so every non-public request is refused (`AC-01`). Tests use a TEST-ONLY lookup that reads headers; the permission check and everything after it run for real |

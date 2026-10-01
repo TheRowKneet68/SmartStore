@@ -198,6 +198,52 @@ export async function insertLocation(
   return rows[0]!.id;
 }
 
+// ---------------------------------------------------------------- access (domain 7)
+
+/**
+ * A new employee of `organizationId` holding `keys` through one role, assigned in `assignedStore` (null:
+ * organization-wide), with access to `accessStores`. AC-01, EM-13 and MS-11 decide what that grants
+ * (employee_holds_permission()).
+ */
+export async function employeeWithAccess(
+  db: Db,
+  organizationId: string,
+  keys: string[],
+  options: { assignedStore: string | null; accessStores: string[] },
+): Promise<string> {
+  const person = await db.query<{ id: string }>(
+    `INSERT INTO employee (organization_id, employee_number, first_name, last_name, status_changed_by)
+     VALUES ($1, $2, 'Test', 'Employee', $3) RETURNING id`,
+    [organizationId, `E-${randomUUID()}`, actor()],
+  );
+  const employeeId = person.rows[0]!.id;
+  const role = await db.query<{ id: string }>(`INSERT INTO role (organization_id, name) VALUES ($1, $2) RETURNING id`, [
+    organizationId,
+    `Role ${randomUUID()}`,
+  ]);
+  for (const key of keys) {
+    await db.query(`INSERT INTO role_permission (role_id, organization_id, permission_key, granted_by) VALUES ($1, $2, $3, $4)`, [
+      role.rows[0]!.id,
+      organizationId,
+      key,
+      actor(),
+    ]);
+  }
+  await db.query(
+    `INSERT INTO employee_role_assignment (employee_id, role_id, organization_id, store_id, assigned_by) VALUES ($1, $2, $3, $4, $5)`,
+    [employeeId, role.rows[0]!.id, organizationId, options.assignedStore, actor()],
+  );
+  for (const store of options.accessStores) {
+    await db.query(`INSERT INTO employee_store_access (employee_id, store_id, organization_id, granted_by) VALUES ($1, $2, $3, $4)`, [
+      employeeId,
+      store,
+      organizationId,
+      actor(),
+    ]);
+  }
+  return employeeId;
+}
+
 // ---------------------------------------------------------------- inventory (domain 3)
 
 export type Policy = 'AllowNegative' | 'BlockNegative';

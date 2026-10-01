@@ -4,11 +4,15 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
+    "start": "node src/main.ts",
+    "dev": "node --watch src/main.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "pg": "8.23.0"
+    "fastify": "5.12.5",
+    "pg": "8.23.0",
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "@types/node": "24.13.6",

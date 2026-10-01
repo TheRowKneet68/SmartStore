@@ -232,6 +232,23 @@ Step 3 rules, given by the owner on 2026-10-01 with "start Step 3":
   - Mutation-checked: 41 of 41 detected, after one added test (see the log).
   - **Owner decision needed before Step 3 can reactivate an employee, re-enable a till or retry a refund: OQ-025.**
 
+- 2026-10-01 — **Step 3, Domain 1 — Organization / Store / Warehouse: application layer.** IMPLEMENTED + **TESTED**
+  (17 new tests, 290 passing). [D1 §9](docs/database/D1-ORGANIZATION-STORE-WAREHOUSE.md).
+  - **The server skeleton every domain uses** (ADR-31 §5):
+    - environment validation;
+    - the pool, with exact `int8` (`ADR-04`);
+    - `withTransaction()`, which sets the audit context per transaction and makes a bounded retry of deadlocks;
+    - the error shape, with stable codes (§18.4).
+  - **The one authorization gate** (§8.2). The server refuses to start if a route declares no access, names a key
+    outside the catalogue, or is store-scoped with no store. Every request is checked with
+    `employee_holds_permission()`, and refused unless allowed.
+  - Store settings: read the version in force and those scheduled; add a version (`Config.Store`, `REQ-AU-06`,
+    `SS038`).
+  - Runs with `node src/main.ts`: Node 26 strips the types, so no build step and no `tsx` (ADR-31 §15).
+  - Mutation-checked: 21 of 21 detected.
+  - New open question: **OQ-026**, which key manages warehouses and locations. It is for the key list before
+    Domain 5.
+
 ## In progress
 
 None.
@@ -250,10 +267,16 @@ Until then, tests run on a scratch PostgreSQL 17.11 cluster and a portable Node 
 
 ## Next
 
-1. **Step 3, Domain 1: Organization / Store / Warehouse.** The server skeleton (ADR-31 §5: config, pool, transaction
-   helper, error shape, route permission declarations checked at boot) and the organization module.
-2. Then domains 7, 6 and 2, the vertical slice with the performance numbers (working agreement 9), then 3 and 4. Then
-   the permission-key list before Domain 5 (working agreement 8).
+1. **Step 3, Domain 7: Employee / Role / Permission.** It covers:
+   - password hashing, with Node 26's built-in Argon2id;
+   - sign-in, sessions and sign-out (architecture §7);
+   - the gate's session lookup and per-request status check (§7.5);
+   - the workspace (`MS-05`, `UX-05`..`UX-07`);
+   - management of employees, roles, assignments and store access;
+   - onboarding of the organization, its first employee (the Owner template: every catalogue key) and its default
+     store.
+2. Then domains 6 and 2, the vertical slice with the performance numbers (working agreement 9), then 3 and 4. Then
+   the permission-key list before Domain 5 (working agreement 8), with OQ-018, OQ-023, OQ-025 and OQ-026.
    - Owner decisions needed along the way: OQ-018 before the card path; OQ-023 before any refund is paid; OQ-025
      before an employee is reactivated, a till re-enabled or a refund retried.
    - Step 3 builds the one authorization gate (architecture §8.2). Two guards moved there from the database: it sets
@@ -417,3 +440,13 @@ Append-only. One dated line per step, including failed and abandoned attempts.
   - Noted for the record: Constitution §6 lists "Phase 4 — UI/UX system" before implementation. No Phase 4 document
     exists. The browser slice follows `ux-requirements.md` and architecture §5, and is plain (`UX-67`, `UX-68`). It is
     built because the owner asked for it by name.
+- 2026-10-01 — Step 3, Domain 1 (application layer). Failed attempts and corrections:
+  (1) The first typecheck failed on an index that might be undefined in the error mapping. Fixed before any run.
+  (2) Before the mutation run, review found that the rollback test could not fail: an uncommitted row is invisible
+      from another connection either way. The test now commits a further transaction on the same connection, and
+      the missing-`ROLLBACK` mutation is detected.
+  (3) Mutation G04's search text matched twice, because `auditContext()` has the same refusal. The harness reported
+      it as a bad match rather than running it. It was re-run with a unique match and detected.
+  (4) A PowerShell string replacement on the mutation plan silently matched nothing. The plan was edited with the
+      file tool instead.
+  The new open question OQ-026 (who manages warehouses and locations) blocks nothing until Domain 5.

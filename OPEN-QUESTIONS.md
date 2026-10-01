@@ -372,6 +372,23 @@ fallback is a design that holds either answer, not a guess at the answer.
   rest is silent or contradictory.
 - **Blocked:** item 1's features in Step 3. Nothing else.
 
+### OQ-026 — Which permission authorizes managing warehouses and storage locations
+
+- **Unknown:** the catalogue key for creating a warehouse or a storage location, renaming one, and turning a
+  location's `IsSellable` on or off (`WH-03`).
+  - Actors-and-roles §3.3 gives "create warehouses and locations" to the Super Administrator, whose template (§4)
+    holds `Config.*` and `Device.*`.
+  - No key's description covers it. `Config.Store` is "change store settings", and organization-model §3 lists
+    settings that do not include warehouses. `Config.Organization` is "organization settings, tax, reason codes,
+    approval thresholds".
+- **Why not answerable from `/docs`:** choosing which key authorizes an action is the owner's (`SM-02d`, architecture
+  §8.4), as in OQ-018, OQ-023 and OQ-025.
+- *Meanwhile:* onboarding creates the store's warehouse and its Default location, which every warehouse must have.
+  No route manages warehouses or locations.
+- **Blocked:** any location beyond the Default, including the Quarantine, Damaged and ExpiredHold locations that a
+  return's non-sellable dispositions need (D5). Put to the owner with the key list before Domain 5 (working
+  agreement 8). Nothing else.
+
 ## How to use this file
 
 - Add an entry the moment you hit something the specification does not answer. Then continue with a different task.

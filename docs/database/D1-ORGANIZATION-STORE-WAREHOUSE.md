@@ -249,3 +249,58 @@ by configuration (`MS-20`), and nothing here enables them.
 Nothing here is on the scan path. The per-sale reads are the settings version in force (one backward index scan) and
 the document number (one upsert on a primary key). The time-zone check costs about 0.1 ms and runs only when a zone is
 written. The alternative, a lookup in `pg_timezone_names`, measured about 175 ms per call on this machine.
+
+## 9. Application layer (Step 3, 2026-10-01)
+
+| State | What |
+|---|---|
+| **IMPLEMENTED** | The server skeleton every domain uses, and the store-settings routes |
+| **TESTED** | `server/src/db/pool.test.ts`, `server/src/http/gate.test.ts`, `server/src/modules/organization/routes.test.ts`: 17 tests. 290 passing in all |
+| **Not built** | Onboarding (organization, first employee, default store) is built with domain 7, which it needs. Warehouse and location management: see the decisions below |
+
+**The skeleton** (ADR-31 §5), shared by every later domain:
+
+- `config.ts` validates the environment and fails fast, naming variables but never their values.
+- `db/pool.ts`:
+  - `int8` arrives as an exact number or is refused (`ADR-04`);
+  - `withTransaction()` runs one use case in one transaction (architecture §21.1) at READ COMMITTED;
+  - it sets the audit context first, local to the transaction (`AU-05`, `AU-10`);
+  - it retries a deadlock or serialization failure at most three times, with jitter (§20.2).
+- `http/errors.ts`: every error is `{ error: { code, message } }` (§18.4). Business-rule refusals keep their
+  `SSnnn` code, at 409. The database's own text, which names internal ids, is never sent (§24.3).
+- `http/gate.ts`, the one authorization gate (§8.2, `AC-03`):
+  - **At start.** Every route declares `public`, `session`, or a catalogue permission scoped to the route's
+    `:storeId` or to the organization. The server refuses to start otherwise.
+  - **At request time.** It finds the principal and checks `employee_holds_permission()`. It hands the handler the
+    one store it authorized (`MS-02`, `MS-03`).
+  - **What a refusal looks like.** A store outside the caller's set, an unknown store, and another organization's
+    store all get the same 403, which names the permission that was missing (`UX-58`).
+- Each request's id is its correlation id, a UUID, returned in `x-correlation-id` (§25.3).
+
+**Routes:**
+
+| Route | Access | Rules |
+|---|---|---|
+| `GET /api/v1/stores/:storeId/settings` | `Config.Store` in the store | The version in force and those scheduled (`REQ-AU-06`) |
+| `POST /api/v1/stores/:storeId/settings` | `Config.Store` in the store | A complete new version, now or later; one in the past is refused (422). A tax-mode change after a sale is refused (`SS038`, 409). Who made it is the signed-in employee (`AU-05`, `BI-33`) |
+
+**Decisions, stated so they can be reversed:**
+
+- **Reading settings needs `Config.Store`.** The catalogue has no read-only key for store settings, and the only
+  reader is the screen that changes them (`UX-08`). The sale path reads them inside the server.
+- **No client operation id on a settings version.** `SM-04` makes transitions idempotent, and the schema
+  deduplicates sales, checkouts, returns and refunds by key. A settings version is neither. A repeated request adds
+  an identical later version, which changes nothing a document records.
+- **Not audited.** The closed vocabulary has no type for configuration changes (OQ-024). The version rows are the
+  history.
+- **Warehouses and locations get no routes yet.** The catalogue names no key for managing them. Actors-and-roles
+  §3.3 gives the job to the Super Administrator, whose template holds `Config.*` and `Device.*`, but no key is
+  described as covering it. Onboarding creates the store's warehouse and its Default location. Any further location,
+  such as a Quarantine bin for returns, needs that key named. It is added to the key list for the owner
+  (working agreement 8) as OQ-026.
+
+**Mutation check (2026-10-01).** 21 mutations to the application code: the gate (8), the transaction helper and pool
+(6), the error mapping (3), the correlation header, the settings route's actor, and the two settings queries. All 21
+turned tests red. One test was strengthened before the run: a missing `ROLLBACK` would have passed, because the
+uncommitted row is invisible from another connection. The test now runs one more transaction on the same
+connection, which would commit anything left open.
