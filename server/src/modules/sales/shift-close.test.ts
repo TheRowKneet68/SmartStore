@@ -244,8 +244,8 @@ const close = (t: Trading, closingFloat: number, as: Headers = t.cashier.as) => 
 const closingFloats = async (shift: string) =>
   (await db.app.query("SELECT direction, amount, created_by FROM cash_transaction WHERE cash_shift_id = $1 AND type = 'ClosingFloat'", [shift])).rows;
 
-describe('the close (s22.11 close; CD-20, CD-23, CD-25, SM-57; RT-244, RT-246; OQ-014)', () => {
-  it('CD-20, CD-25, RT-246, s22.11: a count with no variance closes under Shift.Close; the declared float is written as a ClosingFloat, and the server records who closed and when', async () => {
+describe('the close (s22.11 close; CD-20, CD-23, CD-25, SM-57; RT-526, RT-244, RT-246; OQ-014)', () => {
+  it('CD-20, RT-526, s22.11: a count with no variance closes under Shift.Close; the declared float is written as a ClosingFloat cash row, and the server records who closed and when', async () => {
     const t = await trading();
     await shiftMove(t.cashier.as, t.shift, 'begin count');
     await count(t, 2_250);
@@ -335,7 +335,7 @@ describe('the close (s22.11 close; CD-20, CD-23, CD-25, SM-57; RT-244, RT-246; O
     expect((await db.app.query('SELECT acknowledged_by FROM shift_count WHERE id = $1', [short.id])).rows).toEqual([{ acknowledged_by: null }]);
   });
 
-  it('OQ-014, CD-26: both undecided edges stay refused: a counted shift does not go back to trading, and a closed shift is not reopened, not even by the Owner', async () => {
+  it('OQ-014, CD-25, CD-26, RT-246: both undecided edges stay refused: a counted shift does not go back to trading, and a closed shift is not reopened, not even by the Owner', async () => {
     const t = await trading();
     await shiftMove(t.cashier.as, t.shift, 'begin count');
     expect((await shiftMove(t.owner, t.shift, 'reopen')).json().error.code).toBe('illegal_transition');
@@ -349,5 +349,82 @@ describe('the close (s22.11 close; CD-20, CD-23, CD-25, SM-57; RT-244, RT-246; O
     expect(reopen.statusCode).toBe(409);
     expect(reopen.json().error.code).toBe('illegal_transition');
     expect(await shiftStatus(t.shift)).toBe('Closed');
+  });
+});
+
+const screen = (t: Trading, as: Headers = t.manager.as, shift = t.shift) => call('GET', `/stores/${t.storeId}/shifts/${shift}`, as);
+
+describe('the shift screen (CD-30, CD-31; RT-527, RT-243; actors-and-roles s2.10 Cash.Count.View)', () => {
+  it('CD-30, RT-527: the screen answers four questions: what should be here, what is here, the difference against its threshold, and why, with what happens now', async () => {
+    const t = await trading();
+    expect((await screen(t)).json()).toMatchObject({
+      id: t.shift, status: 'Open', terminalId: t.till, openedBy: t.cashier.id, expected: null, counted: null, variance: null, tolerance: 0, why: null, next: 'begin count',
+    });
+    await shiftMove(t.cashier.as, t.shift, 'begin count');
+    expect((await screen(t)).json()).toMatchObject({ status: 'Reconciling', expected: null, next: 'count' });
+    const short = (await count(t, 2_200)).json();
+    expect((await screen(t)).json()).toMatchObject({ expected: 2_250, counted: 2_200, variance: -50, tolerance: 0, why: null, next: 'acknowledge' });
+    await acknowledge(t, short.id, t.reason);
+    expect((await screen(t)).json()).toMatchObject({
+      variance: -50,
+      why: { reasonCodeId: t.reason, reason: 'Drawer short', acknowledgedBy: t.manager.id, acknowledgedAt: expect.any(String) },
+      next: 'close',
+    });
+    await close(t, 1_000);
+    expect((await screen(t)).json()).toMatchObject({ status: 'Closed', closedBy: t.cashier.id, closedAt: expect.any(String), variance: -50, next: null });
+  });
+
+  it('CD-30, CD-25, SM-57: the latest pass answers, and every pass stands in the variance history, in order, with its acknowledgement', async () => {
+    const t = await trading();
+    await shiftMove(t.cashier.as, t.shift, 'begin count');
+    const first = (await count(t, 2_200)).json();
+    await acknowledge(t, first.id, t.reason);
+    await count(t, 2_250);
+    const shown = (await screen(t)).json();
+    expect(shown, 'a count with no difference has nothing to explain').toMatchObject({ counted: 2_250, variance: 0, why: null, next: 'close' });
+    expect(shown.passes).toEqual([
+      expect.objectContaining({ passNumber: 1, countedAmount: 2_200, expectedAmount: 2_250, variance: -50, acknowledgedBy: t.manager.id, reason: 'Drawer short' }),
+      expect.objectContaining({ passNumber: 2, countedAmount: 2_250, expectedAmount: 2_250, variance: 0, acknowledgedBy: null, reason: null }),
+    ]);
+  });
+
+  it('CD-21, CD-31, RT-243: before a count is submitted, the screen does not say what the drawer should hold, even to someone who also counts', async () => {
+    const t = await trading();
+    const both = await t.staff(['Shift.Close', 'Cash.Count.View']);
+    await shiftMove(both.as, t.shift, 'begin count');
+    const blind = (await screen(t, both.as)).json();
+    expect(blind).toMatchObject({ expected: null, counted: null, variance: null, passes: [] });
+    // Every number anywhere in the answer: only the tolerance, so nothing from which the expected 2250 could be read.
+    const numbers = (value: unknown): unknown[] =>
+      typeof value === 'number' ? [value] : value !== null && typeof value === 'object' ? Object.values(value).flatMap(numbers) : [];
+    expect(numbers(blind)).toEqual([0]);
+    expect(numbers((await call('GET', `/stores/${t.storeId}/shifts`, both.as)).json())).toEqual([0]);
+  });
+
+  it("actors-and-roles s2.10, MS-02: reading counts needs Cash.Count.View in the store, and finds only this store's shifts", async () => {
+    const t = await trading();
+    expect((await screen(t, t.cashier.as)).statusCode, 'counting the drawer is not reading its history').toBe(403);
+    expect((await screen(t, t.manager.as, randomUUID())).statusCode, 'no such shift').toBe(404);
+    const other = await trading();
+    expect((await screen(t, t.manager.as, other.shift)).statusCode, "another organization's shift, asked through this store").toBe(404);
+    expect((await call('GET', `/stores/${other.storeId}/shifts/${other.shift}`, t.manager.as)).statusCode, "another organization's store").toBe(403);
+  });
+
+  it("CD-30, MS-02: the store's shifts are listed newest first with the same answers, and can be filtered by status", async () => {
+    const t = await trading();
+    const other = await trading();
+    await shiftMove(t.cashier.as, t.shift, 'begin count');
+    await count(t, 2_250);
+    await close(t, 500);
+    const next = ((await ok('POST', `/stores/${t.storeId}/shift`, t.cashier.as, { openingFloat: 500 })).shift as { id: string }).id;
+    const all = (await call('GET', `/stores/${t.storeId}/shifts`, t.manager.as)).json();
+    expect(all.items.map((s: { id: string }) => s.id), "newest first, and none of another organization's").toEqual([next, t.shift]);
+    expect(all.items[1]).toMatchObject({ status: 'Closed', expected: 2_250, counted: 2_250, variance: 0, tolerance: 0, why: null, next: null });
+    expect(all.items[1].passes, 'the history is on the shift itself').toBeUndefined();
+    const closed = (await call('GET', `/stores/${t.storeId}/shifts?status=Closed`, t.manager.as)).json();
+    expect(closed.items.map((s: { id: string }) => s.id)).toEqual([t.shift]);
+    expect((await call('GET', `/stores/${t.storeId}/shifts?limit=1`, t.manager.as)).json().items).toHaveLength(1);
+    expect((await call('GET', `/stores/${t.storeId}/shifts?status=Balanced`, t.manager.as)).statusCode, 'not a shift status').toBe(400);
+    expect((await call('GET', `/stores/${other.storeId}/shifts`, other.manager.as)).json().items.map((s: { id: string }) => s.id)).toEqual([other.shift]);
   });
 });

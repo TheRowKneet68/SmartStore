@@ -331,7 +331,7 @@ agent works in parallel on `web/**`. This work stages explicit paths only. Steps
 2. The blind count: a pass, revealing expected and variance only after submission (`CD-21`, `CD-22`). **Done.**
 3. Acknowledging a variance (`Cash.Variance.Acknowledge`, a reason, once; `CD-23`). **Done.**
 4. The close, declaring the closing float (`CD-20`, `CD-25`). **Done.**
-5. The read that answers it (`CD-30`, `Cash.Count.View`).
+5. The read that answers it (`CD-30`, `Cash.Count.View`). **Done.**
 6. The mutation check, and the docs.
 
 Code: `server/src/modules/sales/shift-close.ts`. Tests: `server/src/modules/sales/shift-close.test.ts`.
@@ -764,3 +764,30 @@ Append-only. One dated line per step, including failed and abandoned attempts.
     - OQ-014.
 
     Root `npm test`: server 398, web 20. `npm run typecheck` clean.
+- 2026-10-01 — **Shift close, step 5 of 6: the shift screen.**
+  - **Built:** `GET /stores/:storeId/shifts/:shiftId` and `GET /stores/:storeId/shifts?status=&limit=`, under
+    `Cash.Count.View` in the store ("see counts and variance history", actors-and-roles §2.10; `MS-02`).
+  - **The four answers** (`CD-30`, `RT-527`), from the latest pass, the one the close is decided on:
+    - `expected`;
+    - `counted`;
+    - `variance` against `tolerance`, which is 0 under OQ-020;
+    - `why`: the reason, who acknowledged it, and when;
+    - `next`: `begin count`, `count`, `acknowledge`, `close`, or nothing once closed. Reopening is undecided under
+      OQ-014.
+  - The detail adds every pass, in order, as it stands (`SM-57`). The list carries the answers only.
+  - **Blind by construction** (`CD-21`, `CD-31`, `RT-243`): every figure comes from a submitted pass. Before one, the
+    only number in either answer is the tolerance, even for someone who holds both `Shift.Close` and
+    `Cash.Count.View`.
+  - **Not shown:** the opening float and the declared closing float. `CD-30` limits the screen to the four answers,
+    and cash reports are out of scope (`CD-32`, `RP-13`).
+  - **Tests:** 5 new:
+    - the four answers through a whole close;
+    - the latest pass answers, and the history keeps every pass;
+    - the screen and the list are blind before a count;
+    - `Cash.Count.View` is required, with this store's shifts only;
+    - the list is newest first, filters by status, and has a limit.
+  - **Citation correction:** step 4's first close test cited `RT-246`, which is the reopen row. It now cites
+    `RT-526`, `CD-20`'s row, whose acceptance it proves ("the declared next float is recorded as a cash row"). `RT-246`
+    moved to the OQ-014 test, which concerns reopening.
+
+    Root `npm test`: server 403, web 20. `npm run typecheck` clean.

@@ -74,6 +74,57 @@ const COUNT = `c.id, c.pass_number AS "passNumber", c.counted_amount AS "counted
   c.variance, c.counted_by AS "countedBy", c.counted_at AS "countedAt", c.acknowledged_by AS "acknowledgedBy",
   c.acknowledged_at AS "acknowledgedAt", c.reason_code_id AS "reasonCodeId"`;
 
+const Listing = z.object({
+  status: z.enum(['Open', 'Reconciling', 'Closed', 'Reopened']).optional(),
+  limit: z.coerce.number().int().min(1).max(500).default(100),
+});
+
+/**
+ * A shift with its latest pass, the one its close is decided on (`SM-57`). The figures come only from a submitted
+ * pass: before one, nothing says what the drawer should hold (`CD-21`, `CD-31`, `RT-243`).
+ */
+const SCREEN = `
+  SELECT s.id, s.status, s.pos_terminal_id AS "terminalId", s.opened_by AS "openedBy", s.opened_at AS "openedAt",
+         s.closed_by AS "closedBy", s.closed_at AS "closedAt",
+         c.expected_amount AS expected, c.counted_amount AS counted, c.variance,
+         c.reason_code_id AS "reasonCodeId", r.name AS reason, c.acknowledged_by AS "acknowledgedBy", c.acknowledged_at AS "acknowledgedAt"
+  FROM cash_shift s
+  LEFT JOIN LATERAL (SELECT * FROM shift_count x WHERE x.cash_shift_id = s.id ORDER BY x.pass_number DESC LIMIT 1) c ON true
+  LEFT JOIN reason_code r ON r.id = c.reason_code_id`;
+
+interface ScreenRow {
+  status: string;
+  counted: number | null;
+  variance: number | null;
+  reasonCodeId: string | null;
+  reason: string | null;
+  acknowledgedBy: string | null;
+  acknowledgedAt: string | null;
+}
+
+/**
+ * The shift screen's four answers, and only these (`CD-30`, `RT-527`): what should be here (`expected`), what is here
+ * (`counted`), the difference against its threshold (`variance`, `tolerance`), and why (`why`: the reason and who
+ * acknowledged it; `next`: what happens now, an event of §22.11 or a step of the close).
+ * - The tolerance is zero until the owner sets one (OQ-020).
+ * - A closed shift has no next step: reopening is undecided (OQ-014).
+ */
+function answers(row: ScreenRow) {
+  const { reasonCodeId, reason, acknowledgedBy, acknowledgedAt, ...shift } = row;
+  let next: string | null = null;
+  if (row.status === 'Open') next = 'begin count';
+  else if (row.status === 'Reconciling') {
+    if (row.counted === null) next = 'count';
+    else next = row.variance !== 0 && acknowledgedBy === null ? 'acknowledge' : 'close';
+  }
+  return {
+    ...shift,
+    tolerance: 0,
+    why: acknowledgedBy === null ? null : { reasonCodeId, reason, acknowledgedBy, acknowledgedAt },
+    next,
+  };
+}
+
 /**
  * The shift, locked, in the store the gate authorized (`MS-02`; another store's is not found here), while its drawer is
  * being counted: counts and acknowledgements happen only in `Reconciling` (`SM-55`, `SM-57`; the database's `SS042`
@@ -143,5 +194,31 @@ export async function shiftCloseRoutes(app: FastifyInstance, options: { pool: pg
       await c.query('UPDATE shift_count SET acknowledged_by = $2, reason_code_id = $3 WHERE id = $1', [countId, principal.employeeId, body.reasonCodeId]);
       return (await c.query(`SELECT ${COUNT} FROM shift_count c WHERE c.id = $1`, [countId])).rows[0];
     });
+  });
+
+  /**
+   * The store's shifts, newest first, each with the shift screen's four answers (`CD-30`, `MS-02`), under
+   * `Cash.Count.View`, "see counts and variance history" (actors-and-roles §2.10).
+   */
+  app.get('/stores/:storeId/shifts', inStore('Cash.Count.View'), async (request) => {
+    const query = Listing.parse(request.query);
+    const { rows } = await pool.query<ScreenRow>(
+      `${SCREEN} WHERE s.store_id = $1 AND ($2::text IS NULL OR s.status = $2) ORDER BY s.opened_at DESC, s.id DESC LIMIT $3`,
+      [request.storeId, query.status ?? null, query.limit],
+    );
+    return { items: rows.map(answers) };
+  });
+
+  /** One shift's screen (`CD-30`, `RT-527`), with its variance history: every pass, in order, as it stands (`SM-57`). */
+  app.get('/stores/:storeId/shifts/:shiftId', inStore('Cash.Count.View'), async (request) => {
+    const { shiftId } = ShiftRef.parse(request.params);
+    const { rows } = await pool.query<ScreenRow>(`${SCREEN} WHERE s.id = $1 AND s.store_id = $2`, [shiftId, request.storeId]);
+    if (rows[0] === undefined) throw new AppError(404, 'not_found', 'There is no such shift in this store.');
+    const passes = await pool.query(
+      `SELECT ${COUNT}, r.name AS reason FROM shift_count c LEFT JOIN reason_code r ON r.id = c.reason_code_id
+       WHERE c.cash_shift_id = $1 ORDER BY c.pass_number`,
+      [shiftId],
+    );
+    return { ...answers(rows[0]), passes: passes.rows };
   });
 }
