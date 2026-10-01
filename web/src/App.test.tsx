@@ -51,6 +51,15 @@ describe('the till shell (UX-35, UX-52, UX-07, UX-08)', () => {
     expect(screen.getByLabelText('Counted opening float (GBP)')).toBeTruthy();
   });
 
+  it('UX-35, UX-33, BI-39: a shift being counted is shown as "Counting the drawer", and the till offers no sale', async () => {
+    serve({ 'GET /api/v1/session': atTill, 'GET /api/v1/stores/s1/shift': { shift: { id: 'sh1', status: 'Reconciling' } } });
+    render(<App />);
+    const words = await screen.findByText('Counting the drawer');
+    expect(words.closest('.chip')?.getAttribute('data-state')).toBe('counting');
+    expect(words.closest('.chip')?.querySelector('[aria-hidden="true"]')?.textContent).toBe('◐');
+    expect(screen.queryByLabelText('Scan or type a barcode, then Enter')).toBeNull();
+  });
+
   it('UX-07, MS-05: an employee with no store access sees an empty workspace that says who to ask', async () => {
     serve({ 'GET /api/v1/session': { ...atTill, stores: [], terminal: null } });
     render(<App />);

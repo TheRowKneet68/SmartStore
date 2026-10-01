@@ -359,7 +359,7 @@ Steps:
 1. **U1:** the design foundation and the till's shell. `web/src/styles.css` and `web/src/App.tsx`, with the drawer
    state on the bar (`UX-35`). **Done.**
 2. **U2 (server):** the till's own shift read also returns a shift being counted, and each pass carries the tolerance
-   (`UX-34`).
+   (`UX-34`). **Done.**
 3. **U3:** the shift close at the till: begin count, the blind count, the variance, acknowledge or recount, and the
    close (`UX-33`, `UX-34`, `CD-20`..`CD-25`).
 4. **U4:** the manager's shift review (`CD-30`), under `Cash.Count.View`.
@@ -895,3 +895,18 @@ Append-only. One dated line per step, including failed and abandoned attempts.
     stubbed.
 
     Root `npm test`: server 403, web 24 (3 files). `npm run typecheck` clean.
+- 2026-10-01 — **UI, step 2 of 5: what the counting screen needs from the server.**
+  - **The till's own shift read** (`GET /stores/:storeId/shift`) also returns a shift being counted, with its status
+    (`UX-35`, `UX-33`).
+    - Before, a till whose shift was `Reconciling` was told "no shift", and offered to open one, which the database
+      would refuse.
+    - It still returns at most one shift, by the same index (`CD-01`), and none once the shift is closed.
+  - **Each pass carries the tolerance it is judged against,** from one constant (zero, OQ-020). The counting screen
+    can then show counted, expected, variance and threshold together without the browser hardcoding the interim
+    (`UX-34`).
+  - **The till** now shows a shift being counted as its own mode, with no sale screen. U3 fills in that mode.
+  - **Tests:** 2 server (`UX-35`/`UX-33`/`CD-01`; `UX-34`/OQ-020) and 1 web (`UX-35`/`UX-33`/`BI-39`).
+  - **Mutation check of the new guards:** 5 of 5 detected, restored byte for byte (`plan-u2.mjs` in the session
+    scratch directory).
+
+    Root `npm test`: server 405, web 25 (3 files). `npm run typecheck` clean.

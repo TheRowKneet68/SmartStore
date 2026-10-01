@@ -96,10 +96,16 @@ export async function tillRoutes(app: FastifyInstance, options: { pool: pg.Pool 
     return reply.status(201).send(created);
   });
 
-  /** The open shift at this till's drawer, if any (`CD-01`: at most one). */
+  /**
+   * The shift at this till's drawer that is not yet closed, if any (`CD-01`: at most one, by the same index): trading, or
+   * held for counting. The till shows which (`UX-35`), and a shift being counted keeps the till in its counting mode
+   * (`UX-33`) rather than offering to open another.
+   */
   app.get('/stores/:storeId/shift', inStore('Sale.Create'), async (request) => {
     const till = await tillOf(pool, request);
-    const { rows } = await pool.query(`SELECT ${SHIFT} FROM cash_shift s WHERE s.cash_drawer_id = $1 AND s.status = 'Open'`, [till.drawerId]);
+    const { rows } = await pool.query(`SELECT ${SHIFT} FROM cash_shift s WHERE s.cash_drawer_id = $1 AND s.status IN ('Open', 'Reconciling')`, [
+      till.drawerId,
+    ]);
     return { shift: rows[0] ?? null };
   });
 

@@ -115,6 +115,16 @@ describe('beginning the count (s22.11 begin count; CD-20, CD-21, BI-39)', () => 
     expect(again.json()).toEqual({ subject: t.shift, state: 'Reconciling', changed: false });
   });
 
+  it("UX-35, UX-33, CD-01: the till's own shift read still finds its shift while the drawer is counted, and none once it is closed", async () => {
+    const t = await trading();
+    const tillShift = async () => (await call('GET', `/stores/${t.storeId}/shift`, t.cashier.as)).json().shift;
+    await shiftMove(t.cashier.as, t.shift, 'begin count');
+    expect(await tillShift(), 'counting, not "no shift": opening another would be refused').toMatchObject({ id: t.shift, status: 'Reconciling' });
+    await count(t, 2_250);
+    await shiftMove(t.cashier.as, t.shift, 'close', { closingFloat: 1_000 });
+    expect(await tillShift()).toBeNull();
+  });
+
   it("MS-04: another organization's shift is not found", async () => {
     const t = await trading();
     const other = await trading();
@@ -149,6 +159,14 @@ describe('the count (CD-20, CD-21, CD-22, CD-31, SM-57; RT-243, RT-244, RT-526)'
     expect(short.json()).toMatchObject({ passNumber: 1, countedAmount: 2_200, expectedAmount: 2_250, variance: -50, countedBy: t.cashier.id, acknowledgedBy: null });
     const over = await count(t, 2_300);
     expect(over.json()).toMatchObject({ passNumber: 2, countedAmount: 2_300, expectedAmount: 2_250, variance: 50 });
+  });
+
+  it('UX-34, OQ-020: a pass is shown with the threshold it is judged against, beside the counted, expected and variance', async () => {
+    const t = await trading();
+    await shiftMove(t.cashier.as, t.shift, 'begin count');
+    const pass = (await count(t, 2_200)).json();
+    expect(pass).toMatchObject({ countedAmount: 2_200, expectedAmount: 2_250, variance: -50, tolerance: 0 });
+    expect((await acknowledge(t, pass.id, t.reason)).json(), 'and after its acknowledgement').toMatchObject({ variance: -50, tolerance: 0 });
   });
 
   it('SM-57, RT-244, CD-24: a recount is a new pass; the earlier pass stands, and no counted amount is ever edited', async () => {

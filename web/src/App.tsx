@@ -246,6 +246,15 @@ function ShiftGate({
       </p>
     );
   }
+  if (shift !== null && shift.status === 'Reconciling') {
+    // UX-33: a shift being counted is its own mode, and takes no sale (the server refuses one too: BI-39).
+    return (
+      <section className="panel narrow">
+        <h1>The drawer is being counted</h1>
+        <p>This till takes no sales until the shift is closed.</p>
+      </section>
+    );
+  }
   if (shift !== null) return <SaleScreen storeId={storeId} currency={currency} />;
   if (!canOpen) {
     return (

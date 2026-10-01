@@ -70,6 +70,9 @@ const Acknowledgement = z.object({ reasonCodeId: z.uuid() });
 // CD-04: a counted amount is an observation of cash, in whole minor units (ADR-04), never negative.
 const NewCount = z.object({ countedAmount: z.number().int().min(0) });
 
+/** The variance a count may show and still close without an acknowledgement: zero until the owner sets one (OQ-020). */
+const TOLERANCE = 0;
+
 /** One counting pass as the server recorded it: the expected amount and the variance are the database's (`CD-22`). */
 const COUNT = `c.id, c.pass_number AS "passNumber", c.counted_amount AS "countedAmount", c.expected_amount AS "expectedAmount",
   c.variance, c.counted_by AS "countedBy", c.counted_at AS "countedAt", c.acknowledged_by AS "acknowledgedBy",
@@ -120,7 +123,7 @@ function answers(row: ScreenRow) {
   }
   return {
     ...shift,
-    tolerance: 0,
+    tolerance: TOLERANCE,
     why: acknowledgedBy === null ? null : { reasonCodeId, reason, acknowledgedBy, acknowledgedAt },
     next,
   };
@@ -162,7 +165,8 @@ export async function shiftCloseRoutes(app: FastifyInstance, options: { pool: pg
       );
       return (await c.query(`SELECT ${COUNT} FROM shift_count c WHERE c.id = $1`, [rows[0]!.id])).rows[0];
     });
-    return reply.status(201).send(pass);
+    // UX-34: the threshold is shown together with the counted, expected and variance it judges.
+    return reply.status(201).send({ ...pass, tolerance: TOLERANCE });
   });
 
   /**
@@ -193,7 +197,8 @@ export async function shiftCloseRoutes(app: FastifyInstance, options: { pool: pg
       if (reason.rows[0] === undefined) throw new AppError(422, 'invalid_reference', 'Something this refers to does not exist.');
       if (reason.rows[0].archived) throw new AppError(409, 'SS024', 'That reason code is archived. Choose a live one.');
       await c.query('UPDATE shift_count SET acknowledged_by = $2, reason_code_id = $3 WHERE id = $1', [countId, principal.employeeId, body.reasonCodeId]);
-      return (await c.query(`SELECT ${COUNT} FROM shift_count c WHERE c.id = $1`, [countId])).rows[0];
+      const acknowledged = (await c.query(`SELECT ${COUNT} FROM shift_count c WHERE c.id = $1`, [countId])).rows[0];
+      return { ...acknowledged, tolerance: TOLERANCE };
     });
   });
 
