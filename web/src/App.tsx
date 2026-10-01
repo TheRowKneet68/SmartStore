@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { api, ApiError, type Workspace } from './lib/api.ts';
 import { parseMoney, type Currency } from './lib/money.ts';
 import { SaleScreen } from './pos/Sale.tsx';
+import { BeginCount, CountDrawer } from './pos/ShiftClose.tsx';
 
 /**
  * Which till this browser is (architecture §7.4: device credentials are deferred with devices, so a manager sets it once
@@ -125,6 +126,8 @@ function SignedIn({ workspace, onSignedOut }: { workspace: Workspace; onSignedOu
             currency={{ code: store.currencyCode, exponent: store.minorUnitExponent }}
             canOpen={store.permissions.includes('Shift.Open')}
             canSell={store.permissions.includes('Sale.Create')}
+            canClose={store.permissions.includes('Shift.Close')}
+            canAcknowledge={store.permissions.includes('Cash.Variance.Acknowledge')}
             shift={shift}
             onShift={setShift}
           />
@@ -136,7 +139,7 @@ function SignedIn({ workspace, onSignedOut }: { workspace: Workspace; onSignedOu
 
 /**
  * The drawer's state, on the till at all times (UX-35), in words beside a symbol, never colour alone (UX-52): a filled
- * circle while trading, a half circle while the drawer is counted, an empty one when no shift is open.
+ * circle while trading, a half circle while the drawer is counted, an empty one when no shift is open or it has closed.
  */
 function DrawerState({ shift }: { shift: TillShift | null | undefined }) {
   if (shift === undefined) return null;
@@ -145,7 +148,9 @@ function DrawerState({ shift }: { shift: TillShift | null | undefined }) {
       ? ['none', '○', 'No open shift']
       : shift.status === 'Reconciling'
         ? ['counting', '◐', 'Counting the drawer']
-        : ['open', '●', 'Shift open'];
+        : shift.status === 'Closed'
+          ? ['none', '○', 'Shift closed']
+          : ['open', '●', 'Shift open'];
   return (
     <span className="chip" data-state={state}>
       <span aria-hidden="true">{symbol}</span>
@@ -217,6 +222,8 @@ function ShiftGate({
   currency,
   canOpen,
   canSell,
+  canClose,
+  canAcknowledge,
   shift,
   onShift,
 }: {
@@ -224,11 +231,14 @@ function ShiftGate({
   currency: Currency;
   canOpen: boolean;
   canSell: boolean;
+  canClose: boolean;
+  canAcknowledge: boolean;
   shift: TillShift | null | undefined;
   onShift: (shift: TillShift | null) => void;
 }) {
   const [float, setFloat] = useState('0');
   const [error, setError] = useState<string | null>(null);
+  const [closing, setClosing] = useState(false);
   useEffect(() => {
     if (canSell) api<{ shift: TillShift | null }>('GET', `/stores/${storeId}/shift`).then((r) => onShift(r.shift), (e: ApiError) => setError(e.message));
   }, [storeId, canSell, onShift]);
@@ -246,16 +256,47 @@ function ShiftGate({
       </p>
     );
   }
-  if (shift !== null && shift.status === 'Reconciling') {
-    // UX-33: a shift being counted is its own mode, and takes no sale (the server refuses one too: BI-39).
+  if (shift !== null && (shift.status === 'Reconciling' || shift.status === 'Closed')) {
+    // UX-33: a shift being counted is its own mode, and takes no sale (the server refuses one too: BI-39). It stays on
+    // screen once closed, for its summary, until the cashier is done.
     return (
-      <section className="panel narrow">
-        <h1>The drawer is being counted</h1>
-        <p>This till takes no sales until the shift is closed.</p>
-      </section>
+      <CountDrawer
+        storeId={storeId}
+        shiftId={shift.id}
+        currency={currency}
+        canAcknowledge={canAcknowledge}
+        onClosed={() => onShift({ id: shift.id, status: 'Closed' })}
+        onDone={() => onShift(null)}
+      />
     );
   }
-  if (shift !== null) return <SaleScreen storeId={storeId} currency={currency} />;
+  if (shift !== null) {
+    // The question sits above the sale, which stays mounted, so its cart survives a change of mind (UX-57).
+    return (
+      <>
+        {canClose && (
+          <div className="till-tools">
+            {closing ? (
+              <BeginCount
+                shiftId={shift.id}
+                onBegun={() => (setClosing(false), onShift({ id: shift.id, status: 'Reconciling' }))}
+                onCancel={() => {
+                  setClosing(false);
+                  // Back to the scan field, the keyboard path (UX-01).
+                  setTimeout(() => document.getElementById('code')?.focus());
+                }}
+              />
+            ) : (
+              <button type="button" onClick={() => setClosing(true)}>
+                Close shift…
+              </button>
+            )}
+          </div>
+        )}
+        <SaleScreen storeId={storeId} currency={currency} />
+      </>
+    );
+  }
   if (!canOpen) {
     return (
       <section className="panel narrow">

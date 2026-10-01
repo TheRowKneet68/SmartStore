@@ -361,7 +361,7 @@ Steps:
 2. **U2 (server):** the till's own shift read also returns a shift being counted, and each pass carries the tolerance
    (`UX-34`). **Done.**
 3. **U3:** the shift close at the till: begin count, the blind count, the variance, acknowledge or recount, and the
-   close (`UX-33`, `UX-34`, `CD-20`..`CD-25`).
+   close (`UX-33`, `UX-34`, `CD-20`..`CD-25`). **Done.**
 4. **U4:** the manager's shift review (`CD-30`), under `Cash.Count.View`.
 5. **U5**, after the web agent's tests of `Sale.tsx` land:
    - the payment panel (`UX-14`);
@@ -910,3 +910,28 @@ Append-only. One dated line per step, including failed and abandoned attempts.
     scratch directory).
 
     Root `npm test`: server 405, web 25 (3 files). `npm run typecheck` clean.
+- 2026-10-01 — **UI, step 3 of 5: closing the shift at the till.** New file `web/src/pos/ShiftClose.tsx`; `Sale.tsx`
+  untouched.
+  - **Asking first** (`UX-02`):
+    - "Close shift…" appears only with `Shift.Close` (`UX-08`);
+    - it asks above the sale, which stays mounted, so "Keep selling" returns to the cart exactly as it was (`UX-57`);
+    - the safe choice has the focus, and the question says that sales stop until the close (OQ-014: no way back).
+  - **The count** is its own mode (`UX-33`) and is blind: nothing on screen says what the drawer should hold until the
+    count is submitted (`CD-21`, `CD-31`).
+  - **The variance screen** shows counted, expected, difference and allowed difference together (`UX-34`), and names
+    short, over or balanced in words beside a symbol (`UX-52`).
+  - **A difference:**
+    - with `Cash.Variance.Acknowledge`, it is acknowledged with a reason from the live list (`CD-23`, `BI-25`);
+    - without the key, the till says a manager must acknowledge it, and offers no control (`UX-08`);
+    - "Count again" starts a new blind pass (`SM-57`).
+  - **The close** declares the float left in the drawer, in the currency's decimal places, and zero counts as a
+    declaration (`CD-20`, `RT-526`). The summary stays until "Done", and the bar says "Shift closed".
+  - **The server decides every step.** A refusal is shown in its words, with the count still on screen (`UX-55`,
+    `UX-57`).
+  - **Tests:** `web/src/pos/ShiftClose.test.tsx` (11) and `web/src/App.test.tsx` (3 more), with `fetch` stubbed and
+    every request body checked.
+  - **One test failure on the way:** the first test expected exactly one request. A short count rightly also fetches
+    the reason list for someone who may acknowledge, so the test was wrong, not the code. It now checks that nothing
+    is fetched before the count, and what the count sends.
+
+    Root `npm test`: server 405, web 39 (4 files). `npm run typecheck` clean.

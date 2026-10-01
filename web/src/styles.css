@@ -528,6 +528,28 @@ form.panel > button[type='submit'],
   }
 }
 
+/* The till's own actions, above the sale: closing the shift asks first, in place (UX-02). */
+.till-tools {
+  display: flex;
+  justify-content: flex-end;
+  max-width: 84rem;
+  margin: 0 auto;
+  padding: 1rem 1.5rem 0;
+}
+
+.till-tools > .notice {
+  width: 100%;
+}
+
+.notice h2 {
+  margin-bottom: 0.4rem;
+}
+
+.notice p {
+  margin-bottom: 0;
+  color: var(--ink);
+}
+
 /* ------------------------------------------------------------------ the outcome of a sale (UX-15, UX-21) */
 
 .outcome {
