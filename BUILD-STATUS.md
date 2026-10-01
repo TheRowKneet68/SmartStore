@@ -344,6 +344,12 @@ Step 3 rules, given by the owner on 2026-10-01 with "start Step 3":
 
 ## In progress
 
+**Finishing v1, on the owner's brief of 2026-10-01** (phases A to F; see Next).
+- **Phase A is done.** `*.zip` is ignored, and `v1-build` is pushed (`83e752b`).
+- **Phase B, finishing Domain 4, is next.** Migrations are authorized for it: forward-only, each with `Cites:`
+  comments.
+- The UI steps below are the earlier part of this work. U5 is Phase B's fourth step.
+
 **The till's UI**, on the owner's instruction of 2026-10-01 ("make UI also good ui FOR CONSUMER").
 - **Who:** the owner chose the till and the shift close first, built by this session now, in parallel with the web
   agent.
@@ -383,8 +389,8 @@ The files are `server/src/modules/sales/sales.ts`, `till.ts`, `payment-methods.t
 2. Run `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\db-setup.ps1` once. It asks for the `postgres`
    password locally and writes `.env`. Then `npm ci`, `npm run db:migrate`, `npm test`.
 3. Push `v1-build` at the end of each domain.
-4. Decide what happens to the untracked `SmartStore.zip` (210 MB) at the repository root. It is not ignored, so every
-   commit has to exclude it by name.
+4. ~~Decide what happens to the untracked `SmartStore.zip`~~. **Resolved 2026-10-01:** on the owner's instruction,
+   `.gitignore` now ignores `SmartStore.zip` and `*.zip`, and the file is no longer at the root.
 5. **To try the slice:**
    1. Set the five required settings in `.env` (OQ-027): `SESSION_LIFETIME_MINUTES`, `SIGN_IN_FAILURE_LIMIT`,
       `SIGN_IN_FAILURE_WINDOW_MINUTES`, `QUOTE_MAX_AGE_MINUTES`, `LOCK_TIMEOUT_MS`.
@@ -405,7 +411,7 @@ The files are `server/src/modules/sales/sales.ts`, `till.ts`, `payment-methods.t
 | 4 | Name the keys for card submit, capture and void | OQ-018 | Card payments in Domain 4 |
 | 5 | The permission-key list, presented before Domain 5 (working agreement 8): refund submit and cancel, reversal edges, location management, `Config.Roles` | OQ-023, OQ-025, OQ-026, OQ-028 | Domain 5, and the till re-enable and refund retry edges |
 | 6 | The route permissions chosen where the catalogue was not explicit, listed for veto | D1 §9, D7 §9, D2 §9, D3 §9 | Nothing |
-| 7 | What to do with the untracked `SmartStore.zip` | Item 4 above | Nothing |
+| 7 | ~~What to do with the untracked `SmartStore.zip`~~ **Resolved:** `*.zip` is ignored (owner, 2026-10-01) | Item 4 above | Nothing |
 | 8 | Whether a shift count records a denomination breakdown. `RT-526` (`CD-20`) says "the denomination total is derived from the breakdown", but D4 deferred `CD-27`..`CD-29`, so the schema has no denomination tables and the count is a total. Building it needs a migration | `RT-526`, D4 | Nothing; counts are totals until decided |
 | 9 | The variance tolerance and the higher threshold that needs a different approver. Interim: the tolerance is zero, so every non-zero variance needs an acknowledgement with a reason, and no second approver is required. "Closes automatically within tolerance" and the second-approver gate are unbuilt, because the numbers do not exist | OQ-020, `CD-23` | Those two behaviours only |
 | 10 | Whether the declared closing float may exceed the counted amount. Interim: recorded as declared; it feeds no expected amount | OQ-029, `CD-20` | Nothing |
@@ -415,32 +421,65 @@ Until then, tests run on a scratch PostgreSQL 17.11 cluster and a portable Node 
 
 ## Next
 
-1. **The very next task: Step 3, Domain 4 (Sale / Payment), starting with the mutation check of the slice's code.**
-   - Files: `server/src/modules/sales/sales.ts`, `till.ts`, `payment-methods.ts`, `quotes.ts`, and
-     `server/src/modules/catalog/scan.ts`.
-   - Tests: `server/src/modules/sales/sales.test.ts`, `server/src/modules/catalog/catalog.test.ts`.
-   - Harness: the session scratch directory's `mutate-app.mjs`, with a new `plan-d4-app.mjs`.
-   - The slice's schemas write `z.number().int().safe()`. In zod 4.6.5 `int()` and `safe()` are one check, so the
-     check will meet removing either as an equivalent mutant, as the shift close did. Drop `.safe()` in
-     `products.ts`, `till.ts` and `sales.ts` before the run.
-   - Then the rest of Domain 4:
-     - ~~closing a shift~~: done (see Done);
-     - two guards the shift close found missing in the schema, each a small migration. The shift-close brief excluded
-       migrations, so they were reported, not written:
-       - a closed shift's `closed_by` and `status_changed_by` can be rewritten by the runtime role, unaudited.
-         `SM-57` makes a closed shift immutable, and `AU-05` takes the actor from the authenticated identity;
-       - the database accepts an archived reason code on a count's acknowledgement. Only the route refuses it
-         (`SS024`'s rule).
-     - the till's other edges (disable, retire);
-     - reading sales;
-     - the receipt status.
-     - Card payments wait for OQ-018's keys; until then they are refused.
-2. Then the permission-key list for the owner, before Domain 5 (working agreement 8), with OQ-018, OQ-023, OQ-025,
-   OQ-026 and OQ-028. Then Domain 5.
-   - Owner decisions needed along the way: OQ-018 before the card path; OQ-023 before any refund is paid; OQ-025
-     before an employee is reactivated, a till re-enabled or a refund retried.
-   - Step 3 builds the one authorization gate (architecture §8.2). Two guards moved there from the database: it sets
-     the audit context, and it binds every `*_by` column to the signed-in employee (CONVENTIONS §12).
+The owner's brief of 2026-10-01 (second), "finish v1 as fast as possible without breaking the working agreements",
+sets the order. Phase A (housekeeping and the push) is done.
+
+1. **The very next task: Phase B, finishing Domain 4 (Sale / Payment)**, in this order:
+   1. **Two forward-only migrations, with tests,** for the guards the shift close found missing:
+      - a shift's `closed_by` and `status_changed_by` cannot be rewritten (`SM-57`, `AU-05`);
+      - an archived reason code is refused on a count's acknowledgement (`SS024`'s rule).
+   2. **The till's other edges,** disable and retire, on the transition endpoint (the Device machine, §22.12).
+   3. **Reading sales:**
+      - a list by date, till and cashier, paged;
+      - `GET /sales/:id`;
+      - the receipt document, and a reprint with a mandatory reason;
+      - the receipt status.
+   4. **UI U5:**
+      - the payment panel (`UX-14`);
+      - user and system errors styled apart (`UX-59`);
+      - a close that cannot strand a cart (`UX-57`).
+
+      Coordinate with the web agent's tests, and stage explicit paths.
+   5. **The slice's mutation check, then Domain 4's full check, once, at the end.**
+      - Files: `server/src/modules/sales/sales.ts`, `till.ts`, `payment-methods.ts`, `quotes.ts`, and
+        `server/src/modules/catalog/scan.ts`.
+      - Tests: `server/src/modules/sales/sales.test.ts` and `server/src/modules/catalog/catalog.test.ts`.
+      - Harness: the session scratch directory's `mutate-app.mjs`, with a new `plan-d4-app.mjs`.
+      - Drop `.safe()` in `products.ts`, `till.ts` and `sales.ts` first. In zod 4.6.5 `int()` and `safe()` are one
+        check, so removing either is an equivalent mutant.
+   6. **BUILD-STATUS**, and the 5-line summary.
+
+   Card payments wait for OQ-018's keys. Until then they are refused.
+2. **Phase C:** write `docs/architecture/PERMISSION-KEY-PROPOSAL.md` (working agreement 8).
+   - It covers every transition and creation without a key: OQ-018, OQ-023, OQ-025, OQ-026, OQ-028.
+   - For each, the reusable existing keys, and a proposed name for the rest. Invent no keys.
+   - A recommended default per question, a tick-box answer format, and the other open questions that block building:
+     OQ-014, OQ-020, OQ-029, OQ-030.
+
+   Then stop on the blocked parts only. Domain 5, card payments and employee reactivation wait for the answers.
+3. **Phase D, while waiting.** Only unblocked work, in this order:
+   - the audit-log read, if OQ-024 allows it; otherwise record why not;
+   - the identity admin screens;
+   - reference-data edit and archive;
+   - price history;
+   - selling by name;
+   - manual weigh entry;
+   - the onboarding wrapper;
+   - health and readiness endpoints;
+   - consistent paging on every list;
+   - housekeeping jobs, only if no new dependency is needed.
+4. **Phase E, after the key list is approved:**
+   - the keys applied, never renamed without asking;
+   - Domain 5: returns, then refunds;
+   - card payments through the simulated gateway;
+   - Domain 5's mutation check.
+5. **Phase F:**
+   - typecheck, tests, perf, ledger check and audit check, measured against the p95 ≤ 100 ms budget;
+   - a "what is left before a real store can use this" list. It names GAP-044, GATE-Q2-LICENCE and GAP-038 as release
+     blockers, not engineering ones.
+
+Step 3 builds the one authorization gate (architecture §8.2). Two guards moved there from the database: it sets the
+audit context, and it binds every `*_by` column to the signed-in employee (CONVENTIONS §12).
 
 Update this file after every step, including steps that failed and were abandoned.
 
@@ -957,3 +996,12 @@ Append-only. One dated line per step, including failed and abandoned attempts.
     "not wrapped in act"). The test now waits for the list. The whole web suite runs without a warning.
 
     Root `npm test`: server 406, web 47 (5 files). `npm run typecheck` clean.
+- 2026-10-01 — **The owner's brief to finish v1: Phase A, housekeeping.**
+  - **`.gitignore`** now ignores `SmartStore.zip` and `*.zip` (`83e752b`).
+  - **Checked before the push:**
+    - no blob over 1 MB is in the 30 unpushed commits;
+    - the only secret-looking path is `.env.example`, whose two connection strings carry placeholder passwords
+      (checked without printing them);
+    - no `.env` is tracked.
+  - **Pushed:** `git push origin v1-build`, `ab2ce8a..83e752b`. `v1-build` equals `origin/v1-build`.
+  - **Next** now follows the brief's phases B to F. Owner action 4 and decision row 7 (the zip) are resolved.
