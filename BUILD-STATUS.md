@@ -501,7 +501,13 @@ sets the order. Phase A (housekeeping and the push) is done.
      once that work is committed;
    - health and readiness endpoints. **Done:** `GET /health` and `GET /ready`;
    - consistent paging on every list. **Done** (CONVENTIONS §18);
-   - housekeeping jobs, only if no new dependency is needed.
+   - housekeeping jobs, only if no new dependency is needed. **Not built** (OQ-024 item 8): scheduling would need no
+     new dependency, but `AU-16` makes a scheduled job record each run, and `AU-12` has no type for one.
+
+   **Phase D stands at:** built, the identity screens, reference-data edits, price history, selling by name, the
+   probes and paging. Blocked: the audit-log read (OQ-024 item 2), manual weigh entry (OQ-032), reference-data archive
+   (OQ-031) and housekeeping jobs (OQ-024 item 8). Waiting on the other session's uncommitted work: the onboarding
+   wrapper.
 4. **Phase E, after the key list is approved:**
    - the keys applied, never renamed without asking;
    - Domain 5: returns, then refunds;
@@ -1280,3 +1286,12 @@ Append-only. One dated line per step, including failed and abandoned attempts.
     it was updated, re-run and detected.
   - 435 server tests pass, and the server typechecks. The web suite fails only in the other session's uncommitted
     `Products.test.tsx`.
+- 2026-10-02 — **Phase D: housekeeping jobs, not built.** OQ-024 item 8.
+  - `/docs` names reconciliation, outbox delivery, Pending-payment resolution, report jobs and batch-expiry proposals.
+    Only the ledger reconciliation exists to schedule; it, and the audit-chain check, run as commands on demand.
+  - Scheduling needs no new dependency. `AU-16`, though, makes a scheduled job record what it did and changed, in
+    the `AU-12` vocabulary, and no type there records a job's run. Adding one is a reviewed change for the owner
+    (`AU-13`), as for the audit-log read.
+  - `OPEN-QUESTIONS.md` held the other session's uncommitted OQ-006 resolution, which rests on its uncommitted D-15.
+    Only item 8 was staged: the staged copy is the committed file plus the new item, built with
+    `git hash-object` and `git update-index`. The working file keeps both changes.

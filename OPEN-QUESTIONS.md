@@ -332,6 +332,12 @@ fallback is a design that holds either answer, not a guess at the answer.
   7. *"Twenty categories".* `RT-292`'s acceptance speaks of "the twenty listed categories"; `AU-03` lists about twelve.
      *Meanwhile:* every `AU-03` category that v1 builds is recorded and tested; permission changes, provider
      configuration and sign-in events arrive with domain 7 and the application.
+  8. *A scheduled job's own record* (added 2026-10-02). `AU-16` requires a scheduled job to record what it did and what
+     it changed, in the same vocabulary. No type in `AU-12` records a job's run, such as a ledger reconciliation that
+     found no drift. *Meanwhile:* the ledger check (`npm run ledger:check`) and the audit-chain check
+     (`npm run audit:check`) run on demand, and nothing runs them on a schedule. Scheduling them would need no new
+     dependency; recording each run needs a type, which is a reviewed change (`AU-13`). Blocked: the brief's
+     housekeeping jobs.
 - **Why not answerable from `/docs`:** the documents are silent (2, 4) or disagree (1, 3, 5, 6, 7), and a new event type
   is a reviewed change for the owner (`AU-13`).
 - **Blocked:** nothing in the schema; auditing reads of the log waits for a type.
