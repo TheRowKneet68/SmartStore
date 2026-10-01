@@ -346,8 +346,11 @@ Step 3 rules, given by the owner on 2026-10-01 with "start Step 3":
 
 **Finishing v1, on the owner's brief of 2026-10-01** (phases A to F; see Next).
 - **Phase A is done.** `*.zip` is ignored, and `v1-build` is pushed (`83e752b`).
-- **Phase B, finishing Domain 4, is next.** Migrations are authorized for it: forward-only, each with `Cites:`
-  comments.
+- **Phase B, finishing Domain 4, is done but for one gap found after it** (Next, item 1.7). Domain 4's full mutation
+  check detected 126 of 126. Migrations are authorized for Phase B: forward-only, each with `Cites:` comments.
+- **Phase C is done:** the permission-key proposal waits for the owner's answer.
+- **Phase D is under way.** The audit-log read is not built (OQ-024 item 2). The identity admin screens and the
+  reference-data screen are written and tested in `web/`; they are committed with their server routes.
 - The UI steps below are the earlier part of this work. U5 is Phase B's fourth step.
 
 **The till's UI**, on the owner's instruction of 2026-10-01 ("make UI also good ui FOR CONSUMER").
@@ -383,7 +386,8 @@ Earlier note, still true: Domain 3 is finished and committed.
 
 The slice's Domain 4 code is **mutation-checked: 36 of 36**, after 15 tests were added (2026-10-01, see the log). The
 files are `server/src/modules/sales/sales.ts`, `till.ts`, `payment-methods.ts` and `quotes.ts`, and
-`server/src/modules/catalog/scan.ts` as rewritten for the slice. Domain 4's full check follows: see Next.
+`server/src/modules/catalog/scan.ts` as rewritten for the slice. **Domain 4's full check, run once at the end of the
+domain, detected 126 of 126** (D4 §11).
 
 ## Owner actions pending
 
@@ -456,9 +460,14 @@ sets the order. Phase A (housekeeping and the push) is done.
       - Drop `.safe()` in `products.ts`, `till.ts` and `sales.ts` first. In zod 4.6.5 `int()` and `safe()` are one
         check, so removing either is an equivalent mutant.
 
-      **The slice's check is done: 36 of 36** (see the log). **Domain 4's full check is next**, once: `plan-d4-app`,
-      `plan-shift-close`, `plan-u2`, `plan-u4`, `plan-b1`, `plan-b3` and `plan-d4-edges`, 126 mutations in all.
-   6. **BUILD-STATUS**, and the 5-line summary.
+      **The slice's check is done: 36 of 36** (see the log). **Domain 4's full check is done: 126 of 126**, once,
+      over `plan-d4-app`, `plan-shift-close`, `plan-u2`, `plan-u4`, `plan-b1`, `plan-b3` and `plan-d4-edges`
+      (D4 §11).
+   6. **BUILD-STATUS**, and the 5-line summary. **Done.**
+   7. **Found after the check, while preparing Phase D:** a unit's kind is frozen once a movement or a stock
+      adjustment line uses it, but not once a sale line does (`PR-14`, `RT-491`: "any movement or document"). A
+      service moves no stock, so a sold service's unit can still change kind. **Next:** a forward-only migration adds
+      the sale line to `freeze_used_quantity_kind()`, with a test and a focused mutation check.
 
    Card payments wait for OQ-018's keys. Until then they are refused.
 2. **Phase C:** write `docs/architecture/PERMISSION-KEY-PROPOSAL.md` (working agreement 8).
@@ -473,9 +482,12 @@ sets the order. Phase A (housekeeping and the push) is done.
    keys that could be reused, a proposed name where none fits, a recommendation and tick boxes, and the blocking open
    questions. Every reused key was checked against the catalogue migration, and every proposed name is absent from it.
 3. **Phase D, while waiting.** Only unblocked work, in this order:
-   - the audit-log read, if OQ-024 allows it; otherwise record why not;
-   - the identity admin screens;
-   - reference-data edit and archive;
+   - the audit-log read, if OQ-024 allows it; otherwise record why not. **Not built:** `AU-25` and `RT-300` require
+     every read of the log to be audited, and the closed `AU-12` vocabulary has no event type for a read (OQ-024 item
+     2; the proposal's last table);
+   - the identity admin screens. **Written and tested in `web/`**; committed with `GET /permissions`;
+   - reference-data edit and archive. **Edit written and tested in `web/`**; committed with its server routes. Archive
+     is not specified for brands, units or tax categories (OQ-031);
    - price history;
    - selling by name;
    - manual weigh entry;
@@ -1122,3 +1134,17 @@ Append-only. One dated line per step, including failed and abandoned attempts.
       (`RT-042`, `SS008`): `resolve_price()` gives none at a store whose currency differs from the price's.
   - **The second run detected 15 of 15**, and every file was restored byte for byte. The slice's total is 36 of 36.
   - 423 server and 55 web tests pass, and both workspaces typecheck. Next: Domain 4's full check, once.
+- 2026-10-01 — **Phase B, steps 5b and 6: Domain 4's full mutation check, once, at the end of the domain.**
+  - Seven plans, 126 mutations: `plan-d4-app` 36, `plan-shift-close` 45, `plan-u2` 5, `plan-u4` 7, `plan-b1` 5,
+    `plan-b3` 24, `plan-d4-edges` 4. **All 126 detected**, and every plan restored its files byte for byte. The run
+    took about 70 minutes, mostly in `shift-close.test.ts`.
+  - D4 §11 records both runs, and what each plan mutates.
+  - Nothing in `server/` or `db/` changed during the run. Phase D's web screens were written meanwhile, and the
+    server's tests were not run, so that no test run could overlap the harness.
+  - **A gap found afterwards**, while reading the unit rules for Phase D: `freeze_used_quantity_kind()` (domain 3)
+    checks movements and stock adjustment lines, but not sale lines. `PR-14` and `RT-491` freeze a unit's kind once
+    "any movement or document" uses it, and a sold service moves no stock. It is Next item 1.7: a forward-only
+    migration, under Phase B's authorization.
+  - **OQ-031 raised:** `/docs` gives no archive to brands, units or tax categories, which the brief's Phase D lists
+    to "edit/archive". Editing is unblocked.
+  - Phase C is done: the permission-key proposal is committed (`776d318`) and waits for the owner.

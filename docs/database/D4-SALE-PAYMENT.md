@@ -351,3 +351,43 @@ and batch and expiry on the receipt (`BE-49`; batches are deferred).
 - a reprint by someone other than the seller is recorded in the reprinter's name.
 
 The 2 migration mutants are included: the reason's liveness, and the append-only trigger at owner privilege.
+
+## 11. Domain 4's mutation check (Step 3, 2026-10-01)
+
+**The slice's code** (`sales.ts`, `quotes.ts`, `till.ts`, `payment-methods.ts`, `catalog/scan.ts`): 36 mutations, one
+per guard.
+- `.safe()` was dropped first from three money schemas. In zod 4.6.5 it is the same check as `int()`, so removing
+  either is an equivalent mutant (§9).
+- **The first run detected 21 of 36.** Each of the 15 survivors was a guard no test reached, so a test was added for
+  each. No check was weakened.
+  - A quote with a part appended, a tax category with no rate in force yet, a tax-exclusive store, and a service line,
+    which moves no stock.
+  - **A repeat gets its sale even after the store stops taking cash** (`SM-04`). The early answer to a repeat looked
+    redundant, because the database's key catches a repeat too. It is not: without it, a repeat is checked again and
+    refused.
+  - **A true race** (`BI-28`). The old concurrent test never raced: the second request always found the first's sale
+    before it reached the key. The test now holds the `checkout` table until both repeats wait at the key, so the loser
+    must answer with the winner's sale.
+  - `Sale.Create` to sell, and another store's sale is not found.
+  - A session at another store's till, the till list, and a second sellable location, which must then be named
+    (OQ-019).
+  - The payment methods' list, another organization's method, and an unknown one.
+  - **No price at a store is reachable**, though an active variant always has a price (`RT-042`). `resolve_price()`
+    gives none at a store whose currency differs from the price's.
+- **The second run detected all 15.**
+
+**Domain 4's full check, run once at the end of the domain:** 126 mutations in seven plans. All were detected, and
+every file was restored byte for byte.
+
+| Plan | What it mutates | Mutations |
+|---|---|---|
+| `plan-d4-app` | The slice: the sale's completion, quotes, the till, payment methods, the scan | 36 |
+| `plan-shift-close` | The transition endpoint's two options, the close, counting and acknowledging, the shift screen, and each route's key (§9) | 45 |
+| `plan-u2` | A count's threshold, and the till finding a shift being counted | 5 |
+| `plan-u4` | Who the shift screen names: opener, closer, counter, approver | 7 |
+| `plan-b1` | The two Phase B migrations (fixed shift actors; a live reason on an acknowledgement), and the route's organization check | 5 |
+| `plan-b3` | Reading sales, the receipt, its print outcome, and reprints (§10) | 24 |
+| `plan-d4-edges` | The Device machine's edges as migration data: keys, reasons, and retiring a till never activated | 4 |
+
+The plans and their harness, `mutate-app.mjs`, are in the session's scratch directory. The harness restores each file
+byte for byte. Each run rebuilds the test database from the migrations, so a migration's mutants are real.

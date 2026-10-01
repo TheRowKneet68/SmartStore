@@ -461,6 +461,20 @@ fallback is a design that holds either answer, not a guess at the answer.
   - every text colour pair meets WCAG 2.2 level AAA, 7:1 or more. The lowest pair measures 7.29:1;
   - every control is at least 3rem tall, 54 CSS px at the 18 px base.
 
+### OQ-031 — Archiving a brand, a unit or a tax category
+
+- **Unknown:** whether a brand, a unit or a tax category can be archived, and what archiving one would stop.
+  - The owner's brief of 2026-10-01 lists "reference-data edit/archive (brands, units, tax categories)".
+  - `/docs` gives archival to categories (`PR-05`, `RT-027`), variants (`PR-48`, `RT-495`) and barcodes (`PR-09`),
+    and deactivation to a unit conversion that has been used (`PR-18`). It gives none to a brand, a unit or a tax
+    category, and the schema has no archive column for them (D2 §3, §4).
+- **Why not answerable from `/docs`:** an archive must say what it blocks. For example, does it stop new variants on
+  a unit, or in a tax category, while the old ones go on selling? No rule says.
+- **Blocked:** archiving those three only. Editing them is not blocked. The schema lets a unit's code, names, kind
+  and decimal places change, and a tax category's code and name, and a brand's name (D2 §4). A unit's kind is frozen
+  once anything uses it (`PR-14`, `RT-491`), and a tax rate changes only by a new version (`RT-047`).
+- *Meanwhile:* none of the three can be archived.
+
 ## How to use this file
 
 - Add an entry the moment you hit something the specification does not answer. Then continue with a different task.
