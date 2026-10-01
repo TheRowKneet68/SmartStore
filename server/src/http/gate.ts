@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest, RouteOptions } from 'fastify';
 import type pg from 'pg';
-import type { AuditContext } from '../db/pool.ts';
+import { withTransaction, type AuditContext } from '../db/pool.ts';
 import { AppError } from './errors.ts';
 
 /** The signed-in employee a request acts as, resolved from the server-held session only (`AC-03`, architecture §7.1). */
@@ -9,6 +9,8 @@ export interface Principal {
   organizationId: string;
   sessionId: string | null;
   terminalId: string | null;
+  /** `OnLeave`: may sign in and look, may not change anything (employee-domain §3). */
+  readOnly: boolean;
 }
 
 /**
@@ -87,6 +89,9 @@ export function registerGate(app: FastifyInstance, pool: pg.Pool, authenticate: 
       if (raw === undefined || !UUID.test(raw)) throw new AppError(400, 'invalid_request', 'The store id is not valid.');
       storeId = raw;
     }
+    if (principal.readOnly && request.method !== 'GET' && request.method !== 'HEAD') {
+      await refuse(pool, request, access.key, storeId, 'read_only', 'You are on leave: you can look, but not change anything.');
+    }
     const { rows } = await pool.query<{ allowed: boolean }>(
       'SELECT employee_holds_permission($1, $2, $3) AS allowed',
       [principal.employeeId, storeId, access.key],
@@ -95,10 +100,34 @@ export function registerGate(app: FastifyInstance, pool: pg.Pool, authenticate: 
       // The same answer whether the store exists or not (architecture §24.3, MS-03), and it names what is missing
       // (UX-58).
       const where = storeId === null ? 'for the whole organization' : 'in this store';
-      throw new AppError(403, 'forbidden', `You do not have access to this: it needs the ${access.key} permission ${where}.`);
+      await refuse(pool, request, access.key, storeId, 'forbidden', `You do not have access to this: it needs the ${access.key} permission ${where}.`);
     }
     request.storeId = storeId;
   });
+}
+
+/**
+ * Records the refusal (`AU-03`: every failed authorisation; `Security.PermissionDenied`), then refuses. The event is
+ * filed under the store only when that store is in the principal's organization: a probe of another tenant's store
+ * leaves no trace in that tenant's log.
+ */
+async function refuse(
+  pool: pg.Pool,
+  request: FastifyRequest,
+  key: string,
+  storeId: string | null,
+  code: string,
+  message: string,
+): Promise<never> {
+  const principal = request.principal!;
+  await withTransaction(pool, auditContext(request), (c) =>
+    c.query(
+      `SELECT record_audit_event('Security.PermissionDenied', $1,
+                                 (SELECT id FROM store WHERE id = $2 AND organization_id = $1), 'permission', NULL, $3)`,
+      [principal.organizationId, storeId, { permission: key, method: request.method, route: request.routeOptions.url, storeId }],
+    ),
+  );
+  throw new AppError(403, code, message);
 }
 
 /** The audit context of a request, from the session only (`AU-05`, `AU-10`, `BI-33`). */

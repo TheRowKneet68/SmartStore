@@ -32,7 +32,8 @@ export type Source = 'UI' | 'API' | 'Job' | 'Device' | 'OfflineSync' | 'Terminal
  * It always comes from the signed-in session, never from a request body (`AU-05`, `BI-33`).
  */
 export interface AuditContext {
-  actorId: string;
+  /** Null only for a failed sign-in, which has no authenticated principal (`AU-03`; D6 allows it for that type alone). */
+  actorId: string | null;
   source: Source;
   correlationId: string;
   effectiveActorId?: string | null;
@@ -71,7 +72,7 @@ export async function withTransaction<T>(
     try {
       await client.query('BEGIN');
       await client.query(SET_CONTEXT, [
-        context.actorId,
+        context.actorId ?? '',
         context.source,
         context.correlationId,
         context.effectiveActorId ?? '',

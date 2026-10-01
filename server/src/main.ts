@@ -11,7 +11,15 @@ if (existsSync(envFile)) process.loadEnvFile(envFile);
 
 const config = loadConfig();
 const pool = createPool(config.DATABASE_URL);
-const app = await buildApp({ pool, logger: true });
+const app = await buildApp({
+  pool,
+  logger: true,
+  session: {
+    lifetimeMinutes: config.SESSION_LIFETIME_MINUTES,
+    failureLimit: config.SIGN_IN_FAILURE_LIMIT,
+    failureWindowMinutes: config.SIGN_IN_FAILURE_WINDOW_MINUTES,
+  },
+});
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.once(signal, () => {

@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node src/main.ts",
     "dev": "node --watch src/main.ts",
+    "onboard": "node src/cli/onboard.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },

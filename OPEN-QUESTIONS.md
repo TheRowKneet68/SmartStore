@@ -389,6 +389,24 @@ fallback is a design that holds either answer, not a guess at the answer.
   return's non-sellable dispositions need (D5). Put to the owner with the key list before Domain 5 (working
   agreement 8). Nothing else.
 
+### OQ-027 — How long a session lasts, and how many failed sign-ins throttle a credential
+
+- **Unknown:** three numbers.
+  - The session lifetime. `user_session.expires_at` is required, so every session must have one. Architecture §7.2
+    warns against a 30-day lifetime and names no figure.
+  - The number of failed sign-ins that throttle a credential.
+  - The window those failures are counted over. `SM-49` says "a credential is throttled", never the employee, and
+    gives no figures.
+- **Why not answerable from `/docs`:** no document states any of the three. They are security policy, so they are the
+  owner's.
+- *Meanwhile:* each is a **required** setting with no default:
+  - `SESSION_LIFETIME_MINUTES`;
+  - `SIGN_IN_FAILURE_LIMIT`;
+  - `SIGN_IN_FAILURE_WINDOW_MINUTES`.
+
+  The server refuses to start until the owner sets them in `.env`. Tests use TEST-ONLY values.
+- **Blocked:** running the server until the owner sets them. Nothing in the code waits on the answer.
+
 ## How to use this file
 
 - Add an entry the moment you hit something the specification does not answer. Then continue with a different task.

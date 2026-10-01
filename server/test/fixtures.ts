@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type pg from 'pg';
+import { OnboardingInput } from '../src/onboarding.ts';
 import { inTransaction, STAFF_SIZE, staffId } from './db.ts';
 
 /**
@@ -199,6 +200,15 @@ export async function insertLocation(
 }
 
 // ---------------------------------------------------------------- access (domain 7)
+
+/** TEST-ONLY onboarding answers. XTS is ISO 4217's testing code, seeded in the template with 2 decimal places. */
+export const onboardingAnswers = (exponent = 2): OnboardingInput =>
+  OnboardingInput.parse({
+    organization: { legalName: `TEST-ONLY ${randomUUID()}`, tradingName: null, currencyCode: TEST_CURRENCY, minorUnitExponent: exponent, timeZone: TEST_TIME_ZONE },
+    store: { code: 'S1', name: 'Main street', taxMode: 'Inclusive' },
+    warehouse: { code: 'W1', name: 'Back room' },
+    owner: { employeeNumber: 'E1', firstName: 'Olive', lastName: 'Owner', username: `owner-${randomUUID()}`, password: 'TEST-ONLY pass' },
+  });
 
 /**
  * A new employee of `organizationId` holding `keys` through one role, assigned in `assignedStore` (null:
