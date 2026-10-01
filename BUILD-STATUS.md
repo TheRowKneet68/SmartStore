@@ -636,3 +636,34 @@ Append-only. One dated line per step, including failed and abandoned attempts.
       second organization existed. It now creates one. 21 of 21 detected.
   Session end: 378 tests pass, and both workspaces typecheck. Nothing is in progress. The next task is Domain 4's
   mutation check of the slice's code (Next, item 1).
+- 2026-10-01 — Gap inventory and work sizing, on the owner's instruction. No application code changed.
+  - `notes/MISSING-FEATURES.md`: 33 things the system does not do, each marked **specced and unbuilt** or **not
+    specced**, because only the first kind is backlog under `CLAUDE.md`. `notes/WORK-SPLIT.md`: the same inventory
+    sorted into hard (about 550 rules, 16 workstreams) and routine (about 100–150 rules plus a dozen screens), each
+    routine item naming the file to copy. `notes/README.md` says what the folder is and is not. Kept out of `/docs`
+    on purpose: they are analysis, and `docs/` is the specification.
+  - Sizing was read, not assumed: all 47 route registrations, `server/src` (41 files), `server/test` (13), all 9
+    migrations, `web/` (11 files, one screen), `OPEN-QUESTIONS.md` (OQ-001..OQ-028), and the §26.2 coverage table
+    (1,161 rules / 529 requirements / 25 canonical homes).
+  - **Defect found in the traceability file.** §23 claims 354 requirement rows, §24 `GR-01` claims 819 cited and
+    320 `inferred`, §24 `GR-06` and §25 `GR-01`/`GR-06` claim 140 machine-assigned, and §26.3 claims 48 coverage
+    rows on an `OUT OF SCOPE` row. Measured: 529 rows (`MUST` 490, `SHOULD` 11, `COULD` 4, `OUT OF SCOPE` 24),
+    1,161 cited, 0 `inferred`, and **50** `OUT OF SCOPE` rows. Counted from the file and cross-checked against
+    `measure-c06.ps1`, which agrees.
+  - **Fixed append-only, not by rewriting.** §27 added to `requirements-traceability.md` naming each superseded
+    statement and its true figure; `git diff --numstat` is 61 insertions and **0 deletions**. Four dated
+    forward-pointers added at the head of §23, §24, §25 and beside §26.3's figure, so a reader who lands on a stale
+    table is sent to §27. No number, wording or citation was altered. `measure-c06.ps1` passes before and after:
+    529 rows, 1,161 coverage rows, 1,161 mapped, 0 inferred, mapped-but-uncited 0, cited-but-absent 0, batch
+    populations summing 342 — **ALL CHECKS PASSED**.
+  - **The 48 / 50 difference is left open, not papered over.** Likely cause, from §26.3's own Batch 5d bullet: that
+    batch drafted two `OUT OF SCOPE` rows, `RT-514` (`EM-05`) and `RT-529` (`CD-37`), one rule each, and
+    `48 + 2 = 50`. Recorded in §27.2 as a reading, not a verified cause, and as an open reconciliation for the owner.
+  - **A mutation-test session was reverted at the owner's instruction and is not part of the build.**
+    `sales.test.ts`, `catalog.test.ts` and `test/fixtures.ts` were restored to HEAD; the new
+    `src/http/errors.test.ts` was deleted (copy kept outside the repo). Before the revert it had reached 28/28
+    sales tests and 21/21 catalog tests passing. **None of it was committed, so Domain 4's mutation check is still
+    outstanding and is still Next item 1.** Nothing in this entry should be read as that work being done.
+  - Still uncommitted and unchanged by this session: `.env.example` (the five OQ-027 values, written as
+    `KEY= 15` with a space, which a `.env` loader may not trim) and an untracked `.vscode/settings.json` naming an
+    ESP-IDF path. Neither has been committed.
