@@ -185,3 +185,66 @@ and the Transit flow (`IV-39`..`IV-45`); reservations (`IV-46`..`IV-50`; the til
 generic receipt and issue (`IV-51`..`IV-53`); import jobs (`PR-51`..`PR-55`); the `NEGATIVE_STOCK`, `OUT_OF_STOCK` and
 `BATCH_SHORTFALL` notifications (`IV-17`, `IV-59`, `BE-30`); and `IV-38` / `RT-069` (resolve by receiving), which needs
 goods receipts.
+
+## 9. Application layer (Step 3, 2026-10-01)
+
+| State | What |
+|---|---|
+| **IMPLEMENTED** | Reason codes; the stock adjustment and opening balance documents with the StockAdjustment machine; the stock, location and ledger views; `npm run ledger:check`; the lock timeout of `IV-23` |
+| **TESTED** | `server/src/modules/inventory/inventory.test.ts` (9 tests); 378 passing in all |
+| **Not built** | Stock counts, transfers, receipts, reservations and batches, as §8 records; a schedule for the ledger check |
+
+**Documents.** A movement is written only by posting a document (`IV-14`). Two document families share the
+StockAdjustment machine (§22.17), on the transition endpoint:
+
+| Family | Routes | Keys (inventory-domain §5) |
+|---|---|---|
+| Adjustment: corrections, damage, expiry, loss, found | `/stores/:storeId/adjustments` | Create, lines, submit, post, cancel, reverse: `Inventory.Adjust`. Approve: `Inventory.Adjust.Large.Approve` |
+| Opening balance | `/stores/:storeId/opening-balances` | Create, lines, submit, post, cancel: `Config.Organization`. Approve: `Import.Approve`. Reverse ("reverse any movement"): `Inventory.Adjust` |
+
+- **Corrections are counts** (`UX-36`, `UX-37`, `IV-34`). A correction is entered as the counted quantity. The server
+  reads the system quantity beside it, keeps both on the line as evidence, and writes the difference as one
+  directional line. A count equal to the system is refused (`no_difference`). Damage, expiry, loss and found lines are
+  entered as what happened.
+- **Locations.** A line must use one of the store's locations (`MS-16`, `D-03`).
+- **Lifecycle.** Lines change only in a draft (`SS018`). Submitting and approving stamp who did each, and the database
+  requires two people (`BI-26`, `IV-35`).
+- **Posting and reversing.** Posting writes the lines' movements in (variant, location) order (`IV-24`), and reversing
+  writes one `REVERSAL` per movement (`IV-12`). Each does this in its transition's own transaction, which the database
+  checks whole (`SS022`). Under `BlockNegative`, a posting that would go below zero is refused and nothing moves
+  (`IV-16`).
+- **`IV-23`.** Every transaction that moves stock (a transition, a sale) waits for a contended balance only
+  `LOCK_TIMEOUT_MS`, a required setting (OQ-027). It then fails with `busy_item` and a retry message, and nothing is
+  saved.
+
+**Views** (`MS-02`):
+- `GET /stores/:storeId/locations` and `/stock` need `Inventory.View`. They show only the store's own locations: its
+  warehouses' locations, and central ones attributed to it. Negative balances are shown as they are, never clamped.
+- `GET /stores/:storeId/movements` needs `Inventory.Ledger.View`. It shows the store's ledger, newest first, with each
+  movement's resulting balance and who made it.
+
+**Reason codes** (`IV-33`, `BI-25`). They are maintained under `Config.Organization`. Any signed-in employee of the
+organization can read the live list.
+
+**Decisions, stated so they can be reversed:**
+- **Reading reason codes needs only a session.** Every reasoned action needs the list, and it carries no business
+  data.
+- **The opening balance's keys come from inventory-domain §5**, through the machine binding's per-kind keys. The
+  transition endpoint still checks the key the specification names, never one from the URL (architecture §8.4).
+
+**Mutation check (2026-10-01).** 21 mutations, all detected:
+- the document's posting, reversal, stamps, per-kind keys, count arithmetic, location, kind and store checks, and
+  directions (13);
+- reason codes (3);
+- store scoping of the views (3);
+- the lock timeout and its message (2).
+
+Planning found six gaps, and a test was added for each:
+- an opening balance's reversal key;
+- a recount against a non-zero system quantity;
+- the document family;
+- another store's document;
+- a repeated archive;
+- the lock timeout itself.
+
+One survivor of the first run, the reason list's organization filter, needed a second organization in its test.

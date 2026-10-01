@@ -310,9 +310,25 @@ Step 3 rules, given by the owner on 2026-10-01 with "start Step 3":
   - `npm run demo` adds TEST-ONLY items, cash and a till to an onboarded organization, so the slice can be tried.
   - Mutation check: with Domain 4, which owns this code (working agreement 10).
 
+- 2026-10-01 — **Step 3, Domain 3 — Inventory ledger: application layer.** IMPLEMENTED + **TESTED** (9 new tests,
+  378 passing). [D3 §9](docs/database/D3-INVENTORY-LEDGER.md).
+  - **Stock adjustment and opening balance documents** on the StockAdjustment machine (§22.17), under
+    inventory-domain §5's keys.
+    - A correction is entered as the counted quantity, beside the system's (`UX-36`, `UX-37`).
+    - Two people submit and approve (`BI-26`).
+    - Posting and reversing write their movements in the transition's transaction (`IV-14`, `IV-24`, `SS022`).
+    - `BlockNegative` is honoured (`IV-16`).
+  - Reason codes (`IV-33`); the store's locations, stock and ledger views (`MS-02`); `npm run ledger:check` (`IV-09`).
+  - **`IV-23`**: a bounded lock wait on contended balances, `LOCK_TIMEOUT_MS`, the fifth required setting (OQ-027).
+  - Mutation-checked: 21 of 21 detected, after 7 tests were added or strengthened (see the log).
+
 ## In progress
 
-None.
+None. Domain 3 is finished and committed, and nothing is half-done.
+
+The slice's Domain 4 code is built and tested but **not yet mutation-checked**. Domain 4's check covers it: see Next.
+The files are `server/src/modules/sales/sales.ts`, `till.ts`, `payment-methods.ts` and `quotes.ts`, and
+`server/src/modules/catalog/scan.ts` as rewritten for the slice.
 
 ## Owner actions pending
 
@@ -323,8 +339,8 @@ None.
 4. Decide what happens to the untracked `SmartStore.zip` (210 MB) at the repository root. It is not ignored, so every
    commit has to exclude it by name.
 5. **To try the slice:**
-   1. Set the four required settings in `.env` (OQ-027): `SESSION_LIFETIME_MINUTES`, `SIGN_IN_FAILURE_LIMIT`,
-      `SIGN_IN_FAILURE_WINDOW_MINUTES`, `QUOTE_MAX_AGE_MINUTES`.
+   1. Set the five required settings in `.env` (OQ-027): `SESSION_LIFETIME_MINUTES`, `SIGN_IN_FAILURE_LIMIT`,
+      `SIGN_IN_FAILURE_WINDOW_MINUTES`, `QUOTE_MAX_AGE_MINUTES`, `LOCK_TIMEOUT_MS`.
    2. Run `npm run onboard` once, to create the organization, its Owner and its store.
    3. Run `npm run demo` for TEST-ONLY items, cash and a till.
    4. Run `npm start` (the server) and, in a second terminal, `npm run web`. Then open http://127.0.0.1:5173.
@@ -332,16 +348,36 @@ None.
       press Enter, and press Enter twice more to pay.
 6. Approve, or change, the proposed sale-save budget of p95 ≤ 100 ms (ADR-31 §16).
 
+**Decisions the owner needs to make.** None blocks the next task.
+
+| # | Decision | Where | Blocks |
+|---|---|---|---|
+| 1 | The five numbers `/docs` does not give: session lifetime, sign-in failure limit and window, quote age, lock timeout | OQ-027, `.env.example` | Starting the server (`npm start`), not the tests |
+| 2 | The sale-save budget: p95 ≤ 100 ms is proposed (measured p95 27 ms) | ADR-31 §16 | Nothing |
+| 3 | Accept or veto the reading that a cash tender is captured as part of completing the sale, under `Sale.Create` (§22.6) | OQ-018 "Step 3 reading" | Nothing now; cash sales rely on it |
+| 4 | Name the keys for card submit, capture and void | OQ-018 | Card payments in Domain 4 |
+| 5 | The permission-key list, presented before Domain 5 (working agreement 8): refund submit and cancel, reversal edges, location management, `Config.Roles` | OQ-023, OQ-025, OQ-026, OQ-028 | Domain 5, and the till re-enable and refund retry edges |
+| 6 | The route permissions chosen where the catalogue was not explicit, listed for veto | D1 §9, D7 §9, D2 §9, D3 §9 | Nothing |
+| 7 | What to do with the untracked `SmartStore.zip` | Item 4 above | Nothing |
+
 Until then, tests run on a scratch PostgreSQL 17.11 cluster and a portable Node 26 in the session scratch directory
 (ADR-31 §14). Nothing on the owner's PostgreSQL service is touched.
 
 ## Next
 
-1. **Step 3, Domain 3: Inventory ledger.** Stock adjustments (counted quantities, opening balances), the stock and
-   ledger views, and reconciliation.
-2. Then Domain 4: the rest of the till, including shift close and counts, card payments behind OQ-018, and the
-   mutation check of the slice's code. Then the permission-key list before Domain 5 (working agreement 8), with
-   OQ-018, OQ-023, OQ-025, OQ-026 and OQ-028.
+1. **The very next task: Step 3, Domain 4 (Sale / Payment), starting with the mutation check of the slice's code.**
+   - Files: `server/src/modules/sales/sales.ts`, `till.ts`, `payment-methods.ts`, `quotes.ts`, and
+     `server/src/modules/catalog/scan.ts`.
+   - Tests: `server/src/modules/sales/sales.test.ts`, `server/src/modules/catalog/catalog.test.ts`.
+   - Harness: the session scratch directory's `mutate-app.mjs`, with a new `plan-d4-app.mjs`.
+   - Then the rest of Domain 4:
+     - closing a shift, with the blind count, the variance and its acknowledgement (§22.11, `CD-20`..`CD-25`);
+     - the till's other edges (disable, retire);
+     - reading sales;
+     - the receipt status.
+     - Card payments wait for OQ-018's keys; until then they are refused.
+2. Then the permission-key list for the owner, before Domain 5 (working agreement 8), with OQ-018, OQ-023, OQ-025,
+   OQ-026 and OQ-028. Then Domain 5.
    - Owner decisions needed along the way: OQ-018 before the card path; OQ-023 before any refund is paid; OQ-025
      before an employee is reactivated, a till re-enabled or a refund retried.
    - Step 3 builds the one authorization gate (architecture §8.2). Two guards moved there from the database: it sets
@@ -583,3 +619,20 @@ Append-only. One dated line per step, including failed and abandoned attempts.
     timestamp text.
   Domain 2's scan mutations (S04 to S06) were written against the old query. Domain 4's mutation check covers the scan
   as it is now.
+- 2026-10-01 — Step 3, Domain 3 (application layer), then the session wrapped up at the owner's request. Failed
+  attempts and corrections:
+  (1) A location check was injected through a Node script, and its message's apostrophe broke a single-quoted string.
+      The typecheck caught it; the string is now double-quoted.
+  (2) A test expected another store's stock list to be empty. The Owner has no access to that store, so the right
+      answer is a 403 (`EM-13`). The test was wrong and now expects the 403.
+  (3) Planning the mutation run found six guards no test reached. A test was added for each:
+      - an opening balance's reversal key;
+      - a recount against a non-zero system quantity;
+      - the document family;
+      - another store's document;
+      - a repeated archive;
+      - the `IV-23` lock timeout, proven with a real held lock.
+      The first run then let one survive: the reason list's organization filter, because the test ran before any
+      second organization existed. It now creates one. 21 of 21 detected.
+  Session end: 378 tests pass, and both workspaces typecheck. Nothing is in progress. The next task is Domain 4's
+  mutation check of the slice's code (Next, item 1).

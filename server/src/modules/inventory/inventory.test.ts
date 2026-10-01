@@ -48,10 +48,12 @@ const move = (as: Headers, subject: string, event: string) => call('POST', '/tra
 describe('reason codes (BI-25, IV-33)', () => {
   it('IV-33, SS024: reason codes are the organization\'s; any of its employees reads the live list; an archived one takes no new document', async () => {
     const s = await store();
+    await store(); // another organization, with a reason code of its own that must not show here
     const nobody = await s.staff([]);
     expect((await call('GET', '/reason-codes', nobody)).json().items).toEqual([{ id: s.reason, code: 'COUNT', name: 'Count correction' }]);
     expect((await call('POST', '/reason-codes', nobody, { code: 'X', name: 'X' })).statusCode, 'Config.Organization').toBe(403);
     expect((await ok('POST', `/reason-codes/${s.reason}/archive`, s.owner)).changed).toBe(true);
+    expect((await ok('POST', `/reason-codes/${s.reason}/archive`, s.owner)).changed, 'once').toBe(false);
     expect((await call('GET', '/reason-codes', nobody)).json().items).toEqual([]);
     const refused = await call('POST', `/stores/${s.storeId}/adjustments`, s.owner, { reasonCodeId: s.reason });
     expect(refused.json().error.code).toBe('SS024');
@@ -99,6 +101,37 @@ describe('the stock adjustment (s22.17; IV-32..IV-35, BI-26, BI-27, UX-36, UX-37
     expect(read.statusCode, 'reading needs Inventory.View').toBe(403);
     const viewed = await call('GET', `/stores/${s.storeId}/adjustments/${doc.id}`, s.owner);
     expect(viewed.json()).toMatchObject({ status: 'Posted', submittedBy: expect.any(String), approvedBy: expect.any(String) });
+
+    // UX-37: a recount sets the counted quantity beside the system's, which is now 5.
+    const recount = await ok('POST', `/stores/${s.storeId}/adjustments`, adjuster, { reasonCodeId: s.reason });
+    const line = await ok('POST', `/stores/${s.storeId}/adjustments/${recount.id}/lines`, adjuster, { variantId: s.variant, locationId: s.location, countedQuantity: '3' });
+    expect(line.lines[0]).toMatchObject({ movementType: 'ADJUSTMENT_OUT', direction: 'Out', quantity: '2.0000', countedQuantity: '3.0000', systemQuantity: '5.0000' });
+  });
+
+  it('IV-23: a balance another transaction holds is waited for only so long; then nothing is saved and the answer says to retry', async () => {
+    const s = await store();
+    const doc = await ok('POST', `/stores/${s.storeId}/adjustments`, s.owner, { reasonCodeId: s.reason });
+    await ok('POST', `/stores/${s.storeId}/adjustments/${doc.id}/lines`, s.owner, { variantId: s.variant, locationId: s.location, countedQuantity: '4' });
+    await move(s.owner, doc.id, 'submit');
+    await move(await s.staff(['Inventory.Adjust.Large.Approve']), doc.id, 'approve');
+    const first = await ok('POST', `/stores/${s.storeId}/adjustments`, s.owner, { reasonCodeId: s.reason });
+    await ok('POST', `/stores/${s.storeId}/adjustments/${first.id}/lines`, s.owner, { variantId: s.variant, locationId: s.location, countedQuantity: '1' });
+    await move(s.owner, first.id, 'submit');
+    await move(await s.staff(['Inventory.Adjust.Large.Approve']), first.id, 'approve');
+    await move(s.owner, first.id, 'post'); // the balance row exists now
+    const holder = await db.owner.connect();
+    try {
+      await holder.query('BEGIN');
+      await holder.query('SELECT 1 FROM stock_balance WHERE variant_id = $1 AND storage_location_id = $2 FOR UPDATE', [s.variant, s.location]);
+      const started = Date.now();
+      const blocked = await move(s.owner, doc.id, 'post');
+      expect(blocked.json().error).toEqual({ code: 'busy_item', message: 'Another till is using one of these items right now. Nothing was saved; try again.' });
+      expect(Date.now() - started, 'bounded by the lock timeout').toBeLessThan(10_000);
+    } finally {
+      await holder.query('ROLLBACK');
+      holder.release();
+    }
+    expect((await call('GET', `/stores/${s.storeId}/adjustments/${doc.id}`, s.owner)).json().status).toBe('Approved');
   });
 
   it('IV-12, RT-062, SM-04: a posted adjustment is reversed by compensating movements, once; a repeat changes nothing', async () => {
@@ -145,6 +178,13 @@ describe('opening balances and who may move stock (inventory-domain s5, IV-14, I
     expect((await move(await s.staff(['Import.Approve']), doc.id, 'approve')).json().state).toBe('Approved');
     expect((await move(loader, doc.id, 'post')).json().state).toBe('Posted');
     expect(await onHand(s)).toBe('12.0000');
+
+    // "Reverse any movement" is Inventory.Adjust, for an opening balance too (inventory-domain s5).
+    expect((await move(loader, doc.id, 'reverse')).statusCode).toBe(403);
+    expect((await move(adjuster, doc.id, 'reverse')).json().state).toBe('Reversed');
+    expect(await onHand(s)).toBe('0.0000');
+    const wrongFamily = await call('POST', `/stores/${s.storeId}/adjustments/${doc.id}/lines`, adjuster, { variantId: s.variant, locationId: s.location, countedQuantity: '1' });
+    expect(wrongFamily.statusCode, 'an opening balance is not reached through the adjustment routes').toBe(404);
   });
 
   it('IV-37, AC-01: a cashier can never adjust stock', async () => {
@@ -179,5 +219,13 @@ describe("a store's stock, and only its own (IV-01, IV-06, MS-02, MS-16, IV-09)"
 
     const drift = await db.app.query('SELECT * FROM inventory_ledger_drift()');
     expect(drift.rows, 'IV-09: every balance agrees with its ledger').toEqual([]);
+
+    // A document is reached only through its own store, even by someone with access to both.
+    const both = signedInAs(
+      await employeeWithAccess(db.app, s.organizationId, ['Inventory.View'], { assignedStore: null, accessStores: [s.storeId, other] }),
+      s.organizationId,
+    );
+    expect((await call('GET', `/stores/${s.storeId}/adjustments/${doc.id}`, both)).statusCode).toBe(200);
+    expect((await call('GET', `/stores/${other}/adjustments/${doc.id}`, both)).statusCode).toBe(404);
   });
 });
