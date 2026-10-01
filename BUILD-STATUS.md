@@ -324,7 +324,19 @@ Step 3 rules, given by the owner on 2026-10-01 with "start Step 3":
 
 ## In progress
 
-None. Domain 3 is finished and committed, and nothing is half-done.
+**Shift close, `CD-20`..`CD-25`**, on the owner's brief of 2026-10-01: a single objective, inside Domain 4. Another
+agent works in parallel on `web/**`. This work stages explicit paths only. Steps:
+
+1. Begin count (`Open → Reconciling`, `Shift.Close`) on the transition endpoint. **Done.**
+2. The blind count: a pass, revealing expected and variance only after submission (`CD-21`, `CD-22`).
+3. Acknowledging a variance (`Cash.Variance.Acknowledge`, a reason, once; `CD-23`).
+4. The close, declaring the closing float (`CD-20`, `CD-25`).
+5. The read that answers it (`CD-30`, `Cash.Count.View`).
+6. The mutation check, and the docs.
+
+Code: `server/src/modules/sales/shift-close.ts`. Tests: `server/src/modules/sales/shift-close.test.ts`.
+
+Earlier note, still true: Domain 3 is finished and committed.
 
 The slice's Domain 4 code is built and tested but **not yet mutation-checked**. Domain 4's check covers it: see Next.
 The files are `server/src/modules/sales/sales.ts`, `till.ts`, `payment-methods.ts` and `quotes.ts`, and
@@ -667,3 +679,19 @@ Append-only. One dated line per step, including failed and abandoned attempts.
   - Still uncommitted and unchanged by this session: `.env.example` (the five OQ-027 values, written as
     `KEY= 15` with a space, which a `.env` loader may not trim) and an untracked `.vscode/settings.json` naming an
     ESP-IDF path. Neither has been committed.
+- 2026-10-01 — **Shift close, step 1 of 6: begin count.** The owner's brief of 2026-10-01 makes `CD-20`..`CD-25` the
+  single objective. Another agent owns `web/**`, so every commit stages explicit paths.
+  - **Read first:** CLAUDE.md, the Constitution (all of it), OWNER-DECISIONS, OQ-014 and OQ-020, cash-management
+    §2–§8, `requirements-traceability.md` §26.2 for `CD-20`..`CD-25`, `notes/WORK-SPLIT.md`, and the D4 triggers.
+    The traceability rows cited are `RT-526` (`CD-20`), `RT-243`/`RT-072` (`CD-21`), `RT-244` (`CD-22`..`CD-25`),
+    `RT-245` (`CD-23`) and `RT-246` (`CD-25`).
+  - **Built:** the Shift machine is bound to the transition endpoint (`server/src/modules/sales/shift-close.ts`).
+    `Open → Reconciling` needs `Shift.Close` (§22.11, `CD-20`), and is audited as `Shift.StateChange` by the
+    database. The endpoint gained one generic option: a binding may say how to find its subject's organization,
+    because `cash_shift` has none of its own.
+  - **Tests:** 3 new (403 without `Shift.Close`; no sale while counting, and a repeat is a no-op; another
+    organization's shift is not found). Root `npm test`: server 381, web 20, all passing.
+  - **Found, not built:** `RT-526`'s acceptance includes "the denomination total is derived from the breakdown". The
+    schema has no denomination tables: D4 deferred `CD-27`..`CD-29`, with counts as totals in v1. Adding them is a
+    migration, which the brief excludes, so the count is a total and the breakdown is a decision for the owner (see
+    "Decisions the owner needs to make").

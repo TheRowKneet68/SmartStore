@@ -19,6 +19,8 @@ export interface MachineBinding {
   actorColumn: string;
   /** Store-scoped subjects are authorized in their store; organization-scoped ones organization-wide (OQ-025 item 6). */
   storeColumn: string | null;
+  /** How the subject's organization is found, when its table has no `organization_id` (for example through its store). */
+  organizationColumn?: string;
   /** Columns also set to the acting employee when the subject enters a state (for example `submitted_by`). */
   actorColumnsFor?: (to: string) => string[];
   /** Further columns read with the subject, for `keyFor`. */
@@ -110,8 +112,9 @@ async function transition(
 ): Promise<{ subject: string; state: string; changed: boolean }> {
   const store = binding.storeColumn === null ? 'NULL::uuid' : binding.storeColumn;
   const extra = (binding.extraColumns ?? []).map((column) => `, ${column}`).join('');
+  const organization = binding.organizationColumn ?? 'organization_id';
   const found = await c.query<Subject & Record<string, unknown>>(
-    `SELECT ${binding.stateColumn} AS state, organization_id, ${store} AS store_id${extra}
+    `SELECT ${binding.stateColumn} AS state, ${organization} AS organization_id, ${store} AS store_id${extra}
      FROM ${binding.table} WHERE id = $1 FOR UPDATE`,
     [subjectId],
   );
