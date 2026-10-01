@@ -20,11 +20,14 @@ export interface Principal {
  *   not an error).
  * - `permission`: a catalogue key held in the store named by the route's `:storeId`, or organization-wide
  *   (`AC-02`, `MS-11`; OQ-025 item 6).
+ * - `transition`: the transition endpoint. The key is the one the attempted edge names (architecture §8.4), so the
+ *   gate checks it with `holdsPermission()` once the subject is locked (http/transitions.ts).
  */
 export type Access =
   | { kind: 'public' }
   | { kind: 'session' }
-  | { kind: 'permission'; key: string; scope: 'store' | 'organization' };
+  | { kind: 'permission'; key: string; scope: 'store' | 'organization' }
+  | { kind: 'transition' };
 
 declare module 'fastify' {
   interface FastifyContextConfig {
@@ -83,48 +86,72 @@ export function registerGate(app: FastifyInstance, pool: pg.Pool, authenticate: 
     request.principal = principal;
     if (access.kind === 'session') return;
 
+    const writes = request.method !== 'GET' && request.method !== 'HEAD';
+    if (access.kind === 'transition') {
+      if (principal.readOnly) await refuse(pool, request, null, null, 'read_only', READ_ONLY);
+      return;
+    }
+
     let storeId: string | null = null;
     if (access.scope === 'store') {
       const raw = (request.params as Record<string, string | undefined>).storeId;
       if (raw === undefined || !UUID.test(raw)) throw new AppError(400, 'invalid_request', 'The store id is not valid.');
       storeId = raw;
     }
-    if (principal.readOnly && request.method !== 'GET' && request.method !== 'HEAD') {
-      await refuse(pool, request, access.key, storeId, 'read_only', 'You are on leave: you can look, but not change anything.');
-    }
-    const { rows } = await pool.query<{ allowed: boolean }>(
-      'SELECT employee_holds_permission($1, $2, $3) AS allowed',
-      [principal.employeeId, storeId, access.key],
-    );
-    if (rows[0]?.allowed !== true) {
-      // The same answer whether the store exists or not (architecture §24.3, MS-03), and it names what is missing
-      // (UX-58).
-      const where = storeId === null ? 'for the whole organization' : 'in this store';
-      await refuse(pool, request, access.key, storeId, 'forbidden', `You do not have access to this: it needs the ${access.key} permission ${where}.`);
+    if (principal.readOnly && writes) await refuse(pool, request, access.key, storeId, 'read_only', READ_ONLY);
+    if (!(await holdsPermission(pool, principal, access.key, storeId))) {
+      await refuse(pool, request, access.key, storeId, 'forbidden', missingPermission(access.key, storeId));
     }
     request.storeId = storeId;
   });
 }
 
+const READ_ONLY = 'You are on leave: you can look, but not change anything.';
+
+/** What a refusal says: the permission that was missing, and where (`UX-58`). */
+export function missingPermission(key: string, storeId: string | null): string {
+  const where = storeId === null ? 'for the whole organization' : 'in this store';
+  return `You do not have access to this: it needs the ${key} permission ${where}.`;
+}
+
 /**
- * Records the refusal (`AU-03`: every failed authorisation; `Security.PermissionDenied`), then refuses. The event is
- * filed under the store only when that store is in the principal's organization: a probe of another tenant's store
- * leaves no trace in that tenant's log.
+ * The one permission check (`AC-01`, `AC-02`, `EM-13`, `MS-11`): the database's `employee_holds_permission()`. The answer
+ * is the same whether the store exists or not (architecture §24.3, `MS-03`).
  */
-async function refuse(
+export async function holdsPermission(
+  db: Pick<pg.Pool, 'query'>,
+  principal: Principal,
+  key: string,
+  storeId: string | null,
+): Promise<boolean> {
+  const { rows } = await db.query<{ allowed: boolean }>('SELECT employee_holds_permission($1, $2, $3) AS allowed', [
+    principal.employeeId,
+    storeId,
+    key,
+  ]);
+  return rows[0]?.allowed === true;
+}
+
+/**
+ * Records a refusal (`AU-03`: every failed authorisation; `Security.PermissionDenied`) in its own transaction, then
+ * refuses. The event is filed under the store only when that store is in the principal's organization: a probe of
+ * another tenant's store leaves no trace in that tenant's log.
+ */
+export async function refuse(
   pool: pg.Pool,
   request: FastifyRequest,
-  key: string,
+  key: string | null,
   storeId: string | null,
   code: string,
   message: string,
+  detail: Record<string, unknown> = {},
 ): Promise<never> {
   const principal = request.principal!;
   await withTransaction(pool, auditContext(request), (c) =>
     c.query(
       `SELECT record_audit_event('Security.PermissionDenied', $1,
                                  (SELECT id FROM store WHERE id = $2 AND organization_id = $1), 'permission', NULL, $3)`,
-      [principal.organizationId, storeId, { permission: key, method: request.method, route: request.routeOptions.url, storeId }],
+      [principal.organizationId, storeId, { permission: key, method: request.method, route: request.routeOptions.url, storeId, ...detail }],
     ),
   );
   throw new AppError(403, code, message);

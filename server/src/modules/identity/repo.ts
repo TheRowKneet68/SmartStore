@@ -1,24 +1,42 @@
 import type { Queryable } from '../../db/pool.ts';
 
+/** The descriptive fields of an employee (employee-domain §2). None drives a permission (`EM-06`). */
+export interface EmployeeDetails {
+  firstName: string;
+  lastName: string;
+  preferredName?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  startDate?: string | null;
+  employmentType?: string | null;
+  homeStoreId?: string | null;
+  department?: string | null;
+  position?: string | null;
+}
+
+/** Field to column, for the fields a change may touch. The employee number never changes (`EM-05`). */
+export const EMPLOYEE_COLUMNS: Record<keyof EmployeeDetails, string> = {
+  firstName: 'first_name',
+  lastName: 'last_name',
+  preferredName: 'preferred_name',
+  email: 'email',
+  phone: 'phone',
+  startDate: 'start_date',
+  employmentType: 'employment_type',
+  homeStoreId: 'home_store_id',
+  department: 'department',
+  position: 'position',
+};
+
 /** An employee, created `Active` (`EM-01`, `SM-48a`; §22.9 creation). */
 export async function createEmployee(
   db: Queryable,
-  employee: {
-    id?: string;
-    organizationId: string;
-    employeeNumber: string;
-    firstName: string;
-    lastName: string;
-    preferredName?: string | null;
-    email?: string | null;
-    phone?: string | null;
-    createdBy: string;
-  },
+  employee: EmployeeDetails & { id?: string; organizationId: string; employeeNumber: string; createdBy: string },
 ): Promise<string> {
   const { rows } = await db.query<{ id: string }>(
     `INSERT INTO employee (id, organization_id, employee_number, first_name, last_name, preferred_name, email, phone,
-                           status_changed_by)
-     VALUES (coalesce($1, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+                           start_date, employment_type, home_store_id, department, position, status_changed_by)
+     VALUES (coalesce($1, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING id`,
     [
       employee.id ?? null,
       employee.organizationId,
@@ -28,6 +46,11 @@ export async function createEmployee(
       employee.preferredName ?? null,
       employee.email ?? null,
       employee.phone ?? null,
+      employee.startDate ?? null,
+      employee.employmentType ?? null,
+      employee.homeStoreId ?? null,
+      employee.department ?? null,
+      employee.position ?? null,
       employee.createdBy,
     ],
   );

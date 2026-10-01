@@ -26,12 +26,22 @@ interface PgError {
  * can meet them. The database's own text names internal ids, so it never reaches the client (architecture §24.3).
  */
 const BUSINESS_RULES: Record<string, string> = {
+  SS001: 'That has already been done, and who did it and when cannot be changed.',
+  SS004: 'That change of state is not allowed.',
   SS038: 'The tax mode cannot change once the store has made a sale, and a sale must use the settings in force.',
+  SS055: 'This needs a reason. Choose one and try again.',
+  SS057: 'This employee has a till shift that is not closed. Close it first.',
 };
 
 /** Check constraints a client can violate through a route, with what to do instead. */
 const CHECKS: Record<string, string> = {
   ck_store_setting_version_prospective: 'New settings take effect now or later, never in the past.',
+};
+
+/** Uniqueness a client can run into, by constraint or index, with what it means. */
+const UNIQUE: Record<string, string> = {
+  uq_user_account_username: 'That username is already taken in this organization.',
+  uq_employee_number: 'That employee number is already in use.',
 };
 
 export function toApiError(error: unknown): AppError {
@@ -51,7 +61,11 @@ export function toApiError(error: unknown): AppError {
   }
   const check = code === '23514' && pgError.constraint !== undefined ? CHECKS[pgError.constraint] : undefined;
   if (check !== undefined) return new AppError(422, 'invalid_value', check);
-  if (code === '23505') return new AppError(409, 'duplicate', 'That already exists.');
+  if (code === '23505') {
+    return new AppError(409, 'duplicate', (pgError.constraint && UNIQUE[pgError.constraint]) ?? 'That already exists.');
+  }
+  // A key to something missing, or to something of another organization: the same answer for both (§24.3).
+  if (code === '23503') return new AppError(422, 'invalid_reference', 'Something this refers to does not exist.');
   if (code === '40001' || code === '40P01') {
     return new AppError(503, 'busy', 'The store is busy. Nothing was saved; try again.');
   }

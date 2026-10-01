@@ -3,6 +3,8 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import type pg from 'pg';
 import { errorHandler } from './http/errors.ts';
 import { registerGate, type Authenticate } from './http/gate.ts';
+import { transitionRoutes } from './http/transitions.ts';
+import { employeeMachine, employeeRoutes } from './modules/identity/employees.ts';
 import { identityRoutes } from './modules/identity/routes.ts';
 import { sessionAuthenticator, type SessionPolicy } from './modules/identity/sessions.ts';
 import { organizationRoutes } from './modules/organization/routes.ts';
@@ -31,8 +33,11 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   registerGate(app, options.pool, options.authenticate ?? sessionAuthenticator(options.pool));
 
   // Versioned from the first release (architecture §18.4).
-  await app.register(identityRoutes, { prefix: '/api/v1', pool: options.pool, session: options.session });
-  await app.register(organizationRoutes, { prefix: '/api/v1', pool: options.pool });
+  const v1 = { prefix: '/api/v1', pool: options.pool };
+  await app.register(identityRoutes, { ...v1, session: options.session });
+  await app.register(employeeRoutes, { ...v1, session: options.session });
+  await app.register(organizationRoutes, v1);
+  await app.register(transitionRoutes, { ...v1, machines: [employeeMachine] });
 
   await app.ready();
   return app;
