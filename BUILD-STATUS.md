@@ -329,7 +329,7 @@ agent works in parallel on `web/**`. This work stages explicit paths only. Steps
 
 1. Begin count (`Open → Reconciling`, `Shift.Close`) on the transition endpoint. **Done.**
 2. The blind count: a pass, revealing expected and variance only after submission (`CD-21`, `CD-22`). **Done.**
-3. Acknowledging a variance (`Cash.Variance.Acknowledge`, a reason, once; `CD-23`).
+3. Acknowledging a variance (`Cash.Variance.Acknowledge`, a reason, once; `CD-23`). **Done.**
 4. The close, declaring the closing float (`CD-20`, `CD-25`).
 5. The read that answers it (`CD-30`, `Cash.Count.View`).
 6. The mutation check, and the docs.
@@ -371,6 +371,8 @@ The files are `server/src/modules/sales/sales.ts`, `till.ts`, `payment-methods.t
 | 5 | The permission-key list, presented before Domain 5 (working agreement 8): refund submit and cancel, reversal edges, location management, `Config.Roles` | OQ-023, OQ-025, OQ-026, OQ-028 | Domain 5, and the till re-enable and refund retry edges |
 | 6 | The route permissions chosen where the catalogue was not explicit, listed for veto | D1 §9, D7 §9, D2 §9, D3 §9 | Nothing |
 | 7 | What to do with the untracked `SmartStore.zip` | Item 4 above | Nothing |
+| 8 | Whether a shift count records a denomination breakdown. `RT-526` (`CD-20`) says "the denomination total is derived from the breakdown", but D4 deferred `CD-27`..`CD-29`, so the schema has no denomination tables and the count is a total. Building it needs a migration | `RT-526`, D4 | Nothing; counts are totals until decided |
+| 9 | The variance tolerance and the higher threshold that needs a different approver. Interim: the tolerance is zero, so every non-zero variance needs an acknowledgement with a reason, and no second approver is required. "Closes automatically within tolerance" and the second-approver gate are unbuilt, because the numbers do not exist | OQ-020, `CD-23` | Those two behaviours only |
 
 Until then, tests run on a scratch PostgreSQL 17.11 cluster and a portable Node 26 in the session scratch directory
 (ADR-31 §14). Nothing on the owner's PostgreSQL service is touched.
@@ -708,3 +710,25 @@ Append-only. One dated line per step, including failed and abandoned attempts.
     - `Shift.Close`, whole non-negative minor units, and the shift of this store are required.
 
     Root `npm test`: server 385, web 20.
+- 2026-10-01 — **Shift close, step 3 of 6: acknowledging a variance.**
+  - **Built:** `POST /stores/:storeId/shifts/:shiftId/counts/:countId/acknowledge { reasonCodeId }`, under
+    `Cash.Variance.Acknowledge` in the store (`CD-23`, `RT-245`, `BI-25`). It refuses three cases:
+    - a count with no variance (`nothing_to_acknowledge`);
+    - a reason from another organization (`invalid_reference`);
+    - an archived reason (`SS024`).
+  - The database writes who acknowledged and when, once (`SS001`), and only while the shift is reconciling (`SS042`).
+    The variance stays as counted (`CD-24`).
+  - **OQ-020, as the owner's brief directs:** the tolerance is zero, so every non-zero variance needs this
+    acknowledgement. The different approver "beyond a higher threshold" is not applied, because no threshold exists.
+    One person holding both keys may count and acknowledge their own pass. A test records that, so configuring a
+    threshold later has to change it on purpose. Both unbuilt behaviours are now row 9 of "Decisions the owner needs to
+    make". The denomination breakdown that step 1's entry pointed at is row 8.
+  - **Tests:** 6 new:
+    - a manager acknowledges with a reason, and a cashier without the key is refused;
+    - a matching count has nothing to acknowledge;
+    - a missing, foreign or archived reason is refused, and the row is left unacknowledged;
+    - a second acknowledgement is refused (`SS001`), and the count and variance are unchanged;
+    - OQ-020's interim position;
+    - an unknown count or shift is not found.
+
+    Root `npm test`: server 391, web 20. `npm run typecheck` clean.

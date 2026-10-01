@@ -170,3 +170,72 @@ describe('the count (CD-20, CD-21, CD-22, CD-31, SM-57; RT-243, RT-244, RT-526)'
     expect((await count(t, 2_250, t.cashier.as, randomUUID())).statusCode, 'no such shift here').toBe(404);
   });
 });
+
+const acknowledge = (t: Trading, countId: string, reasonCodeId: string | undefined, as: Headers = t.manager.as, shift = t.shift) =>
+  call('POST', `/stores/${t.storeId}/shifts/${shift}/counts/${countId}/acknowledge`, as, reasonCodeId === undefined ? {} : { reasonCodeId });
+
+describe('acknowledging a variance (CD-23, CD-24, BI-25; RT-245; OQ-020)', () => {
+  it('CD-23, RT-245, OQ-020: a non-zero variance is acknowledged with Cash.Variance.Acknowledge and a reason; the server records who and when', async () => {
+    const t = await trading();
+    await shiftMove(t.cashier.as, t.shift, 'begin count');
+    const pass = (await count(t, 2_200)).json();
+    const refused = await acknowledge(t, pass.id, t.reason, t.cashier.as);
+    expect(refused.statusCode, 'the counter here holds no Cash.Variance.Acknowledge').toBe(403);
+    const done = await acknowledge(t, pass.id, t.reason);
+    expect(done.statusCode).toBe(200);
+    expect(done.json()).toMatchObject({ id: pass.id, variance: -50, acknowledgedBy: t.manager.id, reasonCodeId: t.reason, acknowledgedAt: expect.any(String) });
+  });
+
+  it('CD-23, OQ-020: tolerance is zero, so only a non-zero variance is acknowledged; a matching count has nothing to acknowledge', async () => {
+    const t = await trading();
+    await shiftMove(t.cashier.as, t.shift, 'begin count');
+    const exact = (await count(t, 2_250)).json();
+    const response = await acknowledge(t, exact.id, t.reason);
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error).toEqual({
+      code: 'nothing_to_acknowledge',
+      message: 'This count matches the expected amount, so there is no variance to acknowledge.',
+    });
+  });
+
+  it('BI-25, SS024, CD-23: the reason is required, live, and the organization\'s own', async () => {
+    const t = await trading();
+    await shiftMove(t.cashier.as, t.shift, 'begin count');
+    const pass = (await count(t, 2_200)).json();
+    expect((await acknowledge(t, pass.id, undefined)).statusCode, 'no reason').toBe(400);
+    const theirs = await trading();
+    expect((await acknowledge(t, pass.id, theirs.reason)).json().error.code, "another organization's reason").toBe('invalid_reference');
+    await ok('POST', `/reason-codes/${t.reason}/archive`, t.owner, {});
+    expect((await acknowledge(t, pass.id, t.reason)).json().error.code, 'an archived reason').toBe('SS024');
+    const unacknowledged = await db.app.query('SELECT acknowledged_by FROM shift_count WHERE id = $1', [pass.id]);
+    expect(unacknowledged.rows).toEqual([{ acknowledged_by: null }]);
+  });
+
+  it('CD-23, CD-24, SS001: an acknowledgement is written once, and never changes the counted amount', async () => {
+    const t = await trading();
+    await shiftMove(t.cashier.as, t.shift, 'begin count');
+    const pass = (await count(t, 2_200)).json();
+    await acknowledge(t, pass.id, t.reason);
+    const again = await acknowledge(t, pass.id, t.reason);
+    expect(again.statusCode).toBe(409);
+    expect(again.json().error.code).toBe('SS001');
+    const row = await db.app.query('SELECT counted_amount, variance FROM shift_count WHERE id = $1', [pass.id]);
+    expect(row.rows, 'the variance stands as counted').toEqual([{ counted_amount: '2200', variance: '-50' }]);
+  });
+
+  it('OQ-020, BI-26: no higher threshold is configured, so the second-approver rule is not applied: one person may count and acknowledge', async () => {
+    const t = await trading();
+    const both = await t.staff(['Shift.Close', 'Cash.Variance.Acknowledge']);
+    await shiftMove(both.as, t.shift, 'begin count');
+    const pass = (await count(t, 2_100, both.as)).json();
+    expect((await acknowledge(t, pass.id, t.reason, both.as)).json()).toMatchObject({ countedBy: both.id, acknowledgedBy: both.id });
+  });
+
+  it('MS-04: only a count of this shift, in this store, is acknowledged', async () => {
+    const t = await trading();
+    await shiftMove(t.cashier.as, t.shift, 'begin count');
+    const pass = (await count(t, 2_200)).json();
+    expect((await acknowledge(t, randomUUID(), t.reason)).statusCode, 'no such count').toBe(404);
+    expect((await acknowledge(t, pass.id, t.reason, t.manager.as, randomUUID())).statusCode, 'no such shift here').toBe(404);
+  });
+});

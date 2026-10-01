@@ -24,6 +24,8 @@ export const shiftMachine: MachineBinding = {
 
 const inStore = (key: string): { config: { access: Access } } => ({ config: { access: { kind: 'permission', key, scope: 'store' } } });
 const ShiftRef = z.object({ storeId: z.uuid(), shiftId: z.uuid() });
+const CountRef = z.object({ storeId: z.uuid(), shiftId: z.uuid(), countId: z.uuid() });
+const Acknowledgement = z.object({ reasonCodeId: z.uuid() });
 // CD-04: a counted amount is an observation of cash, in whole minor units (ADR-04), never negative.
 const NewCount = z.object({ countedAmount: z.number().int().safe().min(0) });
 
@@ -66,5 +68,37 @@ export async function shiftCloseRoutes(app: FastifyInstance, options: { pool: pg
       return (await c.query(`SELECT ${COUNT} FROM shift_count c WHERE c.id = $1`, [rows[0]!.id])).rows[0];
     });
     return reply.status(201).send(pass);
+  });
+
+  /**
+   * Acknowledges a counted variance: an act of accountability, with `Cash.Variance.Acknowledge` and a reason
+   * (`CD-23`, `RT-245`, `BI-25`). The variance stays exactly as counted (`CD-24`). The database writes who and when once,
+   * with server time (`SS001`), and only while the shift is being counted (`SS042`).
+   * - Tolerance is zero (OQ-020), so every non-zero variance is beyond it, and a matching count has nothing to
+   *   acknowledge.
+   * - The different approver required "beyond a higher threshold" is not applied, because no threshold is configured
+   *   (OQ-020).
+   * - The reason must be a live code of the organization (`SS024`'s rule).
+   */
+  app.post('/stores/:storeId/shifts/:shiftId/counts/:countId/acknowledge', inStore('Cash.Variance.Acknowledge'), async (request) => {
+    const { shiftId, countId } = CountRef.parse(request.params);
+    const body = Acknowledgement.parse(request.body);
+    const principal = request.principal!;
+    return withTransaction(pool, auditContext(request), async (c) => {
+      await lockedShift(c, shiftId, request.storeId!);
+      const found = await c.query<{ variance: number }>('SELECT variance FROM shift_count WHERE id = $1 AND cash_shift_id = $2', [countId, shiftId]);
+      if (found.rows[0] === undefined) throw new AppError(404, 'not_found', 'There is no such count of this shift.');
+      if (Number(found.rows[0].variance) === 0) {
+        throw new AppError(409, 'nothing_to_acknowledge', 'This count matches the expected amount, so there is no variance to acknowledge.');
+      }
+      const reason = await c.query<{ archived: boolean }>(
+        'SELECT archived_at IS NOT NULL AS archived FROM reason_code WHERE id = $1 AND organization_id = $2',
+        [body.reasonCodeId, principal.organizationId],
+      );
+      if (reason.rows[0] === undefined) throw new AppError(422, 'invalid_reference', 'Something this refers to does not exist.');
+      if (reason.rows[0].archived) throw new AppError(409, 'SS024', 'That reason code is archived. Choose a live one.');
+      await c.query('UPDATE shift_count SET acknowledged_by = $2, reason_code_id = $3 WHERE id = $1', [countId, principal.employeeId, body.reasonCodeId]);
+      return (await c.query(`SELECT ${COUNT} FROM shift_count c WHERE c.id = $1`, [countId])).rows[0];
+    });
   });
 }
