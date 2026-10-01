@@ -245,3 +245,74 @@ Ten consecutive full runs are clean since the fixes.
 | `RT-031`, `SM-11` | Discontinued is sellable from stock, not orderable; Draft, Hidden and Archived are not sellable | 3, 4 |
 | `RT-489` | A scanner sale needs a live barcode; a search-only selection is recorded as explicit | 4 |
 | "Service cannot be stocked" | Refuse stock movements for a variant whose base unit is `Service` | 3 |
+
+## 9. Application layer (Step 3, 2026-10-01)
+
+| State | What |
+|---|---|
+| **IMPLEMENTED** | The catalogue routes, the Product machine on the transition endpoint, the below-cost refusal, and the till's scan |
+| **TESTED** | `server/src/modules/catalog/catalog.test.ts`: 20 tests, building items through the routes and scanning them |
+| **Not built** | Renaming units, tax categories and brands, and reading a store's price list or cost history: no v1 screen needs them yet |
+
+**The scan** (`GET /api/v1/stores/:storeId/scan/:code`) is one statement:
+- the exact match on the live barcode's lookup key, so any GTIN spelling finds the one variant;
+- the variant, product, unit and currency;
+- the price in force: the store's own, else the organization default (`PR-30`);
+- the server's quote time, which the sale carries so its price is checked again at save (`RT-124`).
+
+It reads no stock and takes no lock (`UX-25`; ADR-31 §8). The code is trimmed of a scanner's trailing whitespace.
+
+The scan refuses with a distinct answer each:
+- an unknown code (`unknown_barcode`, 404, `UX-11`);
+- an unreleased product (`not_for_sale`: only Active and Discontinued sell, `SM-11`);
+- a variant with no tax category (`unclassified`, `RT-493`);
+- a missing price (`no_price`).
+
+**The below-cost rule (`PR-33`) is enforced here, not in the schema.** A price, default or store, below the
+standard cost in force is refused (`below_cost`). The rule allows it only with `Price.BelowCost.Approve` by another
+employee, and v1 builds no approvals (architecture §8.4's fallback, as §1 records).
+
+**Routes and their permissions.** Catalogue keys are organization-wide (OQ-025 item 6).
+
+| Routes | Permission |
+|---|---|
+| Read units, categories, brands, products | `Product.View` |
+| Create units, categories, brands, products, variants (with their first barcodes) | `Product.Create` |
+| Change a product, category or variant; archive a category or variant; add, promote or archive a barcode | `Product.Edit` |
+| Product transitions | The edge's own key (§22.1): `Product.Edit`, or `Product.Archive` for archiving |
+| Read tax categories with their rates in force | `Tax.View` |
+| Add a tax category or rate version | `Tax.Edit` |
+| Read or add default price versions | `Price.View` / `Price.Edit` |
+| Add a store price | `Price.Edit` in that store |
+| A variant created with its first price | `Product.Create` and `Price.Edit` |
+| Add a standard cost | `Product.Edit` and `Product.Cost.View` |
+| Scan at the till | `Sale.Create` in the store |
+
+**Decisions, stated so they can be reversed:**
+
+- **Creating a product is `Product.Create`.** §22.1 has no creation row, and the catalogue's description is
+  "create and amend catalog entries".
+- **Archiving a variant is `Product.Edit`.** `Product.Archive` is the product's own archive edge, and a variant has
+  no machine (OQ-010).
+- **Setting a cost needs `Product.Cost.View` too.** Cost is visible only with that key (`PR-36`), so setting a value
+  you cannot see is refused.
+- **Scanning is `Sale.Create`**, because a scan is how a sale is rung up (`UX-09`). A price check without selling
+  is not built.
+- **A repeat archive changes nothing**, for a category or a variant (`SM-04`).
+- **A name search is a case-blind "contains" match.** Its wildcards are escaped, and it never mixes with barcodes
+  (`UX-48`). Trigram search would need an extension, which ADR-31 §6 says is recorded there first.
+
+**Mutation check (2026-10-01).** 26 mutations, all detected:
+- reference data (5);
+- products, variants, barcodes, prices and costs (13);
+- the scan (9).
+
+Planning found nine guards no test reached, and a test was added for each:
+- four cross-organization writes and reads, any of which would have let one organization reach into another's
+  catalogue;
+- a new primary taking over;
+- an archived variant;
+- future prices;
+- Discontinued still selling.
+
+One more survived the first run: a variant's first barcode added on its own. It now has a test too.

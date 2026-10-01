@@ -282,6 +282,16 @@ Step 3 rules, given by the owner on 2026-10-01 with "start Step 3":
   - The read path and the check's schedule stay deferred (§10).
   - Mutation-checked: 8 of 8 detected.
 
+- 2026-10-01 — **Step 3, Domain 2 — Product / Barcode / Unit: application layer.** IMPLEMENTED + **TESTED** (20 new
+  tests, 360 passing). [D2 §9](docs/database/D2-PRODUCT-BARCODE-UNIT.md).
+  - **Catalogue routes**: units, tax categories and rate versions, categories, brands, products, variants with
+    their first price and barcodes, barcodes, default and store prices, standard costs. The Product machine is bound
+    to the transition endpoint.
+  - **The below-cost rule (`PR-33`)** is enforced by the routes: refused, because v1 builds no approvals.
+  - **The till's scan**: one statement, an exact barcode-key match plus the price in force and the quote time. No
+    stock, no lock. Unknown, unreleased and unclassified items each get their own answer.
+  - Mutation-checked: 26 of 26 detected, after 10 tests were added (see the log).
+
 ## In progress
 
 None.
@@ -303,13 +313,13 @@ Until then, tests run on a scratch PostgreSQL 17.11 cluster and a portable Node 
 
 ## Next
 
-1. **Step 3, Domain 2: Product / Barcode / Unit.**
-   - The catalogue routes: units, categories, tax categories and rates, products, variants, barcodes, prices,
-     standard costs. The Product machine is bound to the transition endpoint.
-   - The till's barcode lookup: one indexed read, no stock, no lock (ADR-31 §8, `UX-48`).
-2. Then **the vertical slice** (working agreement 9): sign in, scan, add to the cart in the browser, save a sale, and
-   the performance numbers. Then 3 and 4. Then the permission-key list before Domain 5 (working agreement 8), with
-   OQ-018, OQ-023, OQ-025, OQ-026 and OQ-028.
+1. **The vertical slice** (working agreement 9): sign in, scan, add to the cart in the browser, save a sale, and the
+   performance numbers, shown to the owner.
+   - The slice needs a cash sale's save path, which is Domain 4's: open a shift, then the checkout, cash payment,
+     sale and lines in one transaction. That path is built now, for cash only.
+   - The rest of Domain 4 follows in its turn.
+2. Then domains 3 and 4. Then the permission-key list before Domain 5 (working agreement 8), with OQ-018, OQ-023,
+   OQ-025, OQ-026 and OQ-028.
    - Owner decisions needed along the way: OQ-018 before the card path; OQ-023 before any refund is paid; OQ-025
      before an employee is reactivated, a till re-enabled or a refund retried.
    - Step 3 builds the one authorization gate (architecture §8.2). Two guards moved there from the database: it sets
@@ -517,3 +527,20 @@ Append-only. One dated line per step, including failed and abandoned attempts.
 
   None of them counts as a role used. All 8 mutations are detected. The three `.env` loaders (server, onboarding, chain
   check) became one `loadDotEnv()`.
+- 2026-10-01 — Step 3, Domain 2 (application layer). Failed attempts and corrections:
+  (1) A test expected a zero price to be refused as `invalid_value`, after a standard cost of 700 had been set, so the
+      zero was refused first as `below_cost`. Both refusals are right. The test now checks zero before setting the
+      cost.
+  (2) **Test fidelity.** The test servers used the test helper's pool, which lacks the server's exact-`int8` parser,
+      so money arrived in tests as strings and in production as numbers. They also used connections carrying a
+      default audit context, which would have hidden a route that forgot to set its own. Test servers now get a pool
+      built exactly as `main.ts` builds one, with no defaults, and every route still passes.
+  (3) Planning the mutation run found nine guards no test reached. A test was added for each:
+      - four cross-organization writes and reads (tax rate, category, variant, product), any of which would have let
+        one organization reach into another's catalogue;
+      - a new primary barcode;
+      - an archived variant;
+      - future prices;
+      - Discontinued selling.
+      One more survived the first run (a variant's first barcode added on its own) and has a test now. 26 of 26
+      detected.

@@ -222,7 +222,62 @@ describe('prices and costs (PR-30, PR-32, PR-33, PR-35, PR-36, RT-040, RT-041)',
   });
 });
 
+describe('one organization never reaches another (organization-model s2, MS-04)', () => {
+  it("MS-04: another organization's tax category, category, product and barcode are not found, and nothing is written", async () => {
+    const mine = await catalogue();
+    const theirs = await catalogue();
+    const t = await sellable(theirs, { value: '4006381333931', kind: 'EAN13' });
+    const theirBarcode = (await call('GET', `/products/${t.product}`, theirs.as)).json().variants[0].barcodes[0].id;
+    expect((await call('POST', `/tax-categories/${t.tax}/rates`, mine.as, { jurisdiction: 'X', ratePercent: '1' })).statusCode).toBe(404);
+    expect((await call('PATCH', `/categories/${t.category}`, mine.as, { name: 'Mine now' })).statusCode).toBe(404);
+    expect((await call('GET', `/products/${t.product}`, mine.as)).statusCode).toBe(404);
+    expect((await call('POST', `/products/${t.product}/variants`, mine.as, { baseUnitId: t.unit })).statusCode).toBe(404);
+    expect((await call('POST', `/barcodes/${theirBarcode}/primary`, mine.as)).statusCode).toBe(404);
+    expect((await call('POST', `/variants/${t.variant}/archive`, mine.as)).statusCode).toBe(404);
+    const untouched = await db.app.query(
+      `SELECT (SELECT count(*)::int FROM tax_rate WHERE tax_category_id = $1) AS rates,
+              (SELECT name FROM category WHERE id = $2) AS category,
+              (SELECT count(*)::int FROM product_variant WHERE product_id = $3) AS variants`,
+      [t.tax, t.category, t.product],
+    );
+    expect(untouched.rows).toEqual([{ rates: 1, category: 'Groceries', variants: 1 }]);
+  });
+});
+
 describe("the till's scan (UX-09, UX-11, UX-25, UX-48, SM-11, RT-124, RT-493, ADR-31 s8)", () => {
+  it('PR-32, RT-041: a price, default or store, applies only from its effective time', async () => {
+    const c = await catalogue();
+    const s = await sellable(c, { value: '012345678905', kind: 'UPC_A' }, 1_250);
+    const tomorrow = new Date(Date.now() + 86_400_000).toISOString();
+    await created('POST', `/variants/${s.variant}/prices`, c.as, { amount: 1_400, effectiveFrom: tomorrow });
+    await created('POST', `/stores/${c.store}/variants/${s.variant}/prices`, c.as, { amount: 1_300, effectiveFrom: tomorrow });
+    expect((await scan(c, '012345678905')).json().price).toMatchObject({ amount: 1_250, source: 'organization' });
+  });
+
+  it('SM-11, PR-46, PR-48: a Discontinued product still sells; an archived variant does not, and archiving it again changes nothing', async () => {
+    const c = await catalogue();
+    const s = await sellable(c, { value: '4006381333931', kind: 'EAN13' });
+    const reason = await insertReasonCode(db.app, c.org);
+    await call('POST', '/transitions', c.as, { machine: 'Product', event: 'discontinue', subject: s.product, reasonCodeId: reason });
+    expect((await scan(c, '4006381333931')).statusCode, 'sold from held stock').toBe(200);
+    expect((await call('POST', `/variants/${s.variant}/archive`, c.as)).json()).toEqual({ id: s.variant, archived: true, changed: true });
+    expect((await call('POST', `/variants/${s.variant}/archive`, c.as)).json().changed).toBe(false);
+    expect((await scan(c, '4006381333931')).json().error.code).toBe('unknown_barcode');
+  });
+
+  it("PR-08: a variant's first barcode is its primary; a barcode added as primary takes over from the old one", async () => {
+    const c = await catalogue();
+    const s = await sellable(c, { value: '96385074', kind: 'EAN8' });
+    const added = await created('POST', `/variants/${s.variant}/barcodes`, c.as, { value: 'INT-7', kind: 'Internal', isPrimary: true });
+    const barcodes = (await call('GET', `/products/${s.product}`, c.as)).json().variants[0].barcodes;
+    expect(barcodes.filter((b: { isPrimary: boolean }) => b.isPrimary).map((b: { id: string }) => b.id)).toEqual([added]);
+
+    const bare = await created('POST', `/products/${s.product}/variants`, c.as, { baseUnitId: s.unit, taxCategoryId: s.tax, price: { amount: 500 } });
+    const first = await created('POST', `/variants/${bare}/barcodes`, c.as, { value: 'INT-8', kind: 'Internal' });
+    const variants = (await call('GET', `/products/${s.product}`, c.as)).json().variants;
+    expect(variants.find((v: { id: string }) => v.id === bare).barcodes).toEqual([{ id: first, value: 'INT-8', kind: 'Internal', isPrimary: true }]);
+  });
+
   it('UX-09, UX-48, PR-12, RT-124: a scan finds the sellable item by any spelling of its GTIN, with the price in force and the quote time', async () => {
     const c = await catalogue();
     const s = await sellable(c, { value: '012345678905', kind: 'UPC_A' }, 1_250);
