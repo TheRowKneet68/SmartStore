@@ -157,6 +157,23 @@ describe('the till shell (UX-35, UX-52, UX-07, UX-08)', () => {
     expect(tabs.querySelector('[aria-current="page"]')?.textContent).toBe('Till set-up');
   });
 
+  it('UX-05, UX-08: Employee.View and Role.View held organization-wide add People and Roles, and only those', async () => {
+    const owner = {
+      ...atTill,
+      terminal: null,
+      organization: { ...atTill.organization, permissions: ['Employee.View', 'Role.View'] },
+      stores: [{ ...store, permissions: ['Cash.Count.View'] }],
+    };
+    serve({ 'GET /api/v1/session': owner, 'GET /api/v1/stores/s1/shifts': { items: [] }, 'GET /api/v1/employees': { items: [], next: null }, 'GET /api/v1/roles': { items: [] } });
+    render(<App />);
+    const tabs = await screen.findByRole('navigation', { name: 'Back office' });
+    expect([...tabs.querySelectorAll('button')].map((b) => b.textContent)).toEqual(['Shifts', 'People', 'Roles']);
+    fireEvent.click(screen.getByRole('button', { name: 'People' }));
+    expect(await screen.findByRole('heading', { name: 'People' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Roles' }));
+    expect(await screen.findByRole('heading', { name: 'Roles' })).toBeTruthy();
+  });
+
   it('UX-07, MS-05: an employee with no store access sees an empty workspace that says who to ask', async () => {
     serve({ 'GET /api/v1/session': { ...atTill, stores: [], terminal: null } });
     render(<App />);

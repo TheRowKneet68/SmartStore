@@ -486,7 +486,7 @@ sets the order. Phase A (housekeeping and the push) is done.
    - the audit-log read, if OQ-024 allows it; otherwise record why not. **Not built:** `AU-25` and `RT-300` require
      every read of the log to be audited, and the closed `AU-12` vocabulary has no event type for a read (OQ-024 item
      2; the proposal's last table);
-   - the identity admin screens. **Written and tested in `web/`**; committed with `GET /permissions`;
+   - the identity admin screens. **Done:** People and Roles in the back office, with `GET /permissions` (D7 §10);
    - reference-data edit and archive. **Edit written and tested in `web/`**; committed with its server routes. Archive
      is not specified for brands, units or tax categories (OQ-031);
    - price history;
@@ -1155,3 +1155,29 @@ Append-only. One dated line per step, including failed and abandoned attempts.
     `npm run db:migrate` applied it and rewrote `db/schema.sql`.
   - The service-sale test now proves the sold service's unit cannot change kind (`SS021`). Its mutant, the branch
     switched off, is detected (`plan-b7.mjs`), and the file was restored byte for byte.
+- 2026-10-01 — **Phase D: the identity admin screens.** D7 §10.
+  - **Audit-log read: not built**, as the brief allows. `AU-25` and `RT-300` require every read of the log to be
+    audited, and `AU-12` has no event type for a read (OQ-024 item 2; the permission-key proposal's last table).
+  - **People** (`Employee.View`):
+    - the organization's people a page at a time, with each status in words beside a symbol;
+    - adding a person, giving a sign-in or a new password, giving a role in all stores or one and removing it, and
+      giving and taking away access to a store;
+    - each change is offered only with its key, and says that the person was signed out (`EM-16`).
+  - **Roles** (`Role.View`):
+    - each role's permissions;
+    - making a role from catalogue keys grouped by area;
+    - adding a key, and archiving after a question;
+    - removing a key shows the server's count of employees who lose it, and is sent again with that number
+      (`PC-02`).
+  - **Server:** `GET /permissions` (`Role.View`), the catalogue the roles screen offers.
+  - **Shared pieces:** `web/src/lib/Chip.tsx`, the status chip (the shift screen now uses it), and
+    `web/src/test/serve.ts`, the fetch stub for new tests. The four older copies in existing tests are left as they
+    are.
+  - The tabs wrap, and permission boxes are full-row targets (`UX-53`).
+  - Keys held organization-wide show the tabs, because the gate checks these routes organization-wide.
+  - **Coordination:** the web agent's tests of `api.ts` have still not landed. The next commit adds `PATCH` to
+    `api.ts`'s method list, an additive one-word change, because the brief's reference-data edits need it.
+  - Tests: 1 server (the catalogue, its key) and 12 web (5 People, 6 Roles, 1 App). `plan-d-server.mjs` detected
+    both of the route's mutants.
+  - Not built: an employee's status changes from the People screen (suspend, leave, terminate). The transition
+    endpoint has them; reactivation waits for the owner's keys (OQ-025).

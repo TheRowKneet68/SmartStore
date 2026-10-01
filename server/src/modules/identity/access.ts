@@ -32,6 +32,12 @@ const notFound = (what: string) => new AppError(404, 'not_found', `There is no s
 export async function accessRoutes(app: FastifyInstance, options: { pool: pg.Pool }): Promise<void> {
   const { pool } = options;
 
+  /** The permission catalogue (actors-and-roles §2): the only keys a role can grant (`AC-02`, `D-01`). */
+  app.get('/permissions', access('Role.View'), async () => {
+    const { rows } = await pool.query<{ key: string }>('SELECT key FROM permission ORDER BY key');
+    return { items: rows.map((r) => r.key) };
+  });
+
   app.get('/roles', access('Role.View'), async (request) => {
     const { rows } = await pool.query(
       `SELECT r.id, r.name, r.description, r.archived_at AS "archivedAt",

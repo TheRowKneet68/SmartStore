@@ -288,3 +288,19 @@ Two more survived the first run and were fixed:
 - **The store-permission check on a till sign-in** was not reached: the only refused till belonged to another
   organization.
 - **The actor of a transition** was not reached: the creator and the changer were the same person.
+
+## 10. Phase D: the permission catalogue, for the roles screen (2026-10-01)
+
+| Route | Permission |
+|---|---|
+| `GET /permissions` | `Role.View` |
+
+The roles screen in `web/` offers only catalogue keys (`AC-02`, `D-01`), so it reads the whole catalogue, in key
+order. It needs the key that reads roles.
+
+The web's people and roles screens (`web/src/back/People.tsx`, `Roles.tsx`) use only the routes of §9. A screen
+offers a change only to someone holding its key, held organization-wide as the gate checks it (`UX-05`, `UX-08`).
+Removing a key from a role shows the server's affected count and is sent again with that number (`PC-02`).
+
+**Mutation check:** both of the route's mutants, its key and reading the whole catalogue, are detected. They ran
+with the reference data's in one plan (D2 §10).

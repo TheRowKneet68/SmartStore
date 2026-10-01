@@ -645,11 +645,49 @@ form.panel > button[type='submit'],
   text-align: left;
 }
 
+/* ------------------------------------------------------------------ many choices, such as a role's permissions */
+
+fieldset {
+  margin: 1rem 0 0;
+  padding: 0.25rem 1rem 0.75rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+}
+
+legend {
+  padding: 0 0.35rem;
+  font-weight: 700;
+}
+
+.keys {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  gap: 0 1rem;
+}
+
+/* The whole row is the target, at least --target tall (UX-53), with the box beside its words. */
+label.check {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-height: var(--target);
+  margin: 0;
+  font-weight: 400;
+}
+
+input[type='checkbox'] {
+  flex: none;
+  width: 1.5rem;
+  height: 1.5rem;
+  min-height: 0;
+}
+
 /* ------------------------------------------------------------------ sections away from the till */
 
 /* The section shown is marked by a thick underline and bold text, not by colour alone (UX-52). */
 .tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
   max-width: 60rem;
   margin: 1rem auto 0;

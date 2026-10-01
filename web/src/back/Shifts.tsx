@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { Announcer } from '../lib/Announcer.tsx';
 import { api } from '../lib/api.ts';
+import { StatusChip, type Look } from '../lib/Chip.tsx';
 import { formatMoney, type Currency } from '../lib/money.ts';
 import { check, problemOf, ProblemNotice, type Problem } from '../lib/Problem.tsx';
 
@@ -37,22 +38,13 @@ interface Reason {
   name: string;
 }
 
-const STATUS: Record<string, [state: string, symbol: string, words: string]> = {
+const STATUS: Record<string, Look> = {
   Open: ['open', '●', 'Trading'],
   Reconciling: ['counting', '◐', 'Counting'],
   Closed: ['none', '○', 'Closed'],
 };
 
-/** A shift's status in words beside a symbol, never colour alone (`UX-52`). */
-function Status({ status }: { status: string }) {
-  const [state, symbol, words] = STATUS[status] ?? ['none', '○', status];
-  return (
-    <span className="chip" data-state={state}>
-      <span aria-hidden="true">{symbol}</span>
-      <span>{words}</span>
-    </span>
-  );
-}
+const Status = ({ status }: { status: string }) => <StatusChip status={status} looks={STATUS} />;
 
 const when = (iso: string) => new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(iso));
 
