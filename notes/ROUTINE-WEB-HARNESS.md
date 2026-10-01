@@ -44,6 +44,45 @@ separator. Recorded because it will bite any future snapshot of formatted curren
 
 ---
 
+## Step B — the DOM harness, proved on the smallest component
+
+**Why this component.** `Sale.tsx` is 164 lines and needs the API mocked. `Announcer.tsx` is 8 lines, so it proves the
+rendering harness end to end at the lowest possible cost, and it happens to guard the contract that breaks most
+silently: drop `aria-live`, or swap the class for `display: none`, and every screen in the till goes quiet for exactly
+the users `RT-339` (MUST, "every till action is keyboard-reachable and announced audibly") is about.
+
+Packages added, all exact pins, all past the 7-day release-age window in `.npmrc`:
+
+| Package | Version | Age at install |
+| --- | --- | --- |
+| `happy-dom` | 20.14.5 | 19 days |
+| `@testing-library/react` | 16.3.3 | 34 days |
+| `@testing-library/dom` | 10.4.2 | 17 days |
+
+`jsdom` was not used: its current release (30.1.1) was 9 days old, inside double the safety margin, and happy-dom is
+faster. `@testing-library/jest-dom` was skipped entirely; without it the assertions use plain `getAttribute` and
+`textContent`, which is all these guards need.
+
+Config: `environment: 'happy-dom'` and `globals: true` in `web/vitest.config.ts`. `globals: true` is what makes
+Testing Library's automatic cleanup register, through a global `afterEach`. Without it the second render finds the
+first test's elements still in the document.
+
+**Failed attempt worth keeping — environment cost.** The suite ran in **27.24s**, of which vitest reported
+`happy-dom was created 2 times · 18.74s total, 69% of tracked time`: the DOM environment was being built once per
+file. Setting `pool: 'vmThreads'`, which vitest's own hint recommends and which builds the environment once per
+worker while keeping per-file isolation, took the same 20 tests to **832ms**. The alternative vitest suggests,
+`isolate: false`, was rejected because it shares one environment across the whole run, and a leaf-level unit suite
+should not be able to leak state from one file into the next.
+
+**Verified.** `npm test --workspace web` → 2 files, 20 tests passed in 793ms. Root `npm run typecheck` → clean.
+
+**Not verified here, on purpose.** The root `npm test` run at this point failed in `server/`, not `web/`:
+`src/modules/sales/shift-close.test.ts` had three failing tests. That file belongs to the agent building
+`CD-20`..`CD-25`, which is working in parallel and is test-first, so three red tests is that work mid-flight rather
+than a regression. It was not touched. The web slice was run on its own to confirm this step.
+
+---
+
 ## Open items found, not acted on
 
 - **`web/src/lib/money.ts` line 1 cites `BI-01` for the `Currency` interface.** `BI-01` is business-invariants: it is
