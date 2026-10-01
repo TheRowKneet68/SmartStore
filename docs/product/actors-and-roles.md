@@ -271,7 +271,7 @@ Day-to-day technical administrator. Distinct from the Owner: the Owner decides *
 | **Should not access** | Routine cashiering; nothing is *hidden* from them, but they hold **no transaction-approval** permissions by default |
 
 **Decision (with a real trade-off).** Super Admin does **not** hold `Sale.Create`, `Discount.Large.Approve`,
-`Refund.Large.Approve`, or `Cash.Variance.Acknowledge`. Keeping administration and transaction approval apart
+`Sale.Refund.Large.Approve`, or `Cash.Variance.Acknowledge`. Keeping administration and transaction approval apart
 means the person who configures the system is not the person who can quietly move money through it.
 
 **The trade-off, stated honestly:** in a one-person store the Owner must also be the Super Admin, and may also
@@ -290,7 +290,7 @@ Accountable for one store's trading day.
 | **Purpose** | Run the store: stock, staff, cash, service level |
 | **Responsibilities** | Stock accuracy, receiving, transfers, staff scheduling and attendance, cash reconciliation, customer service escalations, day-end close |
 | **Typical actions** | Approve discounts, refunds, adjustments and cash movements above cashier limits; receive deliveries; run stock counts; close the day; review their store's reports |
-| **Sensitive actions** | `Discount.Large.Approve`, `Refund.Large.Approve`, `Inventory.Adjust.Large.Approve`, `Cash.Out.Approve`, `Cash.Variance.Acknowledge`, `Return.Approve`, `Purchase.Receive`, terminating staff at their store |
+| **Sensitive actions** | `Discount.Large.Approve`, `Sale.Refund.Large.Approve`, `Inventory.Adjust.Large.Approve`, `Cash.Out.Approve`, `Cash.Variance.Acknowledge`, `Return.Approve`, `Purchase.Receive`, terminating staff at their store |
 | **Should access** | Their store's sales, stock, cash, customers, staff attendance, and all reports for their store including financial |
 | **Should not access** | Another store's operational data; **other employees' credentials**; supplier bank details beyond what payment requires; organization-wide settings |
 
@@ -387,7 +387,7 @@ Experienced cashier with a higher limit and some supervisory duties.
 | **Typical actions** | Complete sales, apply small discounts, take returns within limit, suspend and resume carts, void an unfinalized sale, open/close the drawer |
 | **Sensitive actions** | `Return.Create` within limit, `Sale.Void` (unfinalized only), `Shift.Open`/`Shift.Close`, `Cash.In`/`Cash.Out` within limit |
 | **Should access** | Own transactions, own shift, product and price data, customer records for their transactions |
-| **Should not access** | `Discount.Large.Approve`, `Refund.Large.Approve`, `Cash.Variance.Acknowledge`, cost and margin, stock adjustments, other cashiers' activity beyond reconciliation needs, `Audit.View` |
+| **Should not access** | `Discount.Large.Approve`, `Sale.Refund.Large.Approve`, `Cash.Variance.Acknowledge`, cost and margin, stock adjustments, other cashiers' activity beyond reconciliation needs, `Audit.View` |
 
 **Decision.** A Senior Cashier can **void an unfinalized sale** but not void a posted one — that requires
 `Sale.Void.Posted.Approve`, which is a manager permission. The distinction is in the permission, not in the UI
@@ -595,8 +595,8 @@ constraint.
 | Template | Core permissions | Explicitly excluded |
 |---|---|---|
 | **Owner** | Everything in the organization, including `Audit.View.Sensitive`, `Report.OrganizationWide`, `Config.Organization`, `Config.Roles`, `Backup.Restore`, `Employee.StoreAccess.Grant` | Platform access. Bypasses nothing — holds explicit permissions like everyone else |
-| **Super Administrator** | `Config.*`, `Device.*`, `Employee.*`, `Role.*`, `Report.View`, `Audit.View`, `Import.*`, `Product.*`, `Price.*` | **`Sale.Create`, `Discount.Large.Approve`, `Refund.Large.Approve`, `Cash.Variance.Acknowledge`, `Purchase.Pay`, `Customer.Credit.Approve`** — administration is separated from money approval (SEP-02, §3.3) |
-| **Store Manager** | Full `Store` operational set for their store: `Sales.*`, `Discount.Large.Approve`, `Refund.Large.Approve`, `Return.*`, `Inventory.*`, `Purchase.View`+`.Receive`, `Shift.*`, `Cash.*`, `Customer.*`, `Employee.View`, `Attendance.*`, `Report.*` (store scope), `Audit.View` | Other stores, `Config.Organization`, `Config.Roles`, `Backup.*`, `Purchase.Pay`, `Purchase.Order.Approve` above their limit |
+| **Super Administrator** | `Config.*`, `Device.*`, `Employee.*`, `Role.*`, `Report.View`, `Audit.View`, `Import.*`, `Product.*`, `Price.*` | **`Sale.Create`, `Discount.Large.Approve`, `Sale.Refund.Large.Approve`, `Cash.Variance.Acknowledge`, `Purchase.Pay`, `Customer.Credit.Approve`** — administration is separated from money approval (SEP-02, §3.3) |
+| **Store Manager** | Full `Store` operational set for their store: `Sales.*`, `Discount.Large.Approve`, `Sale.Refund.Large.Approve`, `Return.*`, `Inventory.*`, `Purchase.View`+`.Receive`, `Shift.*`, `Cash.*`, `Customer.*`, `Employee.View`, `Attendance.*`, `Report.*` (store scope), `Audit.View` | Other stores, `Config.Organization`, `Config.Roles`, `Backup.*`, `Purchase.Pay`, `Purchase.Order.Approve` above their limit |
 | **Assistant Manager** | As Store Manager, with independently configured lower thresholds; includes `Shift.*`, `Cash.*` | `Config.*`, `Backup.*`, `Purchase.Pay` |
 | **Inventory Manager** | `Inventory.*`, `Product.View`, `Product.Cost.View`, `Purchase.View`/`.Receive`, `Report.View` | `Sales.*`, `Payment.*`, `Customer.*`, `Report.Financial` |
 | **Warehouse Manager** | `Inventory.*`, `Purchase.Receive`, `Return.Dispose`, `Report.View` | `Sales.*`, `Customer.*`, `Report.Financial` |
