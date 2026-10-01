@@ -144,6 +144,16 @@ export async function rolesGranting(
 }
 
 /**
+ * A second permission a handler needs only in some cases (for example `Price.Edit` when a new variant carries its first
+ * price). The same check and the same refusal as the gate's, so there is still one definition (`AC-03`).
+ */
+export async function requirePermission(pool: pg.Pool, request: FastifyRequest, key: string, storeId: string | null): Promise<void> {
+  if ((await rolesGranting(pool, request.principal!, key, storeId)) === null) {
+    await refuse(pool, request, key, storeId, 'forbidden', missingPermission(key, storeId));
+  }
+}
+
+/**
  * Records a refusal (`AU-03`: every failed authorisation; `Security.PermissionDenied`) in its own transaction, then
  * refuses. The event is filed under the store only when that store is in the principal's organization: a probe of
  * another tenant's store leaves no trace in that tenant's log.

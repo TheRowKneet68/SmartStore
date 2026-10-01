@@ -4,6 +4,9 @@ import type pg from 'pg';
 import { errorHandler } from './http/errors.ts';
 import { registerGate, type Authenticate } from './http/gate.ts';
 import { transitionRoutes } from './http/transitions.ts';
+import { productMachine, productRoutes } from './modules/catalog/products.ts';
+import { catalogReferenceRoutes } from './modules/catalog/reference.ts';
+import { scanRoutes } from './modules/catalog/scan.ts';
 import { accessRoutes } from './modules/identity/access.ts';
 import { employeeMachine, employeeRoutes } from './modules/identity/employees.ts';
 import { identityRoutes } from './modules/identity/routes.ts';
@@ -16,6 +19,8 @@ export interface AppOptions {
   /** How a request's principal is found: the session cookie. Tests may substitute their own. */
   authenticate?: Authenticate;
   logger?: boolean;
+  /** End the pool when the server closes (tests); `main.ts` ends its own. */
+  ownsPool?: boolean;
 }
 
 /** Builds the server (ADR-31 §5). Tests drive it with `app.inject()`; `main.ts` listens. */
@@ -30,6 +35,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   app.addHook('onSend', async (request, reply) => {
     void reply.header('x-correlation-id', request.id);
   });
+  if (options.ownsPool === true) app.addHook('onClose', async () => options.pool.end());
 
   registerGate(app, options.pool, options.authenticate ?? sessionAuthenticator(options.pool));
 
@@ -39,7 +45,10 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   await app.register(employeeRoutes, { ...v1, session: options.session });
   await app.register(accessRoutes, v1);
   await app.register(organizationRoutes, v1);
-  await app.register(transitionRoutes, { ...v1, machines: [employeeMachine] });
+  await app.register(catalogReferenceRoutes, v1);
+  await app.register(productRoutes, v1);
+  await app.register(scanRoutes, v1);
+  await app.register(transitionRoutes, { ...v1, machines: [employeeMachine, productMachine] });
 
   await app.ready();
   return app;

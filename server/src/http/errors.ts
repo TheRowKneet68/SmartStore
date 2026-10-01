@@ -31,6 +31,11 @@ interface PgError {
 const BUSINESS_RULES: Record<string, string> = {
   SS001: 'That has already been done, and who did it and when cannot be changed.',
   SS004: 'That change of state is not allowed.',
+  SS005: 'A product needs at least one live variant before it can be activated.',
+  SS006: 'A category cannot be placed under itself or under one of its own subcategories.',
+  SS007: 'A variant with barcodes needs one primary barcode. Mark another one primary first.',
+  SS008: 'Every live variant needs a price in force before the product can be released.',
+  SS009: 'This product is archived, so nothing new may refer to it.',
   SS038: 'The tax mode cannot change once the store has made a sale, and a sale must use the settings in force.',
   SS055: 'This needs a reason. Choose one and try again.',
   SS057: 'This employee has a till shift that is not closed. Close it first.',
@@ -39,12 +44,33 @@ const BUSINESS_RULES: Record<string, string> = {
 /** Check constraints a client can violate through a route, with what to do instead. */
 const CHECKS: Record<string, string> = {
   ck_store_setting_version_prospective: 'New settings take effect now or later, never in the past.',
+  ck_category_not_own_parent: 'A category cannot be its own parent.',
+  ck_product_barcode_format: 'That is not a valid barcode of that kind. Check the digits, including the check digit.',
+  ck_unit_countable_whole: 'A countable unit has no decimal places.',
+  ck_unit_scale: 'A unit has between 0 and 4 decimal places.',
+  ck_variant_price_positive: 'A price must be more than zero. A free item is a discount, not a zero price.',
+  ck_store_variant_price_positive: 'A price must be more than zero. A free item is a discount, not a zero price.',
+  ck_variant_price_prospective: 'A price takes effect now or later, never in the past.',
+  ck_store_variant_price_prospective: 'A price takes effect now or later, never in the past.',
+  ck_variant_standard_cost_non_negative: 'A cost cannot be negative.',
+  ck_variant_standard_cost_prospective: 'A cost takes effect now or later, never in the past.',
+  ck_tax_rate_non_negative: 'A tax rate cannot be negative. Zero is how an exemption is recorded.',
+  ck_tax_rate_prospective: 'A tax rate takes effect now or later, never in the past.',
 };
 
 /** Uniqueness a client can run into, by constraint or index, with what it means. */
 const UNIQUE: Record<string, string> = {
   uq_user_account_username: 'That username is already taken in this organization.',
   uq_employee_number: 'That employee number is already in use.',
+  uq_unit_code: 'That unit code is already in use.',
+  uq_tax_category_code: 'That tax category code is already in use.',
+  uq_brand_name: 'That brand already exists.',
+  uq_product_barcode_active_key: 'That barcode is already in use in this organization.',
+  uq_product_barcode_one_primary: 'That variant already has a primary barcode.',
+  uq_variant_price_effective: 'A price already starts at that moment.',
+  uq_store_variant_price_effective: 'A price already starts at that moment.',
+  uq_variant_standard_cost_effective: 'A cost already starts at that moment.',
+  uq_tax_rate_effective: 'A rate already starts at that moment.',
 };
 
 export function toApiError(error: unknown): AppError {

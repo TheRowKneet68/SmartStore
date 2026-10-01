@@ -1,14 +1,26 @@
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app.ts';
+import { createPool } from '../src/db/pool.ts';
 import type { SessionPolicy } from '../src/modules/identity/sessions.ts';
 import type { TestDb } from './db.ts';
 
 /** TEST-ONLY security policy. The real values are the owner's to set (OQ-027). */
 export const TEST_SESSION_POLICY: SessionPolicy = { lifetimeMinutes: 60, failureLimit: 3, failureWindowMinutes: 15 };
 
+/**
+ * A pool built as the server builds its own (createPool: exact int8), on the test database's runtime role, so a
+ * response carries the types production sends. Without the test audit context, too: every audited change the server
+ * makes must set its own, as in production. The server ends the pool on close.
+ */
+function serverPool(db: TestDb) {
+  const url = new URL(db.appUrl);
+  url.searchParams.delete('options');
+  return createPool(url.toString(), 8);
+}
+
 /** The server as it runs: principals come from session cookies only. */
 export async function sessionApp(db: TestDb, policy: SessionPolicy = TEST_SESSION_POLICY): Promise<FastifyInstance> {
-  return buildApp({ pool: db.app, session: policy });
+  return buildApp({ pool: serverPool(db), session: policy, ownsPool: true });
 }
 
 /**
@@ -18,8 +30,9 @@ export async function sessionApp(db: TestDb, policy: SessionPolicy = TEST_SESSIO
  */
 export async function testApp(db: TestDb): Promise<FastifyInstance> {
   return buildApp({
-    pool: db.app,
+    pool: serverPool(db),
     session: TEST_SESSION_POLICY,
+    ownsPool: true,
     authenticate: async (request) => {
       const employeeId = request.headers['x-test-employee'];
       const organizationId = request.headers['x-test-organization'];
