@@ -1,0 +1,68 @@
+import { render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { App } from './App.tsx';
+
+/**
+ * The till's shell: who is signed in, where, and the state of the drawer. The network is stubbed at `fetch`, never at
+ * the `api` module, so the screen, the client and the server's response shapes run together.
+ */
+
+const store = { id: 's1', code: 'S1', name: 'High Street', currencyCode: 'GBP', minorUnitExponent: 2, permissions: ['Sale.Create', 'Shift.Open'] };
+const atTill = {
+  employee: { id: 'e1', name: 'Ada Cashier', readOnly: false },
+  organization: { id: 'o1', name: 'Corner Shop', permissions: [] },
+  stores: [store],
+  terminal: { id: 't1', code: 'T1', label: 'Till 1', storeId: 's1' },
+};
+
+const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+
+/** Answers each `METHOD /api/v1/path` with its JSON body; anything else is a 404 in the server's error shape (§18.4). */
+function serve(routes: Record<string, unknown>) {
+  const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const key = `${init?.method ?? 'GET'} ${String(input)}`;
+    return key in routes ? json(routes[key]) : json({ error: { code: 'not_found', message: 'There is nothing at this address.' } }, 404);
+  });
+  vi.stubGlobal('fetch', fetch);
+  return fetch;
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe('the till shell (UX-35, UX-52, UX-07, UX-08)', () => {
+  it('UX-35, UX-52: an open shift is shown on the bar as "Shift open", in words beside a symbol', async () => {
+    serve({ 'GET /api/v1/session': atTill, 'GET /api/v1/stores/s1/shift': { shift: { id: 'sh1', status: 'Open' } } });
+    render(<App />);
+    const words = await screen.findByText('Shift open');
+    const chip = words.closest('.chip');
+    expect(chip?.getAttribute('data-state')).toBe('open');
+    expect(chip?.querySelector('[aria-hidden="true"]')?.textContent, 'a symbol, not colour alone').toBe('●');
+    expect(screen.getByText('Corner Shop · High Street · Till 1')).toBeTruthy();
+    expect(screen.getByText('Ada Cashier')).toBeTruthy();
+  });
+
+  it('UX-35, CD-10: with no shift open, the bar says so, and the till asks for the counted float in the store currency', async () => {
+    serve({ 'GET /api/v1/session': atTill, 'GET /api/v1/stores/s1/shift': { shift: null } });
+    render(<App />);
+    const words = await screen.findByText('No open shift');
+    expect(words.closest('.chip')?.querySelector('[aria-hidden="true"]')?.textContent).toBe('○');
+    expect(screen.getByLabelText('Counted opening float (GBP)')).toBeTruthy();
+  });
+
+  it('UX-07, MS-05: an employee with no store access sees an empty workspace that says who to ask', async () => {
+    serve({ 'GET /api/v1/session': { ...atTill, stores: [], terminal: null } });
+    render(<App />);
+    expect(await screen.findByText('You have no access to a store yet. Ask the owner or a manager to give you access.')).toBeTruthy();
+    expect(screen.queryByText('No open shift'), 'no drawer state away from a till').toBeNull();
+  });
+
+  it('UX-08: at a till, someone who may not sell is told so, and is offered neither a sale nor the drawer state', async () => {
+    serve({ 'GET /api/v1/session': { ...atTill, stores: [{ ...store, permissions: ['Shift.Open'] }] } });
+    render(<App />);
+    expect(await screen.findByText('You cannot sell at this till. Ask a manager for access.')).toBeTruthy();
+    expect(screen.queryByLabelText('Scan or type a barcode, then Enter')).toBeNull();
+    expect(screen.queryByText('Shift open')).toBeNull();
+  });
+});

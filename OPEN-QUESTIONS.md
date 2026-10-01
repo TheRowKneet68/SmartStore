@@ -447,6 +447,20 @@ fallback is a design that holds either answer, not a guess at the answer.
   - this shift's expected amount is fixed at the count, before the close writes the float;
   - the next shift counts its own opening float when it opens (`CD-10`, `CD-13`).
 
+### OQ-030 — The minimum touch-target size and the contrast ratio
+
+- **Unknown:** the two numbers behind `UX-53`, `UX-54` and `RT-380`:
+  - `UX-53` defers the minimum target size to Phase 2;
+  - `UX-54` asks for text contrast that "meets a published ratio";
+  - `RT-380` requires both to exist and be asserted in the acceptance suite.
+
+  Phase 2 says only "sufficient contrast" (architecture §5.4). No document states either number.
+- **Why not answerable from `/docs`:** both numbers were deferred, and nothing later sets them.
+- **Blocked:** `RT-380`'s acceptance assertion, which needs the owner's numbers.
+- *Meanwhile:* the web UI uses the strictest published levels, each one variable in `web/src/styles.css`:
+  - every text colour pair meets WCAG 2.2 level AAA, 7:1 or more. The lowest pair measures 7.29:1;
+  - every control is at least 3rem tall, 54 CSS px at the 18 px base.
+
 ## How to use this file
 
 - Add an entry the moment you hit something the specification does not answer. Then continue with a different task.

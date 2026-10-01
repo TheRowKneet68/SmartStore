@@ -1,102 +1,620 @@
 /*
- * Plain on purpose (UX-67, UX-68): no theme, no animation. Large text and targets for a busy shop (UX-53, UX-54), a
- * visible focus ring (UX-50), and every state in words, never colour alone (UX-52).
+ * SmartStore's one look. It is not a theme: a store cannot recolour it, and nothing here switches at run time (UX-67).
+ * It is still: no transition or animation anywhere, because a till that animates delays a queue (UX-68).
+ *
+ * Built for a bright shop at arm's length and for fast, imprecise hands (UX-53, UX-54, RT-380). Until the owner sets
+ * the numbers (OQ-030), every text colour pair below meets WCAG 2.2 level AAA (7:1 or more; the lowest measures
+ * 7.29:1), borders and the focus ring meet the 3:1 non-text minimum, and every control is at least --target tall.
+ * Every state is in words and a symbol, never colour alone (UX-52), and focus is always visible (UX-50).
  */
 :root {
-  font-family: system-ui, sans-serif;
+  --canvas: #f3f4f6; /* the page */
+  --surface: #ffffff; /* cards and the cart */
+  --ink: #111827; /* 17.7:1 on surface, 16.1:1 on canvas */
+  --ink-muted: #374151; /* 10.3:1 on surface, 9.4:1 on canvas */
+  --line: #6b7280; /* control borders: 4.8:1 on surface */
+  --rule: #d1d5db; /* dividers between rows: decorative only */
+  --action: #1e40af; /* primary actions: white text 8.7:1 */
+  --action-strong: #1e3a8a; /* pressed: white text 10.4:1 */
+  --bar: #111827; /* the status bar and the total: white text 17.7:1 */
+  --bar-ink: #ffffff;
+  --bar-muted: #d1d5db; /* 12.0:1 on the bar */
+  --ok: #065f46; /* 7.3:1 on its tint */
+  --ok-tint: #ecfdf5;
+  --warn: #78350f; /* 8.8:1 on its tint */
+  --warn-tint: #fffbeb;
+  --bad: #7f1d1d; /* 9.2:1 on its tint */
+  --bad-tint: #fef2f2;
+  --info: #1e3a8a; /* 9.5:1 on its tint */
+  --info-tint: #eff6ff;
+  --focus: #ffdd00; /* a yellow ring inside a near-black halo: visible on light and on dark */
+  --focus-halo: #0b0c0c;
+  --target: 3rem; /* the smallest control: 54 px at the 18 px base (OQ-030) */
+  --radius: 8px;
+
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   font-size: 18px;
-  color: #111;
-  background: #fff;
+  line-height: 1.45;
+  color: var(--ink);
+  background: var(--canvas);
 }
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  transition: none !important;
+  animation: none !important;
+}
+
 body {
   margin: 0;
+  min-height: 100vh;
 }
+
+h1,
+h2,
+h3 {
+  line-height: 1.2;
+  margin: 0 0 0.75rem;
+}
+
+h1 {
+  font-size: 1.75rem;
+}
+
+h2 {
+  font-size: 1.35rem;
+}
+
+p {
+  margin: 0 0 0.75rem;
+}
+
+/* ------------------------------------------------------------------ focus (UX-50) */
+
 :focus-visible {
-  outline: 3px solid #1a4fd6;
-  outline-offset: 2px;
+  outline: 3px solid var(--focus);
+  outline-offset: 0;
+  box-shadow: 0 0 0 6px var(--focus-halo);
 }
+
+/* ------------------------------------------------------------------ controls (UX-53) */
+
 button,
-input {
+input,
+select {
   font: inherit;
-  min-height: 2.75rem;
-  padding: 0.25rem 0.75rem;
+  min-height: var(--target);
 }
-button {
-  cursor: pointer;
+
+input,
+select {
+  width: 100%;
+  padding: 0.5rem 0.85rem;
+  color: var(--ink);
+  background: var(--surface);
+  border: 2px solid var(--line);
+  border-radius: var(--radius);
 }
+
+input[inputmode='decimal'],
+input[type='number'] {
+  font-variant-numeric: tabular-nums;
+}
+
 label {
   display: block;
-  margin: 0.75rem 0 0.25rem;
+  margin: 1rem 0 0.35rem;
+  font-weight: 600;
 }
-input {
-  width: 100%;
-  box-sizing: border-box;
+
+/* Every button is a secondary action unless it submits its form: the form's own action is the primary one (UX-02). */
+button {
+  padding: 0.5rem 1.15rem;
+  color: var(--ink);
+  background: var(--surface);
+  border: 2px solid var(--ink);
+  border-radius: var(--radius);
+  font-weight: 600;
+  cursor: pointer;
 }
-.panel {
+
+button[type='submit'],
+button.primary {
+  color: #ffffff;
+  background: var(--action);
+  border-color: var(--action);
+}
+
+button[type='submit']:active,
+button.primary:active {
+  background: var(--action-strong);
+  border-color: var(--action-strong);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  color: var(--ink-muted);
+  background: var(--canvas);
+  border: 2px dashed var(--line);
+}
+
+button.quiet {
+  background: transparent;
+  border-color: transparent;
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+/* ------------------------------------------------------------------ layout */
+
+.app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.app > main {
+  flex: 1;
+}
+
+/* A page on its own: signing in, loading. */
+.center {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
   padding: 1.5rem;
 }
-.narrow {
-  max-width: 28rem;
+
+.card,
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  padding: 1.5rem 1.75rem;
 }
+
+.panel {
+  max-width: 60rem;
+  margin: 1.5rem auto;
+}
+
+.narrow {
+  max-width: 30rem;
+}
+
+.card.signin {
+  width: min(100%, 28rem);
+}
+
+.card form > button[type='submit'],
+.panel form > button[type='submit'],
+form.panel > button[type='submit'],
+.card.signin > button[type='submit'] {
+  width: 100%;
+  margin-top: 1.25rem;
+  min-height: 3.5rem;
+}
+
+.brand {
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+.lede {
+  color: var(--ink-muted);
+}
+
+.hint {
+  color: var(--ink-muted);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 1.25rem;
+}
+
+/* ------------------------------------------------------------------ the status bar (UX-35) */
+
 .bar {
   display: flex;
-  gap: 1.5rem;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.5rem;
   align-items: center;
-  padding: 0.5rem 1.5rem;
-  border-bottom: 2px solid #111;
+  padding: 0.6rem 1.5rem;
+  color: var(--bar-ink);
+  background: var(--bar);
 }
-.bar button {
+
+.bar .where {
+  color: var(--bar-muted);
+}
+
+.bar .who {
   margin-left: auto;
 }
-.sale {
-  padding: 1rem 1.5rem;
+
+.bar button {
+  color: var(--bar-ink);
+  background: transparent;
+  border-color: var(--bar-muted);
 }
+
+/* ------------------------------------------------------------------ states in words and a symbol (UX-52) */
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.2rem 0.85rem;
+  border: 2px solid currentColor;
+  border-radius: 999px;
+  font-weight: 700;
+  color: var(--ink);
+  background: var(--surface);
+}
+
+.chip[data-state='open'] {
+  color: var(--ok);
+  background: var(--ok-tint);
+}
+
+.chip[data-state='counting'] {
+  color: var(--warn);
+  background: var(--warn-tint);
+}
+
+.chip[data-state='none'] {
+  color: var(--ink);
+  background: var(--canvas);
+}
+
+.notice {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+  padding: 0.85rem 1rem;
+  border: 2px solid currentColor;
+  border-left-width: 8px;
+  border-radius: var(--radius);
+}
+
+.notice[data-tone='ok'] {
+  color: var(--ok);
+  background: var(--ok-tint);
+}
+
+.notice[data-tone='warn'] {
+  color: var(--warn);
+  background: var(--warn-tint);
+}
+
+.notice[data-tone='bad'] {
+  color: var(--bad);
+  background: var(--bad-tint);
+}
+
+.notice[data-tone='info'] {
+  color: var(--info);
+  background: var(--info-tint);
+}
+
+.notice > .symbol {
+  font-size: 1.35rem;
+  line-height: 1.1;
+}
+
+/* A refusal the person can act on (UX-55). The screens that predate .notice still say "Problem:" in words. */
+.error,
+.problem {
+  margin: 0.75rem 0;
+  padding: 0.85rem 1rem;
+  color: var(--warn);
+  background: var(--warn-tint);
+  border: 2px solid currentColor;
+  border-left-width: 8px;
+  border-radius: var(--radius);
+  font-weight: 600;
+}
+
+.problem::before,
+.error::before {
+  content: '\26A0  Problem: ';
+  content: '\26A0  Problem: ' / 'Problem: ';
+  font-weight: 800;
+}
+
+.error button {
+  display: block;
+  margin-top: 0.75rem;
+}
+
+/* ------------------------------------------------------------------ figures: money and counts */
+
+.figures {
+  display: grid;
+  grid-template-columns: auto auto;
+  justify-content: start;
+  gap: 0.5rem 2rem;
+  margin: 1rem 0;
+}
+
+.figures dt {
+  color: var(--ink-muted);
+  font-weight: 600;
+}
+
+.figures dd {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.money {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------------------ the till: scan left, pay right (UX-09, UX-10) */
+
+.sale {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(18rem, 26rem);
+  grid-template-areas:
+    'scan total'
+    'problem pay'
+    'cart pay';
+  grid-template-rows: auto auto 1fr;
+  gap: 1rem 1.5rem;
+  align-items: start;
+  max-width: 84rem;
+  margin: 0 auto;
+  padding: 1.25rem 1.5rem 2rem;
+}
+
+.sale > .scan {
+  grid-area: scan;
+}
+
+.sale > .problem {
+  grid-area: problem;
+  margin: 0;
+}
+
+.sale > .cart {
+  grid-area: cart;
+}
+
+.sale > .total {
+  grid-area: total;
+}
+
+.sale > .pay {
+  grid-area: pay;
+}
+
+.scan label {
+  margin-top: 0;
+}
+
+.scan input {
+  min-height: 4rem;
+  font-size: 1.5rem;
+  border-width: 3px;
+  border-color: var(--ink);
+}
+
+/* The running total, always on screen and the largest figure there (UX-10). */
+.total {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+  margin: 0;
+  padding: 1rem 1.25rem;
+  color: var(--bar-ink);
+  background: var(--bar);
+  border-radius: var(--radius);
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+.total strong {
+  font-size: 2.75rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.pay {
+  display: grid;
+  gap: 0.25rem;
+  padding: 1.25rem;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+}
+
+.pay label {
+  margin-top: 0;
+}
+
+.pay input {
+  min-height: 3.5rem;
+  font-size: 1.35rem;
+}
+
+.pay button {
+  margin-top: 0.75rem;
+  min-height: 4rem;
+  font-size: 1.25rem;
+}
+
 .cart {
   width: 100%;
   border-collapse: collapse;
-  margin: 1rem 0;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  font-variant-numeric: tabular-nums;
 }
+
 .cart th,
 .cart td {
+  padding: 0.5rem 0.85rem;
   text-align: left;
-  padding: 0.4rem;
-  border-bottom: 1px solid #999;
+  border-bottom: 1px solid var(--rule);
 }
+
+.cart th {
+  color: var(--ink-muted);
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.cart td {
+  height: 3.75rem;
+}
+
+/* Price and line total line up as money does. */
+.cart th:nth-child(3),
+.cart th:nth-child(4),
+.cart td:nth-child(3),
+.cart td:nth-child(4) {
+  text-align: right;
+}
+
+.cart td:nth-child(4) {
+  font-weight: 700;
+}
+
 .cart input {
-  width: 6rem;
+  width: 6.5rem;
+  text-align: right;
 }
-.total {
-  font-size: 2rem;
+
+.cart td:last-child {
+  width: 1%;
+  white-space: nowrap;
 }
-.change {
-  font-size: 2.5rem;
-  font-weight: bold;
+
+/* An empty cart says what to do, rather than showing an empty table (UX-09). */
+.cart:has(tbody:empty) thead {
+  display: none;
 }
-.error,
-.problem {
-  border: 2px solid #8a1c1c;
-  padding: 0.5rem 0.75rem;
+
+.cart:has(tbody:empty)::before {
+  content: 'No items yet. Scan a barcode, or type it and press Enter.';
+  display: table-caption;
+  caption-side: bottom;
+  padding: 2.5rem 1rem;
+  color: var(--ink-muted);
+  text-align: center;
+  background: var(--surface);
+  border: 2px dashed var(--rule);
+  border-radius: var(--radius);
 }
-.problem::before,
-.error::before {
-  content: 'Problem: ';
-  font-weight: bold;
+
+@media (max-width: 56rem) {
+  .sale {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: 'scan' 'problem' 'cart' 'total' 'pay';
+    grid-template-rows: none;
+  }
 }
+
+/* ------------------------------------------------------------------ the outcome of a sale (UX-15, UX-21) */
+
+.outcome {
+  max-width: 34rem;
+  text-align: center;
+}
+
+.outcome h1::before {
+  content: '\2713  ';
+  content: '\2713  ' / '';
+  color: var(--ok);
+}
+
+.outcome .change {
+  margin: 1.25rem 0;
+  padding: 1rem;
+  color: var(--ok);
+  background: var(--ok-tint);
+  border: 2px solid currentColor;
+  border-radius: var(--radius);
+  font-size: 2.75rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.outcome button {
+  width: 100%;
+  min-height: 4rem;
+  font-size: 1.25rem;
+  color: #ffffff;
+  background: var(--action);
+  border-color: var(--action);
+}
+
+/* ------------------------------------------------------------------ lists of choices */
+
 .choices {
   list-style: none;
+  margin: 1rem 0 0;
   padding: 0;
+  display: grid;
+  gap: 0.6rem;
 }
-.choices li {
-  margin: 0.5rem 0;
+
+.choices button {
+  width: 100%;
+  text-align: left;
 }
-.hint {
-  color: #333;
+
+/* ------------------------------------------------------------------ tables of records */
+
+.records {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--surface);
+  font-variant-numeric: tabular-nums;
 }
+
+.records th,
+.records td {
+  padding: 0.6rem 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid var(--rule);
+  vertical-align: top;
+}
+
+.records th {
+  color: var(--ink-muted);
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.records .num {
+  text-align: right;
+}
+
+/* ------------------------------------------------------------------ for screen readers only (UX-51) */
+
 .visually-hidden {
   position: absolute;
   width: 1px;
   height: 1px;
+  margin: -1px;
+  padding: 0;
   overflow: hidden;
   clip: rect(0 0 0 0);
   white-space: nowrap;
+  border: 0;
 }

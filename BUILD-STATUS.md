@@ -344,7 +344,32 @@ Step 3 rules, given by the owner on 2026-10-01 with "start Step 3":
 
 ## In progress
 
-Nothing. The shift close (`CD-20`..`CD-25`) is finished and committed: see Done and the log.
+**The till's UI**, on the owner's instruction of 2026-10-01 ("make UI also good ui FOR CONSUMER").
+- **Who:** the owner chose the till and the shift close first, built by this session now, in parallel with the web
+  agent.
+- **"Consumer"** means the people who use SmartStore. product-overview puts a shopper-facing web shop out of scope.
+- **The limits on the look** come from ux-requirements.md:
+  - one fixed look, with no theming (`UX-67`);
+  - no animation in the till (`UX-68`);
+  - never colour alone (`UX-52`);
+  - target size and contrast at OQ-030's interim.
+
+Steps:
+
+1. **U1:** the design foundation and the till's shell. `web/src/styles.css` and `web/src/App.tsx`, with the drawer
+   state on the bar (`UX-35`). **Done.**
+2. **U2 (server):** the till's own shift read also returns a shift being counted, and each pass carries the tolerance
+   (`UX-34`).
+3. **U3:** the shift close at the till: begin count, the blind count, the variance, acknowledge or recount, and the
+   close (`UX-33`, `UX-34`, `CD-20`..`CD-25`).
+4. **U4:** the manager's shift review (`CD-30`), under `Cash.Count.View`.
+5. **U5**, after the web agent's tests of `Sale.tsx` land:
+   - the payment panel (`UX-14`);
+   - user and system errors styled apart (`UX-59`);
+   - a close that cannot strand a cart (`UX-57`).
+
+**Coordination:** the web agent is writing tests for `web/src/lib/api.ts` and `web/src/pos/Sale.tsx`. Both files stay
+untouched until its tests are committed. Commits stage explicit paths only.
 
 Earlier note, still true: Domain 3 is finished and committed.
 
@@ -843,3 +868,30 @@ Append-only. One dated line per step, including failed and abandoned attempts.
 
     Root `npm test`, the full suite: server 23 files and 403 tests, web 2 files and 20 tests, all passing.
     `npm run typecheck` is clean for both workspaces.
+- 2026-10-01 — **UI, step 1 of 5: the design foundation and the till's shell.** The owner asked for a good UI for
+  the people who use SmartStore, and chose the till and the shift close first, built now, in parallel with the web
+  agent.
+  - **Read first:** ux-requirements.md in full. It specifies behaviour, not looks, but it bounds the look:
+    - one fixed design (`UX-67`);
+    - no animation in the till (`UX-68`);
+    - never colour alone (`UX-52`);
+    - targets and contrast (`UX-53`, `UX-54`). Their numbers were deferred to Phase 2 and never set, so they are
+      recorded as **OQ-030 (new)**.
+  - **`web/src/styles.css`:**
+    - one fixed palette, as variables. Every text pair measured WCAG AAA; the lowest is 7.29:1;
+    - every control is at least 3rem tall;
+    - a yellow focus ring in a black halo, visible on light and on dark;
+    - no transition or animation anywhere;
+    - the till laid out in two columns: scan and cart on the left, total and payment on the right. This is done in
+      CSS only, because `Sale.tsx` is under the web agent's tests;
+    - an empty cart that says what to do.
+  - **`web/src/App.tsx`:**
+    - the bar shows where (organization, store, till), who is signed in, and the drawer state in words beside a
+      symbol (`UX-35`, `UX-52`);
+    - sign-in, till set-up and opening the shift are cards.
+
+    Behaviour is unchanged.
+  - **Tests:** `web/src/App.test.tsx`, 4 tests (`UX-35`, `UX-52`, `UX-07`, `UX-08`, `CD-10`), with `fetch`
+    stubbed.
+
+    Root `npm test`: server 403, web 24 (3 files). `npm run typecheck` clean.
