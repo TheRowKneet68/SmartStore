@@ -431,6 +431,7 @@ sets the order. Phase A (housekeeping and the push) is done.
 
       **Done.**
    2. **The till's other edges,** disable and retire, on the transition endpoint (the Device machine, §22.12).
+      **Done.**
    3. **Reading sales:**
       - a list by date, till and cashier, paged;
       - `GET /sales/:id`;
@@ -1024,3 +1025,22 @@ Append-only. One dated line per step, including failed and abandoned attempts.
     mutants of the migrations themselves; each test run rebuilds the template.
   - **`npm run db:migrate`** applied both migrations and rewrote `db/schema.sql`. Its diff is only the new objects and
     the two migration versions.
+- 2026-10-01 — **Phase B, step 2: the till's disable and retire edges.**
+  - **No code was needed.** The Device machine was already bound to the transition endpoint, and §22.12's edges,
+    keys, reasons and audit types are data. The 3 new tests passed on their first run: this step proves the behaviour.
+  - **Disable** (`Active`/`Degraded` → `Disabled`): needs `Device.Disable` (`Device.Edit` is refused) and a reason
+    (`SS055`), and is audited with that reason.
+    - A disabled till sells nothing and opens no shift (`SS025`).
+    - Its open shift can still be counted and closed. Nothing in the close (`CD-20`) depends on the till being in
+      service, so the money is still reconciled.
+  - **Re-enable** (`Disabled` → `Active`) is refused for everyone, the Owner included (`not_permitted`), until the owner
+    names its key (OQ-025).
+  - **Retire** (any state → `Retired`): needs `Device.Edit` (`Device.Disable` is refused) and a reason. The till stays
+    listed, because a till is never deleted (`HD-08`, `BI-40`). Retiring again changes nothing, and no edge leaves
+    `Retired`. A till never activated can be retired too.
+  - **Not built:**
+    - `HD-31`'s approval for disabling a till in use. It is a SHOULD, and the approval engine is outside v1;
+    - a back-office screen for these edges.
+  - **Noted, not changed:** sign-in does not check whether a till is in service, and no rule asks it to. A retired till
+    can be signed into, but cannot open a shift or sell (`SS025`).
+  - These rules live in migration data, so their mutants belong to Domain 4's full mutation check at the end.

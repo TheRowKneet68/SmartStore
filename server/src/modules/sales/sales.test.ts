@@ -216,3 +216,62 @@ describe('what a sale needs first (BI-39, PT-01, PY-05, RT-423, CD-01, CD-03)', 
     expect((await call('POST', `/stores/${s.storeId}/shift`, at2, { openingFloat: 0 })).statusCode).toBe(201);
   });
 });
+
+describe("the till's other edges (s22.12 disable, retire; HD-08, HD-31, HD-32; OQ-025)", () => {
+  const device = (as: Headers, event: string, subject: string, reasonCodeId?: string) =>
+    call('POST', '/transitions', as, { machine: 'Device', event, subject, ...(reasonCodeId === undefined ? {} : { reasonCodeId }) });
+  const tillStatus = async (s: Shop, till: string) =>
+    ((await call('GET', `/stores/${s.storeId}/terminals`, s.owner)).json().items as { id: string; status: string }[]).find((t) => t.id === till)?.status;
+
+  it('s22.12, HD-31, CD-20: disabling a till needs Device.Disable and a reason; it then sells nothing and opens no shift, and its open shift can still be counted and closed', async () => {
+    const s = await shop();
+    await openShift(s);
+    const reason = (await ok('POST', '/reason-codes', s.owner, { code: 'FAULT', name: 'Till fault' })).id as string;
+    const editor = await employeeWithAccess(db.app, s.organizationId, ['Device.Edit', 'Device.View'], { assignedStore: s.storeId, accessStores: [s.storeId] });
+    const refused = await device(signedInAs(editor, s.organizationId), 'disable', s.till, reason);
+    expect(refused.statusCode, 'Device.Edit is not Device.Disable').toBe(403);
+    expect(refused.json().error.message).toContain('Device.Disable');
+    const unreasoned = await device(s.owner, 'disable', s.till);
+    expect(unreasoned.json().error.code, 'a reason, always').toBe('SS055');
+    expect(await tillStatus(s, s.till)).toBe('Active');
+
+    expect((await device(s.owner, 'disable', s.till, reason)).json()).toEqual({ subject: s.till, state: 'Disabled', changed: true });
+    const event = await db.app.query("SELECT reason_code_id FROM audit_event WHERE entity_id = $1 AND event_type = 'Device.StateChange' AND after ->> 'status' = 'Disabled'", [s.till]);
+    expect(event.rows).toEqual([{ reason_code_id: reason }]);
+    const sale = await sell(s, [{ quote: await quote(s, '012345678905'), quantity: 1 }], 1_250);
+    expect(sale.json().error.code, 'turned off by an administrator').toBe('SS025');
+
+    // The money in the drawer is still reconciled: nothing in the close depends on the till being in service.
+    await ok('POST', '/transitions', s.owner, { machine: 'Shift', event: 'begin count', subject: (await call('GET', `/stores/${s.storeId}/shift`, s.at)).json().shift.id });
+    const shift = (await call('GET', `/stores/${s.storeId}/shift`, s.at)).json().shift.id as string;
+    await ok('POST', `/stores/${s.storeId}/shifts/${shift}/counts`, s.owner, { countedAmount: 1_000 });
+    expect((await ok('POST', '/transitions', s.owner, { machine: 'Shift', event: 'close', subject: shift, payload: { closingFloat: 0 } })).state).toBe('Closed');
+    expect((await call('POST', `/stores/${s.storeId}/shift`, s.at, { openingFloat: 0 })).json().error.code, 'no new shift at a disabled till').toBe('SS025');
+  });
+
+  it('OQ-025, SM-02d, HD-32: a disabled till is not re-enabled, by anyone, until the owner names the permission', async () => {
+    const s = await shop();
+    const reason = (await ok('POST', '/reason-codes', s.owner, { code: 'FAULT', name: 'Till fault' })).id as string;
+    await device(s.owner, 'disable', s.till, reason);
+    const again = await device(s.owner, 'activate', s.till, reason);
+    expect(again.statusCode).toBe(403);
+    expect(again.json().error.code).toBe('not_permitted');
+    expect(await tillStatus(s, s.till)).toBe('Disabled');
+  });
+
+  it('s22.12, HD-08, BI-40: retiring needs Device.Edit and a reason; a retired till is never deleted, and nothing leaves Retired', async () => {
+    const s = await shop();
+    const reason = (await ok('POST', '/reason-codes', s.owner, { code: 'GONE', name: 'Replaced' })).id as string;
+    const disabler = await employeeWithAccess(db.app, s.organizationId, ['Device.Disable'], { assignedStore: s.storeId, accessStores: [s.storeId] });
+    expect((await device(signedInAs(disabler, s.organizationId), 'retire', s.till, reason)).statusCode, 'Device.Disable is not Device.Edit').toBe(403);
+    expect((await device(s.owner, 'retire', s.till)).json().error.code, 'a reason, always').toBe('SS055');
+    expect((await device(s.owner, 'retire', s.till, reason)).json()).toEqual({ subject: s.till, state: 'Retired', changed: true });
+    expect(await tillStatus(s, s.till), 'still listed, with its history').toBe('Retired');
+    expect((await device(s.owner, 'retire', s.till, reason)).json(), 'retiring again changes nothing').toEqual({ subject: s.till, state: 'Retired', changed: false });
+    for (const event of ['disable', 'activate']) {
+      expect((await device(s.owner, event, s.till, reason)).json().error.code, event).toBe('illegal_transition');
+    }
+    const registered = (await ok('POST', `/stores/${s.storeId}/terminals`, s.owner, { code: 'T9', label: 'Never used' })).id as string;
+    expect((await device(s.owner, 'retire', registered, reason)).json().state, 'a till never activated can be retired too').toBe('Retired');
+  });
+});
