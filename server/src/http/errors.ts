@@ -8,11 +8,14 @@ import { ZodError } from 'zod';
 export class AppError extends Error {
   readonly status: number;
   readonly code: string;
+  /** Facts the client needs to act on, beside the message (for example PC-02's affected count). */
+  readonly details: Record<string, unknown>;
 
-  constructor(status: number, code: string, message: string) {
+  constructor(status: number, code: string, message: string, details: Record<string, unknown> = {}) {
     super(message);
     this.status = status;
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -82,5 +85,5 @@ export function errorHandler(error: unknown, request: FastifyRequest, reply: Fas
       error instanceof Error ? error.message : 'non-error thrown',
     );
   }
-  void reply.status(apiError.status).send({ error: { code: apiError.code, message: apiError.message } });
+  void reply.status(apiError.status).send({ error: { ...apiError.details, code: apiError.code, message: apiError.message } });
 }

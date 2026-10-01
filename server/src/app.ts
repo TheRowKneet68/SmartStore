@@ -4,6 +4,7 @@ import type pg from 'pg';
 import { errorHandler } from './http/errors.ts';
 import { registerGate, type Authenticate } from './http/gate.ts';
 import { transitionRoutes } from './http/transitions.ts';
+import { accessRoutes } from './modules/identity/access.ts';
 import { employeeMachine, employeeRoutes } from './modules/identity/employees.ts';
 import { identityRoutes } from './modules/identity/routes.ts';
 import { sessionAuthenticator, type SessionPolicy } from './modules/identity/sessions.ts';
@@ -36,6 +37,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   const v1 = { prefix: '/api/v1', pool: options.pool };
   await app.register(identityRoutes, { ...v1, session: options.session });
   await app.register(employeeRoutes, { ...v1, session: options.session });
+  await app.register(accessRoutes, v1);
   await app.register(organizationRoutes, v1);
   await app.register(transitionRoutes, { ...v1, machines: [employeeMachine] });
 
