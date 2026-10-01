@@ -468,6 +468,10 @@ sets the order. Phase A (housekeeping and the push) is done.
      OQ-014, OQ-020, OQ-029, OQ-030.
 
    Then stop on the blocked parts only. Domain 5, card payments and employee reactivation wait for the answers.
+
+   **Done (2026-10-01): the file is ready for the owner's answer.** It holds 14 questions, each with the catalogue
+   keys that could be reused, a proposed name where none fits, a recommendation and tick boxes, and the blocking open
+   questions. Every reused key was checked against the catalogue migration, and every proposed name is absent from it.
 3. **Phase D, while waiting.** Only unblocked work, in this order:
    - the audit-log read, if OQ-024 allows it; otherwise record why not;
    - the identity admin screens;
