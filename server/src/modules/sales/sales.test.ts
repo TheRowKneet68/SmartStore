@@ -217,6 +217,166 @@ describe('what a sale needs first (BI-39, PT-01, PY-05, RT-423, CD-01, CD-03)', 
   });
 });
 
+/** A second till in the same store, with its own cashier signed in at it and a shift open. */
+async function secondTill(s: Shop) {
+  const till = (await ok('POST', `/stores/${s.storeId}/terminals`, s.owner, { code: 'T2', label: 'Till 2' })).id as string;
+  await ok('POST', '/transitions', s.owner, { machine: 'Device', event: 'activate', subject: till });
+  const cashier = await employeeWithAccess(db.app, s.organizationId, ['Sale.Create', 'Sale.View', 'Shift.Open'], { assignedStore: s.storeId, accessStores: [s.storeId] });
+  const at = signedInAs(cashier, s.organizationId, till);
+  await ok('POST', `/stores/${s.storeId}/shift`, at, { openingFloat: 0 });
+  return { till, cashier, at };
+}
+const sold = async (s: Shop, code: string, tendered: number, at: Headers = s.at) => {
+  const scanned = await call('GET', `/stores/${s.storeId}/scan/${code}`, at);
+  const sale = await call('POST', `/stores/${s.storeId}/sales`, at, { clientOperationId: randomUUID(), lines: [{ quote: scanned.json().quote, quantity: 1 }], cash: { tendered } });
+  expect(sale.statusCode, sale.body).toBe(201);
+  return sale.json() as { saleId: string; documentNumber: number };
+};
+const numbers = (body: { items: { documentNumber: number }[] }) => body.items.map((i) => i.documentNumber);
+
+describe('reading sales (MS-02, SP-58, RT-140, architecture s18.5)', () => {
+  it("MS-02, s18.5: the store's sales are listed newest first, a page at a time, and filtered by business date, till and cashier", async () => {
+    const s = await shop();
+    await openShift(s);
+    await sold(s, '012345678905', 1_250);
+    await sold(s, '4006381333931', 500);
+    const two = await secondTill(s);
+    const third = await sold(s, '012345678905', 2_000, two.at);
+    const other = await shop();
+    await openShift(other);
+    await sold(other, '012345678905', 1_250);
+
+    const list = (query = '') => call('GET', `/stores/${s.storeId}/sales${query}`, s.owner).then((r) => r.json());
+    const all = await list();
+    expect(numbers(all), "newest first, and none of another organization's").toEqual([3, 2, 1]);
+    expect(all.items[0]).toMatchObject({
+      saleId: third.saleId, terminalId: two.till, terminalLabel: 'Till 2', employeeId: two.cashier, cashierName: 'Test Employee',
+      totalDue: 1_250, currencyCode: expect.any(String), status: 'Completed', receiptStatus: null, businessDate: expect.any(String),
+    });
+    const first = await list('?limit=2');
+    expect(numbers(first)).toEqual([3, 2]);
+    expect(first.before, 'a cursor while the page is full').toBe(2);
+    const second = await list(`?limit=2&before=${first.before}`);
+    expect(numbers(second)).toEqual([1]);
+    expect(second.before).toBeNull();
+    expect(numbers(await list(`?terminalId=${two.till}`))).toEqual([3]);
+    expect(numbers(await list(`?employeeId=${s.cashier}`))).toEqual([2, 1]);
+    const today = all.items[0].businessDate as string;
+    expect(numbers(await list(`?from=${today}&to=${today}`))).toEqual([3, 2, 1]);
+    expect(numbers(await list('?to=2000-01-01'))).toEqual([]);
+    expect(numbers(await list('?from=2999-01-01'))).toEqual([]);
+    expect((await call('GET', `/stores/${s.storeId}/sales?from=yesterday`, s.owner)).statusCode, 'a date is a date').toBe(400);
+  });
+
+  it('MS-02, actors-and-roles s2.4: reading sales needs Sale.View in the store', async () => {
+    const s = await shop();
+    const seller = await employeeWithAccess(db.app, s.organizationId, ['Sale.Create'], { assignedStore: s.storeId, accessStores: [s.storeId] });
+    expect((await call('GET', `/stores/${s.storeId}/sales`, signedInAs(seller, s.organizationId))).statusCode).toBe(403);
+    const other = await shop();
+    expect((await call('GET', `/stores/${other.storeId}/sales`, s.owner)).statusCode, "another organization's store").toBe(403);
+  });
+});
+
+describe('the receipt (SP-57..SP-60, SP-03, RT-140, UX-22)', () => {
+  const receipt = (s: Shop, sale: string, as: Headers = s.at) => call('GET', `/stores/${s.storeId}/sales/${sale}/receipt`, as);
+  const outcome = (s: Shop, sale: string, status: string) => call('PUT', `/stores/${s.storeId}/sales/${sale}/receipt-status`, s.at, { status });
+  const reprint = (s: Shop, sale: string, reasonCodeId?: string, as: Headers = s.at) =>
+    call('POST', `/stores/${s.storeId}/sales/${sale}/reprints`, as, reasonCodeId === undefined ? {} : { reasonCodeId });
+
+  it('SP-57, SP-59, SP-60: the receipt renders the stored sale with its mandatory content, and carries no cost', async () => {
+    const s = await shop();
+    await openShift(s);
+    const sale = await sold(s, '012345678905', 2_000);
+    const shown = await receipt(s, sale.saleId);
+    expect(shown.statusCode).toBe(200);
+    expect(shown.json()).toMatchObject({
+      saleId: sale.saleId,
+      documentNumber: 1,
+      businessDate: expect.any(String),
+      completedAt: expect.any(String),
+      store: { name: expect.any(String), code: expect.any(String) },
+      taxMode: 'Inclusive',
+      minorUnitExponent: expect.any(Number),
+      lines: [{ lineNumber: 1, description: 'Oat milk', quantity: '1', unitPrice: 1_250, lineTotal: 1_250 }],
+      taxTotal: expect.any(Number),
+      totalDue: 1_250,
+      payments: [{ method: 'Cash', amount: 1_250, tendered: 2_000 }],
+      change: 750,
+      reprint: null,
+    });
+    expect(shown.body, 'SP-60: no cost or margin field').not.toMatch(/cost|margin/i);
+  });
+
+  it('SP-03, SP-58, UX-22: the till records whether the first print worked, once; a failure puts the sale in the reprint queue', async () => {
+    const s = await shop();
+    await openShift(s);
+    const failed = await sold(s, '012345678905', 1_250);
+    const printed = await sold(s, '4006381333931', 500);
+    expect((await outcome(s, failed.saleId, 'Failed')).json()).toEqual({ saleId: failed.saleId, receiptStatus: 'Failed', changed: true });
+    expect((await outcome(s, failed.saleId, 'Failed')).json(), 'reported twice, recorded once').toMatchObject({ changed: false });
+    const flip = await outcome(s, failed.saleId, 'Printed');
+    expect(flip.statusCode).toBe(409);
+    expect(flip.json().error.code).toBe('receipt_status_recorded');
+    expect((await outcome(s, printed.saleId, 'Printed')).json().receiptStatus).toBe('Printed');
+    expect((await outcome(s, printed.saleId, 'Reprinted')).statusCode, 'a reprint is its own act').toBe(400);
+    await sold(s, '4006381333931', 500);
+    const queue = (await call('GET', `/stores/${s.storeId}/sales?receipt=Failed`, s.owner)).json();
+    expect(numbers(queue), 'the reprint queue').toEqual([1]);
+    expect(numbers((await call('GET', `/stores/${s.storeId}/sales?receipt=None`, s.owner)).json()), 'not reported yet').toEqual([3]);
+    const reader = await employeeWithAccess(db.app, s.organizationId, ['Sale.View'], { assignedStore: s.storeId, accessStores: [s.storeId] });
+    const refused = await call('PUT', `/stores/${s.storeId}/sales/${printed.saleId}/receipt-status`, signedInAs(reader, s.organizationId), { status: 'Printed' });
+    expect(refused.statusCode, 'recording a print is receipt issuance: Sale.Create').toBe(403);
+  });
+
+  it("SP-57, BI-11, BI-25, owner's instruction of 2026-10-01: a reprint needs a live reason of the organization, is recorded with who, when and why, carries a reprint banner, and repeats the original numbers exactly", async () => {
+    const s = await shop();
+    await openShift(s);
+    const sale = await sold(s, '012345678905', 2_000);
+    const original = (await receipt(s, sale.saleId)).json();
+    await ok('POST', `/variants/${s.milk}/prices`, s.owner, { amount: 1_500 });
+
+    expect((await reprint(s, sale.saleId)).statusCode, 'no reason').toBe(400);
+    const elsewhere = await shop();
+    const theirs = (await ok('POST', '/reason-codes', elsewhere.owner, { code: 'COPY', name: 'Copy' })).id as string;
+    expect((await reprint(s, sale.saleId, theirs)).json().error.code, "another organization's reason").toBe('invalid_reference');
+    await ok('POST', `/reason-codes/${theirs}/archive`, elsewhere.owner, {});
+    expect((await reprint(s, sale.saleId, theirs)).json().error.code, "s24.3: and nothing of its state").toBe('invalid_reference');
+    const stale = (await ok('POST', '/reason-codes', s.owner, { code: 'OLD', name: 'Old reason' })).id as string;
+    await ok('POST', `/reason-codes/${stale}/archive`, s.owner, {});
+    expect((await reprint(s, sale.saleId, stale)).json().error.code, 'an archived reason').toBe('SS024');
+
+    const copy = (await ok('POST', '/reason-codes', s.owner, { code: 'COPY', name: 'Customer copy' })).id as string;
+    const reader = await employeeWithAccess(db.app, s.organizationId, ['Sale.View'], { assignedStore: s.storeId, accessStores: [s.storeId] });
+    expect((await reprint(s, sale.saleId, copy, signedInAs(reader, s.organizationId))).statusCode, 'reprinting is receipt issuance: Sale.Create').toBe(403);
+    const reprinted = await reprint(s, sale.saleId, copy, s.owner);
+    expect(reprinted.statusCode).toBe(201);
+    const { reprint: banner, receiptStatus, ...numbersAgain } = reprinted.json();
+    expect(banner, 'the banner that tells the copy from the original').toEqual({ reprintedAt: expect.any(String), reason: 'Customer copy' });
+    expect(receiptStatus).toBe('Reprinted');
+    const { reprint: _none, receiptStatus: _was, ...originalNumbers } = original;
+    expect(numbersAgain, 'the original numbers, not the new price').toEqual(originalNumbers);
+    const rows = await db.app.query('SELECT reason_code_id, reprinted_by FROM receipt_reprint WHERE sale_id = $1', [sale.saleId]);
+    expect(rows.rows, 'who reprinted, not who sold').toEqual([{ reason_code_id: copy, reprinted_by: s.ownerEmployeeId }]);
+    expect((await reprint(s, sale.saleId, copy)).statusCode, 'reprinted again, recorded again').toBe(201);
+    expect((await db.app.query('SELECT 1 FROM receipt_reprint WHERE sale_id = $1', [sale.saleId])).rows).toHaveLength(2);
+    const rewrite = (pool: typeof db.app) =>
+      pool.query('UPDATE receipt_reprint SET reason_code_id = $2 WHERE sale_id = $1', [sale.saleId, copy]).then(() => 'accepted', (e: { code?: string }) => e.code);
+    expect(await rewrite(db.app), 'a reprint record is never rewritten by the application').toBe('42501');
+    expect(await rewrite(db.owner), 'nor by the schema owner').toBe('SS010');
+  });
+
+  it('MS-02: a sale of another store has no receipt here, and cannot be reprinted from here', async () => {
+    const s = await shop();
+    const other = await shop();
+    await openShift(other);
+    const theirs = await sold(other, '012345678905', 1_250);
+    expect((await receipt(s, theirs.saleId, s.owner)).statusCode).toBe(404);
+    const reason = (await ok('POST', '/reason-codes', s.owner, { code: 'COPY', name: 'Customer copy' })).id as string;
+    expect((await reprint(s, theirs.saleId, reason, s.owner)).statusCode).toBe(404);
+    expect((await call('PUT', `/stores/${s.storeId}/sales/${theirs.saleId}/receipt-status`, s.owner, { status: 'Printed' })).statusCode).toBe(404);
+  });
+});
+
 describe("the till's other edges (s22.12 disable, retire; HD-08, HD-31, HD-32; OQ-025)", () => {
   const device = (as: Headers, event: string, subject: string, reasonCodeId?: string) =>
     call('POST', '/transitions', as, { machine: 'Device', event, subject, ...(reasonCodeId === undefined ? {} : { reasonCodeId }) });

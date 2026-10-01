@@ -415,6 +415,7 @@ The files are `server/src/modules/sales/sales.ts`, `till.ts`, `payment-methods.t
 | 8 | Whether a shift count records a denomination breakdown. `RT-526` (`CD-20`) says "the denomination total is derived from the breakdown", but D4 deferred `CD-27`..`CD-29`, so the schema has no denomination tables and the count is a total. Building it needs a migration | `RT-526`, D4 | Nothing; counts are totals until decided |
 | 9 | The variance tolerance and the higher threshold that needs a different approver. Interim: the tolerance is zero, so every non-zero variance needs an acknowledgement with a reason, and no second approver is required. "Closes automatically within tolerance" and the second-approver gate are unbuilt, because the numbers do not exist | OQ-020, `CD-23` | Those two behaviours only |
 | 10 | Whether the declared closing float may exceed the counted amount. Interim: recorded as declared; it feeds no expected amount | OQ-029, `CD-20` | Nothing |
+| 11 | Veto, or accept, two choices for receipts. (a) Recording a print's outcome and reprinting need `Sale.Create`: the catalogue has no reprint key, and receipt issuance is the cashier's work (actors-and-roles §4). (b) A reprint has no audit event: AU-12 has no type for one, and the `receipt_reprint` row is the record. The reprint's mandatory reason is your instruction of 2026-10-01; `/docs` asks for none | D4 §10 | Nothing |
 
 Until then, tests run on a scratch PostgreSQL 17.11 cluster and a portable Node 26 in the session scratch directory
 (ADR-31 §14). Nothing on the owner's PostgreSQL service is touched.
@@ -437,6 +438,8 @@ sets the order. Phase A (housekeeping and the push) is done.
       - `GET /sales/:id`;
       - the receipt document, and a reprint with a mandatory reason;
       - the receipt status.
+
+      **Done.** See D4 §10.
    4. **UI U5:**
       - the payment panel (`UX-14`);
       - user and system errors styled apart (`UX-59`);
@@ -1044,3 +1047,25 @@ Append-only. One dated line per step, including failed and abandoned attempts.
   - **Noted, not changed:** sign-in does not check whether a till is in service, and no rule asks it to. A retired till
     can be signed into, but cannot open a shift or sell (`SS025`).
   - These rules live in migration data, so their mutants belong to Domain 4's full mutation check at the end.
+- 2026-10-01 — **Phase B, step 3: reading sales, and the receipt.** D4 §10.
+  - **Reading:** the store's sales, newest first and paged by document number, filtered by business date, till,
+    cashier and receipt status (`MS-02`, §18.5). `receipt=Failed` is `SP-58`'s reprint queue. One sale's existing
+    `GET /stores/:storeId/sales/:saleId` stays store-scoped, as `MS-02` requires; it is what the brief's `GET /sales/:id`
+    asks for.
+  - **The receipt** renders the stored sale with `SP-59`'s mandatory core and no cost (`SP-57`, `SP-60`).
+  - **The first print's outcome** is recorded once (`SP-03`, `SP-58`).
+  - **A reprint** repeats the original numbers under a banner, sets `Reprinted`, and is recorded with who, when and why.
+    The reason is mandatory, by the owner's instruction; `/docs` asks for none. It needs a new forward-only migration,
+    `20261001130000_d4_receipt_reprint.sql`, with a reason-liveness trigger (`SS024`) and append-only triggers.
+    `npm run db:migrate` applied it and rewrote `db/schema.sql`.
+  - **Keys** are `Sale.View` to read, and `Sale.Create` to record a print's outcome or reprint. The catalogue has no
+    reprint key. This is row 11 of the decisions table, for veto.
+  - **A shared name helper** (`identity/names.ts`) replaces the shift screen's own copy.
+  - **Failed on the way:**
+    - the citations test refused "CONVENTIONS s11" in a `Cites:` comment, which must hold only rule IDs;
+    - the receipt printed a quantity as "1.0000". `trim_scale()` now prints the stored quantity without trailing zeros.
+  - **Tests:** 6 new in `sales.test.ts`. `schema-rules.test.ts` classifies the new table as store-scoped and
+    append-only.
+  - **Mutation check:** 24 mutations; 23 detected on the first run. The survivor, P06, showed that no test refused a
+    reprint to someone with only `Sale.View`. A test was added, and P06 is now detected. Planning also strengthened 4
+    tests (D4 §10).

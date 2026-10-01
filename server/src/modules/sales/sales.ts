@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { withTransaction, type Queryable } from '../../db/pool.ts';
 import { AppError } from '../../http/errors.ts';
 import { auditContext, type Access } from '../../http/gate.ts';
+import { employeeName } from '../identity/names.ts';
 import type { QuoteSigner } from './quotes.ts';
 import { tillOf, type Till } from './till.ts';
 
@@ -16,6 +17,53 @@ const NewSale = z.object({
   cash: z.object({ tendered: z.number().int().safe().min(0) }),
 });
 const SaleRef = z.object({ storeId: z.uuid(), saleId: z.uuid() });
+
+/** A page of the store's sales (architecture §18.5): newest first, `before` a document number to continue. */
+const SaleListing = z.object({
+  from: z.iso.date().optional(),
+  to: z.iso.date().optional(),
+  terminalId: z.uuid().optional(),
+  employeeId: z.uuid().optional(),
+  // `Failed` is the reprint queue (SP-58); `None` is a sale whose first print has not been reported.
+  receipt: z.enum(['Printed', 'Failed', 'Reprinted', 'None']).optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+  before: z.coerce.number().int().min(1).optional(),
+});
+// SP-03: the till reports the first print's outcome after the commit. A reprint is its own act (SP-57).
+const PrintOutcome = z.object({ status: z.enum(['Printed', 'Failed']) });
+const Reprint = z.object({ reasonCodeId: z.uuid() });
+
+/**
+ * The receipt: a rendering of the stored sale, never a second source of truth (`SP-57`). It carries the mandatory core
+ * (`SP-59`: the store, the number, the date, the lines with prices, the tax, the total, the payments and the change) and
+ * no cost or margin, because nothing that carries them is read (`SP-60`). Every value is the sale's own snapshot, so a
+ * reprint years later repeats the original numbers (`SP-06`, `BI-11`).
+ */
+async function receiptOf(db: Queryable, saleId: string) {
+  const sale = await db.query(
+    `SELECT s.id AS "saleId", s.document_number AS "documentNumber", s.business_date::text AS "businessDate",
+            s.completed_at AS "completedAt",
+            json_build_object('name', o.name, 'code', o.code, 'address', o.address, 'contactDetails', o.contact_details) AS store,
+            s.tax_mode AS "taxMode", s.currency_code AS "currencyCode", c.minor_unit_exponent AS "minorUnitExponent",
+            s.subtotal, s.tax_total AS "taxTotal", s.total_due AS "totalDue", s.change_given AS change,
+            s.receipt_status AS "receiptStatus"
+     FROM sale s JOIN store o ON o.id = s.store_id JOIN currency c ON c.code = s.currency_code WHERE s.id = $1`,
+    [saleId],
+  );
+  const lines = await db.query(
+    `SELECT line_number AS "lineNumber", description, trim_scale(quantity)::text AS quantity, unit_name AS "unitName",
+            unit_price AS "unitPrice", line_total AS "lineTotal"
+     FROM sale_line WHERE sale_id = $1 ORDER BY line_number`,
+    [saleId],
+  );
+  const payments = await db.query(
+    `SELECT m.name AS method, p.amount, p.tendered_amount AS tendered
+     FROM sale s JOIN payment p ON p.checkout_id = s.checkout_id JOIN payment_method m ON m.id = p.payment_method_id
+     WHERE s.id = $1 AND p.status = 'Captured' ORDER BY p.sequence_number`,
+    [saleId],
+  );
+  return { ...sale.rows[0], lines: lines.rows, payments: payments.rows, reprint: null as null | { reprintedAt: string; reason: string } };
+}
 
 export interface SaleSummary {
   saleId: string;
@@ -260,5 +308,90 @@ export async function saleRoutes(
     const found = await one<{ id: string }>(pool, 'SELECT id FROM sale WHERE id = $1 AND store_id = $2', [saleId, request.storeId]);
     if (found === undefined) throw new AppError(404, 'not_found', 'There is no such sale in this store.');
     return summary(pool, found.id);
+  });
+
+  /**
+   * The store's sales, newest first, a page at a time (architecture §18.5), under `Sale.View`, "see sales, own store"
+   * (`MS-02`). They can be filtered by business date, till and cashier, and by receipt status: `Failed` is the reprint
+   * queue (`SP-58`, `RT-140`).
+   */
+  app.get('/stores/:storeId/sales', inStore('Sale.View'), async (request) => {
+    const q = SaleListing.parse(request.query);
+    const { rows } = await pool.query<{ documentNumber: number }>(
+      `SELECT s.id AS "saleId", s.document_number AS "documentNumber", s.business_date::text AS "businessDate",
+              s.completed_at AS "completedAt", s.pos_terminal_id AS "terminalId", t.label AS "terminalLabel",
+              s.employee_id AS "employeeId", ${employeeName('e')} AS "cashierName", s.currency_code AS "currencyCode",
+              s.total_due AS "totalDue", s.status, s.receipt_status AS "receiptStatus"
+       FROM sale s JOIN pos_terminal t ON t.id = s.pos_terminal_id JOIN employee e ON e.id = s.employee_id
+       WHERE s.store_id = $1
+         AND ($2::date IS NULL OR s.business_date >= $2) AND ($3::date IS NULL OR s.business_date <= $3)
+         AND ($4::uuid IS NULL OR s.pos_terminal_id = $4) AND ($5::uuid IS NULL OR s.employee_id = $5)
+         AND ($6::text IS NULL OR s.receipt_status = $6 OR ($6 = 'None' AND s.receipt_status IS NULL))
+         AND ($7::bigint IS NULL OR s.document_number < $7)
+       ORDER BY s.document_number DESC LIMIT $8`,
+      [request.storeId, q.from ?? null, q.to ?? null, q.terminalId ?? null, q.employeeId ?? null, q.receipt ?? null, q.before ?? null, q.limit],
+    );
+    return { items: rows, before: rows.length === q.limit ? rows.at(-1)!.documentNumber : null };
+  });
+
+  /** The receipt of a sale of this store (`SP-57`, `SP-59`, `SP-60`). */
+  app.get('/stores/:storeId/sales/:saleId/receipt', inStore('Sale.View'), async (request) => {
+    const { saleId } = SaleRef.parse(request.params);
+    const found = await one<{ id: string }>(pool, 'SELECT id FROM sale WHERE id = $1 AND store_id = $2', [saleId, request.storeId]);
+    if (found === undefined) throw new AppError(404, 'not_found', 'There is no such sale in this store.');
+    return receiptOf(pool, found.id);
+  });
+
+  /**
+   * The outcome of the receipt's first print, reported by the till after the commit (`SP-03`, `SP-58`, `UX-22`). It is
+   * recorded once: reporting the same outcome again changes nothing, and a different one is refused, because a failed
+   * receipt is recovered by a reprint, not by rewriting its outcome. Receipt issuance is the cashier's work, so this
+   * needs `Sale.Create` (actors-and-roles §4; a choice listed for the owner's veto).
+   */
+  app.put('/stores/:storeId/sales/:saleId/receipt-status', inStore('Sale.Create'), async (request) => {
+    const { saleId } = SaleRef.parse(request.params);
+    const { status } = PrintOutcome.parse(request.body);
+    return withTransaction(pool, auditContext(request), async (c) => {
+      const found = await one<{ receipt_status: string | null }>(c, 'SELECT receipt_status FROM sale WHERE id = $1 AND store_id = $2 FOR UPDATE', [
+        saleId,
+        request.storeId,
+      ]);
+      if (found === undefined) throw new AppError(404, 'not_found', 'There is no such sale in this store.');
+      if (found.receipt_status === status) return { saleId, receiptStatus: status, changed: false };
+      if (found.receipt_status !== null) {
+        throw new AppError(409, 'receipt_status_recorded', `This receipt is already recorded as ${found.receipt_status}. Reprint it to give the customer a copy.`);
+      }
+      await c.query('UPDATE sale SET receipt_status = $2 WHERE id = $1', [saleId, status]);
+      return { saleId, receiptStatus: status, changed: true };
+    });
+  });
+
+  /**
+   * Reprints a receipt (`SP-57`): the original numbers exactly, under a reprint banner, so the copy and the original
+   * are told apart. The reason is mandatory by the owner's instruction of 2026-10-01, and the reprint is recorded with
+   * who and when. The reason must be the organization's, checked here so that another organization's archived reason
+   * answers "not found" (architecture §24.3); its liveness is the database's (`SS024`). `Sale.Create`, as above.
+   */
+  app.post('/stores/:storeId/sales/:saleId/reprints', inStore('Sale.Create'), async (request, reply) => {
+    const { saleId } = SaleRef.parse(request.params);
+    const { reasonCodeId } = Reprint.parse(request.body);
+    const principal = request.principal!;
+    const reprinted = await withTransaction(pool, auditContext(request), async (c) => {
+      const found = await one<{ id: string }>(c, 'SELECT id FROM sale WHERE id = $1 AND store_id = $2 FOR UPDATE', [saleId, request.storeId]);
+      if (found === undefined) throw new AppError(404, 'not_found', 'There is no such sale in this store.');
+      const reason = await one<{ name: string }>(c, 'SELECT name FROM reason_code WHERE id = $1 AND organization_id = $2', [
+        reasonCodeId,
+        principal.organizationId,
+      ]);
+      if (reason === undefined) throw new AppError(422, 'invalid_reference', 'Something this refers to does not exist.');
+      const { rows } = await c.query<{ reprintedAt: string }>(
+        `INSERT INTO receipt_reprint (sale_id, store_id, organization_id, reason_code_id, reprinted_by)
+         VALUES ($1, $2, $3, $4, $5) RETURNING reprinted_at AS "reprintedAt"`,
+        [saleId, request.storeId, principal.organizationId, reasonCodeId, principal.employeeId],
+      );
+      await c.query("UPDATE sale SET receipt_status = 'Reprinted' WHERE id = $1", [saleId]);
+      return { ...(await receiptOf(c, saleId)), reprint: { reprintedAt: rows[0]!.reprintedAt, reason: reason.name } };
+    });
+    return reply.status(201).send(reprinted);
   });
 }

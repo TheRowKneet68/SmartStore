@@ -303,3 +303,51 @@ Planning found 9 gaps, and a test was strengthened for each before the first run
 The first run detected 45 of 47. The 2 survivors removed `.int()` from `z.number().int().safe()`. They were equivalent
 mutants, not missing tests: in zod 4.6.5 `int()` and `safe()` are the same check, as verified on 12.5 and 2^53.
 Dropping the repeated `.safe()` made each schema one check, and the second run detected all 47.
+
+## 10. Application layer: reading sales, and the receipt (Step 3, 2026-10-01)
+
+| Step | Route | Key |
+|---|---|---|
+| The store's sales | `GET /stores/:storeId/sales?from=&to=&terminalId=&employeeId=&receipt=&limit=&before=` | `Sale.View` |
+| One sale | `GET /stores/:storeId/sales/:saleId` (existing) | `Sale.View` |
+| The receipt | `GET /stores/:storeId/sales/:saleId/receipt` | `Sale.View` |
+| The first print's outcome | `PUT /stores/:storeId/sales/:saleId/receipt-status { status: Printed \| Failed }` | `Sale.Create` |
+| A reprint | `POST /stores/:storeId/sales/:saleId/reprints { reasonCodeId }` | `Sale.Create` |
+
+- **The list** (`MS-02`, architecture §18.5) is the store's sales, newest first, paged by document number with
+  `before`. It filters by business date, till, cashier and receipt status. Each item names its till and its cashier.
+  `receipt=Failed` is the reprint queue (`SP-58`, `RT-140`), and `receipt=None` is a sale whose first print has not
+  been reported.
+- **The receipt** is a rendering of the stored sale (`SP-57`). It carries `SP-59`'s mandatory core: the store, the
+  number, the date, the lines with prices, the tax, the total, the captured payments and the change. It reads no cost
+  or margin (`SP-60`), and every value is the sale's own snapshot, so it never changes (`SP-06`, `BI-11`). The quantity
+  is printed without trailing zeros.
+- **The first print's outcome** is reported by the till after the commit (`SP-03`) and recorded once. The same
+  outcome again changes nothing, and a different one is refused (`receipt_status_recorded`). A failed receipt is
+  recovered by a reprint, not by rewriting its outcome.
+- **A reprint** repeats the original numbers under a banner (`SP-57`): `reprint: { reprintedAt, reason }`, where the
+  receipt itself carries `reprint: null`. It sets the receipt status to `Reprinted`, and is recorded in the new
+  `receipt_reprint` table with who, when and why.
+  - The reason is mandatory, **by the owner's instruction of 2026-10-01**. `/docs` asks for none.
+  - The reason is looked up in the caller's organization, so another organization's reason answers "not found"
+    whatever its state (§24.3). Its liveness is the database's (`SS024`).
+  - The table is append-only at every privilege, and its time is the server's.
+
+**Decisions, stated so they can be reversed:**
+- **Recording a print's outcome and reprinting need `Sale.Create`.** The catalogue has no reprint key, and
+  actors-and-roles §4 makes receipt issuance the cashier's work. Reading needs `Sale.View`.
+- **There is no audit event for a reprint.** The AU-12 vocabulary has no type for one, and AU-12c forbids adding one
+  opportunistically. The `receipt_reprint` row is the record.
+
+**Not built:** receipt content configured per store (`SP-59`'s "per store"), printer devices (hardware is outside v1),
+and batch and expiry on the receipt (`BE-49`; batches are deferred).
+
+**Mutation check of these routes (2026-10-01):** 24 mutations, all detected after one fix. The first run's survivor
+(P06) showed that no test refused a reprint to someone with only `Sale.View`, so one was added. The run also strengthened
+4 tests before it began:
+- the `from` filter now excludes something;
+- `receipt=None` now finds an unreported sale;
+- an archived reason of another organization answers `invalid_reference`, not `SS024`;
+- a reprint by someone other than the seller is recorded in the reprinter's name.
+
+The 2 migration mutants are included: the reason's liveness, and the append-only trigger at owner privilege.

@@ -605,6 +605,27 @@ COMMENT ON FUNCTION public.assert_refund_whole() IS 'Cites: RR-43, PY-27, CD-19,
 
 
 --
+-- Name: assert_reprint_reason_live(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.assert_reprint_reason_live() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  PERFORM assert_reason_code_live(NEW.reason_code_id);
+  RETURN NEW;
+END
+$$;
+
+
+--
+-- Name: FUNCTION assert_reprint_reason_live(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.assert_reprint_reason_live() IS 'Cites: BI-25, BI-40. A reprint takes only a live reason code: an archived one is kept for history and takes no new use (SS024).';
+
+
+--
 -- Name: assert_return_posting_complete(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -3811,6 +3832,28 @@ COMMENT ON CONSTRAINT ck_reason_code_archival ON public.reason_code IS 'Cites: B
 
 
 --
+-- Name: receipt_reprint; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.receipt_reprint (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    sale_id uuid NOT NULL,
+    store_id uuid NOT NULL,
+    organization_id uuid NOT NULL,
+    reason_code_id uuid NOT NULL,
+    reprinted_at timestamp with time zone DEFAULT now() NOT NULL,
+    reprinted_by uuid NOT NULL
+);
+
+
+--
+-- Name: TABLE receipt_reprint; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.receipt_reprint IS 'Cites: SP-57, SP-58, RT-140, UX-22, BI-25. One reprint of a sale''s receipt: who, when and why. The copy repeats the stored sale''s numbers under a reprint banner (SP-57); a failed first print is recovered this way (SP-58). The reason is mandatory by the owner''s instruction of 2026-10-01.';
+
+
+--
 -- Name: refund; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -5364,6 +5407,14 @@ ALTER TABLE ONLY public.product_variant
 
 ALTER TABLE ONLY public.reason_code
     ADD CONSTRAINT pk_reason_code PRIMARY KEY (id);
+
+
+--
+-- Name: receipt_reprint pk_receipt_reprint; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.receipt_reprint
+    ADD CONSTRAINT pk_receipt_reprint PRIMARY KEY (id);
 
 
 --
@@ -7015,6 +7066,20 @@ COMMENT ON INDEX public.ix_product_variant_product IS 'Cites: RT-022. Finds a pr
 
 
 --
+-- Name: ix_receipt_reprint_sale; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_receipt_reprint_sale ON public.receipt_reprint USING btree (sale_id);
+
+
+--
+-- Name: INDEX ix_receipt_reprint_sale; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.ix_receipt_reprint_sale IS 'Cites: SP-57. A sale''s reprints, found by the sale.';
+
+
+--
 -- Name: ix_sale_business_date; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -8174,6 +8239,48 @@ CREATE TRIGGER tg_reason_code_archival BEFORE UPDATE ON public.reason_code FOR E
 --
 
 COMMENT ON TRIGGER tg_reason_code_archival ON public.reason_code IS 'Cites: BI-40. Records a reason code''s archival once, with server time; an archived code takes no new documents.';
+
+
+--
+-- Name: receipt_reprint tg_receipt_reprint_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_receipt_reprint_immutable BEFORE DELETE OR UPDATE ON public.receipt_reprint FOR EACH ROW EXECUTE FUNCTION public.forbid_ledger_rewrite();
+
+
+--
+-- Name: TRIGGER tg_receipt_reprint_immutable ON receipt_reprint; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_receipt_reprint_immutable ON public.receipt_reprint IS 'Cites: BI-08, AU-32. A reprint record is never updated or deleted, at every privilege.';
+
+
+--
+-- Name: receipt_reprint tg_receipt_reprint_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_receipt_reprint_no_truncate BEFORE TRUNCATE ON public.receipt_reprint FOR EACH STATEMENT EXECUTE FUNCTION public.forbid_ledger_rewrite();
+
+
+--
+-- Name: TRIGGER tg_receipt_reprint_no_truncate ON receipt_reprint; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_receipt_reprint_no_truncate ON public.receipt_reprint IS 'Cites: AU-32. The reprint record cannot be emptied in bulk.';
+
+
+--
+-- Name: receipt_reprint tg_receipt_reprint_reason_live; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_receipt_reprint_reason_live BEFORE INSERT ON public.receipt_reprint FOR EACH ROW EXECUTE FUNCTION public.assert_reprint_reason_live();
+
+
+--
+-- Name: TRIGGER tg_receipt_reprint_reason_live ON receipt_reprint; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_receipt_reprint_reason_live ON public.receipt_reprint IS 'Cites: BI-40. A reprint with an archived reason code is refused (SS024).';
 
 
 --
@@ -9976,6 +10083,66 @@ COMMENT ON CONSTRAINT fk_reason_code_organization ON public.reason_code IS 'Cite
 
 
 --
+-- Name: receipt_reprint fk_receipt_reprint_reason; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.receipt_reprint
+    ADD CONSTRAINT fk_receipt_reprint_reason FOREIGN KEY (reason_code_id, organization_id) REFERENCES public.reason_code(id, organization_id);
+
+
+--
+-- Name: CONSTRAINT fk_receipt_reprint_reason ON receipt_reprint; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_receipt_reprint_reason ON public.receipt_reprint IS 'Cites: BI-25. A reprint carries a reason code of the organization.';
+
+
+--
+-- Name: receipt_reprint fk_receipt_reprint_reprinted_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.receipt_reprint
+    ADD CONSTRAINT fk_receipt_reprint_reprinted_by FOREIGN KEY (reprinted_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT fk_receipt_reprint_reprinted_by ON receipt_reprint; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_receipt_reprint_reprinted_by ON public.receipt_reprint IS 'Cites: BI-23, EM-11, AU-05. Who reprinted is an employee of record.';
+
+
+--
+-- Name: receipt_reprint fk_receipt_reprint_sale; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.receipt_reprint
+    ADD CONSTRAINT fk_receipt_reprint_sale FOREIGN KEY (sale_id, store_id) REFERENCES public.sale(id, store_id);
+
+
+--
+-- Name: CONSTRAINT fk_receipt_reprint_sale ON receipt_reprint; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_receipt_reprint_sale ON public.receipt_reprint IS 'Cites: SP-57, RT-001. A reprint is of one sale of its store.';
+
+
+--
+-- Name: receipt_reprint fk_receipt_reprint_store; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.receipt_reprint
+    ADD CONSTRAINT fk_receipt_reprint_store FOREIGN KEY (store_id, organization_id) REFERENCES public.store(id, organization_id);
+
+
+--
+-- Name: CONSTRAINT fk_receipt_reprint_store ON receipt_reprint; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT fk_receipt_reprint_store ON public.receipt_reprint IS 'Cites: RT-001. A reprint is in its store''s organization.';
+
+
+--
 -- Name: refund fk_refund_approved_by; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -11302,4 +11469,5 @@ INSERT INTO public.schema_migrations (version) VALUES
     ('20261001100000'),
     ('20261001110000'),
     ('20261001120000'),
-    ('20261001120100');
+    ('20261001120100'),
+    ('20261001130000');

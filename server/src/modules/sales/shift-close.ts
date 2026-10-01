@@ -5,6 +5,7 @@ import { withTransaction, type Queryable } from '../../db/pool.ts';
 import { AppError } from '../../http/errors.ts';
 import { auditContext, type Access, type Principal } from '../../http/gate.ts';
 import type { MachineBinding } from '../../http/transitions.ts';
+import { employeeName } from '../identity/names.ts';
 
 // CD-20: the close declares the float handed to the next shift, in whole minor units (ADR-04); zero is a declaration.
 // zod 4's int() admits only safe integers, so the amount reaches bigint exactly; safe() would repeat the same check.
@@ -83,8 +84,7 @@ const Listing = z.object({
   limit: z.coerce.number().int().min(1).max(500).default(100),
 });
 
-/** An employee as the screens name one: the same name the workspace shows them (identity/sessions.ts). */
-const nameOf = (e: string) => `coalesce(${e}.preferred_name, ${e}.first_name) || ' ' || ${e}.last_name`;
+const nameOf = employeeName;
 
 /**
  * A shift with its latest pass, the one its close is decided on (`SM-57`). The figures come only from a submitted

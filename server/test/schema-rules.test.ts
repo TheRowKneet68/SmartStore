@@ -66,6 +66,7 @@ const SCOPE: Record<string, 'tenant' | 'organization' | 'store' | 'reference' | 
   sale: 'store',
   sale_line: 'store',
   shift_count: 'store',
+  receipt_reprint: 'store', // SP-57: a reprint of a store's sale; the owner's 2026-10-01 brief makes its reason mandatory
   // Domain 5. organization-model s8.2: returns and refunds are store documents.
   customer_return: 'store',
   customer_return_line: 'store',
@@ -110,6 +111,7 @@ const APPEND_ONLY = [
   'inventory_movement',
   'cash_transaction',
   'sale_line',
+  'receipt_reprint',
   'audit_event',
   'audit_chain_link',
 ];
