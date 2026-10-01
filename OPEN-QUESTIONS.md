@@ -1,6 +1,6 @@
 # Open Questions
 
-**Last updated:** 2026-09-30
+**Last updated:** 2026-10-01
 
 Unresolved questions and owner inputs. Anything here must not stall engineering: resolve what you can from
 `/docs`, work around what you can design around, and keep going.
@@ -434,6 +434,18 @@ fallback is a design that holds either answer, not a guess at the answer.
   it is the owner's (`SM-02d`).
 - *Meanwhile:* the routes ask for the narrower `Role.*` keys (D7 §9). `Config.Roles` authorizes nothing yet.
 - **Blocked:** nothing. Put to the owner with the key list before Domain 5 (working agreement 8).
+
+### OQ-029 — May the declared closing float exceed what was counted?
+
+- **Unknown:** `CD-20` requires "a declaration of the closing float for the next shift", which cash-management §5
+  records as a `ClosingFloat` movement out of the drawer. Nothing says whether the declaration may exceed the latest
+  counted amount. That would hand on more cash than the drawer was found to hold.
+- **Why not answerable from `/docs`:** no rule bounds the declaration. The schema takes any non-negative amount
+  (`ck_cash_transaction_amount`).
+- **Blocked:** nothing. A bound, if wanted, is one check in the close (`server/src/modules/sales/shift-close.ts`).
+- *Meanwhile:* the declaration is recorded as made. It feeds no expected amount:
+  - this shift's expected amount is fixed at the count, before the close writes the float;
+  - the next shift counts its own opening float when it opens (`CD-10`, `CD-13`).
 
 ## How to use this file
 

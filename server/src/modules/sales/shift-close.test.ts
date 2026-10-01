@@ -239,3 +239,115 @@ describe('acknowledging a variance (CD-23, CD-24, BI-25; RT-245; OQ-020)', () =>
     expect((await acknowledge(t, pass.id, t.reason, t.manager.as, randomUUID())).statusCode, 'no such shift here').toBe(404);
   });
 });
+
+const close = (t: Trading, closingFloat: number, as: Headers = t.cashier.as) => shiftMove(as, t.shift, 'close', { closingFloat });
+const closingFloats = async (shift: string) =>
+  (await db.app.query("SELECT direction, amount, created_by FROM cash_transaction WHERE cash_shift_id = $1 AND type = 'ClosingFloat'", [shift])).rows;
+
+describe('the close (s22.11 close; CD-20, CD-23, CD-25, SM-57; RT-244, RT-246; OQ-014)', () => {
+  it('CD-20, CD-25, RT-246, s22.11: a count with no variance closes under Shift.Close; the declared float is written as a ClosingFloat, and the server records who closed and when', async () => {
+    const t = await trading();
+    await shiftMove(t.cashier.as, t.shift, 'begin count');
+    await count(t, 2_250);
+    const closed = await close(t, 1_000);
+    expect(closed.statusCode).toBe(200);
+    expect(closed.json()).toEqual({ subject: t.shift, state: 'Closed', changed: true });
+    const shift = await db.app.query('SELECT status, closed_by, closed_at IS NOT NULL AS stamped FROM cash_shift WHERE id = $1', [t.shift]);
+    expect(shift.rows).toEqual([{ status: 'Closed', closed_by: t.cashier.id, stamped: true }]);
+    expect(await closingFloats(t.shift), 'cash-management s5: the float handed on leaves the drawer').toEqual([
+      { direction: 'Out', amount: '1000', created_by: t.cashier.id },
+    ]);
+    const events = await db.app.query("SELECT actor_id FROM audit_event WHERE entity_id = $1 AND event_type = 'Shift.Close'", [t.shift]);
+    expect(events.rows, 's22.11: the close is audited as Shift.Close').toEqual([{ actor_id: t.cashier.id }]);
+  });
+
+  it('CD-20, CD-04, s24.2: the closing float is declared in whole non-negative minor units, and a malformed close is refused before permission is checked', async () => {
+    const t = await trading();
+    await shiftMove(t.cashier.as, t.shift, 'begin count');
+    await count(t, 2_250);
+    const undeclared = await shiftMove(t.cashier.as, t.shift, 'close');
+    expect(undeclared.statusCode).toBe(400);
+    expect(undeclared.json().error).toEqual({ code: 'invalid_request', message: 'The request is not valid: check payload.' });
+    expect((await close(t, -1)).statusCode, 'never negative').toBe(400);
+    expect((await close(t, 12.5)).statusCode, 'minor units').toBe(400);
+    expect((await shiftMove(t.manager.as, t.shift, 'close')).statusCode, 'the same answer, with or without Shift.Close').toBe(400);
+    expect((await close(t, 1_000, t.manager.as)).statusCode, 'no Shift.Close').toBe(403);
+    expect(await shiftStatus(t.shift)).toBe('Reconciling');
+    expect((await close(t, 0)).json().state, 'a zero float is still a declaration').toBe('Closed');
+    expect(await closingFloats(t.shift)).toEqual([{ direction: 'Out', amount: '0', created_by: t.cashier.id }]);
+  });
+
+  it('SM-55, CD-20: a shift is counted before it closes', async () => {
+    const t = await trading();
+    const uncounted = await close(t, 1_000);
+    expect(uncounted.statusCode).toBe(409);
+    expect(uncounted.json().error.code, 'Open does not go straight to Closed').toBe('illegal_transition');
+    await shiftMove(t.cashier.as, t.shift, 'begin count');
+    const noCount = await close(t, 1_000);
+    expect(noCount.statusCode).toBe(409);
+    expect(noCount.json().error).toEqual({ code: 'not_counted', message: 'Count the drawer before closing the shift.' });
+    expect(await shiftStatus(t.shift)).toBe('Reconciling');
+    expect(await closingFloats(t.shift)).toEqual([]);
+  });
+
+  it('CD-25, CD-23, RT-244: an unacknowledged variance blocks the close, and nothing of the refused close stays; once acknowledged, the shift closes', async () => {
+    const t = await trading();
+    await shiftMove(t.cashier.as, t.shift, 'begin count');
+    const short = (await count(t, 2_200)).json();
+    const blocked = await close(t, 1_000);
+    expect(blocked.statusCode).toBe(409);
+    expect(blocked.json().error).toEqual({
+      code: 'variance_unacknowledged',
+      message: 'The latest count differs from the expected amount, and nobody has acknowledged the difference. Acknowledge it with a reason, or count the drawer again.',
+      countId: short.id,
+    });
+    expect(await shiftStatus(t.shift)).toBe('Reconciling');
+    expect(await closingFloats(t.shift)).toEqual([]);
+    await acknowledge(t, short.id, t.reason);
+    expect((await close(t, 1_000)).json().state).toBe('Closed');
+  });
+
+  it('CD-25, SM-57: the close is decided on the latest pass: a later pass needs its own acknowledgement, and a matching recount closes', async () => {
+    const t = await trading();
+    await shiftMove(t.cashier.as, t.shift, 'begin count');
+    const first = (await count(t, 2_200)).json();
+    await acknowledge(t, first.id, t.reason);
+    const second = (await count(t, 2_300)).json();
+    expect((await close(t, 1_000)).json().error).toMatchObject({ code: 'variance_unacknowledged', countId: second.id });
+    await count(t, 2_250);
+    expect((await close(t, 1_000)).json().state).toBe('Closed');
+  });
+
+  it('SM-04, SM-57: closing again changes nothing and declares no second float; a closed shift takes no further count or acknowledgement', async () => {
+    const t = await trading();
+    await shiftMove(t.cashier.as, t.shift, 'begin count');
+    const short = (await count(t, 2_200)).json();
+    await count(t, 2_250);
+    await close(t, 1_000);
+    expect((await close(t, 500)).json()).toEqual({ subject: t.shift, state: 'Closed', changed: false });
+    expect((await closingFloats(t.shift)).map((row) => row.amount)).toEqual(['1000']);
+    const recount = await count(t, 2_250);
+    expect(recount.statusCode).toBe(409);
+    expect(recount.json().error).toEqual({ code: 'not_counting', message: 'This shift is Closed, so its drawer is no longer being counted.' });
+    const late = await acknowledge(t, short.id, t.reason);
+    expect(late.statusCode).toBe(409);
+    expect(late.json().error.code).toBe('not_counting');
+    expect((await db.app.query('SELECT acknowledged_by FROM shift_count WHERE id = $1', [short.id])).rows).toEqual([{ acknowledged_by: null }]);
+  });
+
+  it('OQ-014, CD-26: both undecided edges stay refused: a counted shift does not go back to trading, and a closed shift is not reopened, not even by the Owner', async () => {
+    const t = await trading();
+    await shiftMove(t.cashier.as, t.shift, 'begin count');
+    expect((await shiftMove(t.owner, t.shift, 'reopen')).json().error.code).toBe('illegal_transition');
+    const back = await db.app
+      .query("UPDATE cash_shift SET status = 'Open', status_changed_by = $2 WHERE id = $1", [t.shift, t.cashier.id])
+      .catch((e: { code?: string }) => e.code);
+    expect(back, 'Reconciling to Open is not an edge, at any privilege').toBe('SS004');
+    await count(t, 2_250);
+    await close(t, 1_000);
+    const reopen = await shiftMove(t.owner, t.shift, 'reopen');
+    expect(reopen.statusCode).toBe(409);
+    expect(reopen.json().error.code).toBe('illegal_transition');
+    expect(await shiftStatus(t.shift)).toBe('Closed');
+  });
+});

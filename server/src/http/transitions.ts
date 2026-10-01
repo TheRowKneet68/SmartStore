@@ -26,6 +26,13 @@ export interface MachineBinding {
   /** Further columns read with the subject, for `keyFor`. */
   extraColumns?: string[];
   /**
+   * The payload an event must carry (architecture §18.1). It is validated before anything is looked up or authorized,
+   * so a malformed request is answered the same whether or not the actor may make it (§24.2).
+   */
+  payloads?: Record<string, z.ZodType>;
+  /** Work the edge needs before the subject changes state, once its permission is checked (for example a shift's closing float). */
+  before?: (client: pg.PoolClient, subjectId: string, from: string, to: string, principal: Principal, payload: unknown) => Promise<void>;
+  /**
    * The key the specification names for this subject, where it differs from the edge's by the subject's kind (for
    * example inventory-domain §5's opening balance). It returns the edge's own key otherwise.
    */
@@ -65,7 +72,7 @@ interface Subject {
 }
 
 /**
- * The transition API (architecture §18.1): `POST /transitions { machine, event, subject }`. The permission checked is
+ * The transition API (architecture §18.1): `POST /transitions { machine, event, subject, payload? }`. The permission checked is
  * the one the attempted edge names in the §22 table, never one derived from the URL or the body (§8.4). An edge whose
  * permission is `OpenDecision` or `System` refuses every person (`SM-02d`). The subject is locked first, so the edge
  * is decided on its state at the moment of change (`ADR-25`).
@@ -81,12 +88,14 @@ export async function transitionRoutes(
     const body = Transition.parse(request.body);
     const binding = machines.get(body.machine);
     if (binding === undefined) throw new AppError(400, 'invalid_request', `There is no ${body.machine} machine.`);
+    const shape = binding.payloads?.[body.event];
+    const payload = shape === undefined ? undefined : z.object({ payload: shape }).parse(request.body).payload;
     const principal = request.principal!;
     try {
       return await withTransaction(
         pool,
         auditContext(request, { clientOperationId: body.clientOperationId ?? null, reasonCodeId: body.reasonCodeId ?? null }),
-        (c) => transition(c, principal, binding, body.event, body.subject, request.id),
+        (c) => transition(c, principal, binding, body.event, body.subject, request.id, payload),
         // A transition may move stock (posting an adjustment), so it waits for a balance only so long (IV-23).
         { lockTimeoutMs: options.lockTimeoutMs },
       );
@@ -109,6 +118,7 @@ async function transition(
   event: string,
   subjectId: string,
   correlationId: string,
+  payload: unknown,
 ): Promise<{ subject: string; state: string; changed: boolean }> {
   const store = binding.storeColumn === null ? 'NULL::uuid' : binding.storeColumn;
   const extra = (binding.extraColumns ?? []).map((column) => `, ${column}`).join('');
@@ -156,6 +166,7 @@ async function transition(
   }
   // The role-as-used is known only now, from the edge's key (architecture §14.2).
   await c.query(`SELECT set_config('smartstore.role', $1, true)`, [roles]);
+  await binding.before?.(c, subjectId, subject.state, step.to_state, principal, payload);
 
   // The database enforces the edge again, records its event and requires its reason (SS004, SS055; D6).
   const actors = [binding.actorColumn, ...(binding.actorColumnsFor?.(step.to_state) ?? [])].map((column) => `${column} = $3`).join(', ');

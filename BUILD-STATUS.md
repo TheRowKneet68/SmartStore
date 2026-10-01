@@ -330,7 +330,7 @@ agent works in parallel on `web/**`. This work stages explicit paths only. Steps
 1. Begin count (`Open → Reconciling`, `Shift.Close`) on the transition endpoint. **Done.**
 2. The blind count: a pass, revealing expected and variance only after submission (`CD-21`, `CD-22`). **Done.**
 3. Acknowledging a variance (`Cash.Variance.Acknowledge`, a reason, once; `CD-23`). **Done.**
-4. The close, declaring the closing float (`CD-20`, `CD-25`).
+4. The close, declaring the closing float (`CD-20`, `CD-25`). **Done.**
 5. The read that answers it (`CD-30`, `Cash.Count.View`).
 6. The mutation check, and the docs.
 
@@ -373,6 +373,7 @@ The files are `server/src/modules/sales/sales.ts`, `till.ts`, `payment-methods.t
 | 7 | What to do with the untracked `SmartStore.zip` | Item 4 above | Nothing |
 | 8 | Whether a shift count records a denomination breakdown. `RT-526` (`CD-20`) says "the denomination total is derived from the breakdown", but D4 deferred `CD-27`..`CD-29`, so the schema has no denomination tables and the count is a total. Building it needs a migration | `RT-526`, D4 | Nothing; counts are totals until decided |
 | 9 | The variance tolerance and the higher threshold that needs a different approver. Interim: the tolerance is zero, so every non-zero variance needs an acknowledgement with a reason, and no second approver is required. "Closes automatically within tolerance" and the second-approver gate are unbuilt, because the numbers do not exist | OQ-020, `CD-23` | Those two behaviours only |
+| 10 | Whether the declared closing float may exceed the counted amount. Interim: recorded as declared; it feeds no expected amount | OQ-029, `CD-20` | Nothing |
 
 Until then, tests run on a scratch PostgreSQL 17.11 cluster and a portable Node 26 in the session scratch directory
 (ADR-31 §14). Nothing on the owner's PostgreSQL service is touched.
@@ -732,3 +733,34 @@ Append-only. One dated line per step, including failed and abandoned attempts.
     - an unknown count or shift is not found.
 
     Root `npm test`: server 391, web 20. `npm run typecheck` clean.
+- 2026-10-01 — **Shift close, step 4 of 6: the close.**
+  - **Built:** `Reconciling → Closed` (event `close`, `Shift.Close`) on the transition endpoint, with
+    `payload: { closingFloat }` (`CD-20`, §22.11). Two generic options were added to the endpoint:
+    - a binding may declare an event's payload. It is validated before the subject is looked up or the permission
+      checked, so a malformed close gets the same 400 with or without `Shift.Close` (architecture §18.1, §24.2);
+    - a binding may do work before the state changes, after the permission check.
+  - **Before the close,** the latest pass decides (`SM-57`):
+    - no pass is refused (`not_counted`, `CD-20`);
+    - a non-zero, unacknowledged variance is refused (`variance_unacknowledged`, with the count's id; `CD-23`,
+      `CD-25`);
+    - otherwise the declared float is written as a `ClosingFloat` movement out of the drawer (cash-management §5).
+  - The close records `closed_by`, and the database stamps `closed_at` and audits `Shift.Close`. The database's
+    `SS042` checks all three conditions again.
+  - **Counting and acknowledging now share one guard:** a locked shift in `Reconciling`. A closed shift's message no
+    longer tells the counter to begin a count it cannot begin.
+  - **OQ-014, as the brief directs:** `reopen` and `Reconciling → Open` are refused. Neither has an edge row, so the
+    endpoint answers `illegal_transition`, even for the Owner, and the database answers `SS004` at any privilege.
+    `CD-26` is out of scope.
+  - **New open question:** OQ-029, whether the declared float may exceed the count. `/docs` sets no bound, so none is
+    applied; it is row 10 of the decisions table.
+  - **Tests:** 7 new:
+    - a matching count closes, with the float, who, when, and the audit event;
+    - the float is required and whole, a malformed close is 400 even without the key, and a zero float is a
+      declaration;
+    - no close from `Open`, and none without a count;
+    - an unacknowledged variance blocks the close and leaves nothing behind;
+    - the latest pass decides;
+    - closing again is a no-op with one float, and a closed shift takes no count or acknowledgement;
+    - OQ-014.
+
+    Root `npm test`: server 398, web 20. `npm run typecheck` clean.
