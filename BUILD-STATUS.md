@@ -1368,3 +1368,14 @@ Append-only. One dated line per step, including failed and abandoned attempts.
     among the bound machines. D7 §11 says so.
   - **Staging:** BUILD-STATUS, OPEN-QUESTIONS and `onboarding.test.ts` hold another session's uncommitted work, so
     their staged copies are the committed files plus this step's lines only.
+- 2026-10-02 — **Consolidated blueprint written** at the owner's request: [SMARTSTORE-CONSOLIDATED-BLUEPRINT.md](docs/architecture/SMARTSTORE-CONSOLIDATED-BLUEPRINT.md).
+  - **What it is:** one document, §0 to §12, in the structure the owner asked for: architecture, domain model, schema,
+    security, business flows, hardware layer, API, project structure, code skeletons, non-functional requirements, status
+    registers. Written only from `/docs`, the ADRs, the owner's decisions and the code at `f68fdc3`. It decides nothing.
+  - **Labels:** every part is BUILT, SPECIFIED, DEFERRED or an OPEN QUESTION. Where the request assumed a technology the
+    record does not contain (Redis, a message broker, NestJS, GraphQL, partitioning) the blueprint says so rather than
+    adopting it. Stock reservation, which the request wanted, is deliberately absent (`IV-49`).
+  - **New questions:** `BQ-01` to `BQ-11`, recorded as OQ-034.
+  - **Not changed:** no code, migration, test or owner decision. 437 server tests pass.
+  - **Staging:** BUILD-STATUS and OPEN-QUESTIONS hold another session's uncommitted work, so their staged copies are the
+    committed files plus this step's lines only.

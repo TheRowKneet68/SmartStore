@@ -540,6 +540,34 @@ fallback is a design that holds either answer, not a guess at the answer.
 - **Blocked:** the reopen edge. The key exists in the catalogue (D-16); the edge does not, so a reopen still refuses.
 - *Meanwhile:* reopening is not built, as D4 §8 has said since Domain 4's design.
 
+### OQ-034 — Questions the consolidated blueprint found (`BQ-01` to `BQ-11`)
+
+- **Unknown:** [SMARTSTORE-CONSOLIDATED-BLUEPRINT.md](docs/architecture/SMARTSTORE-CONSOLIDATED-BLUEPRINT.md) was written
+  only from `/docs`, the ADRs, the owner's decisions and the code. The owner's request for it assumed several components
+  that the record neither chooses nor rejects. Each is marked in the blueprint as `BQ-nn` and gathered here. None
+  blocks the work in progress; each blocks the part named.
+  1. `BQ-01` *Partitioning or archival* of `inventory_movement`, `audit_event` and `cash_transaction`. No volume is stated.
+  2. `BQ-02` *A cache, queue, scheduler or job runner* for the outbox, the reconciliation jobs, retention and
+     notification delivery. Architecture §15 and §9.4 require the behaviour; ADR-31 chooses no mechanism. Blocks
+     notifications, jobs, and scheduling `ledger:check` and `audit:check`.
+  3. `BQ-03` *Real-time transport* (server-sent events, WebSocket or polling) for device status and notifications.
+  4. `BQ-04` *The till client's technology*, its local store, the sync wire format, and whether it is a separate
+     workspace. `OF-01` to `OF-50` fix the behaviour only. Blocks offline POS.
+  5. `BQ-05` *File storage and receipt rendering*: the file-store interface exists in §17.3 with no implementation or format.
+  6. `BQ-06` *API contract documentation, generated clients, the web router and data layer*, and which creates beyond
+     the sale and the transition need a client operation id (§18.2 says all financial and state-changing requests).
+  7. `BQ-07` *Hosting, containers, CI/CD, environments and secrets injection*. §27 gives the shape, not the platform.
+  8. `BQ-08` *Metrics, tracing, log shipping and alert routing*. §25 names five signals, not the tooling.
+  9. `BQ-09` *Device credentials, security headers, CSRF beyond `SameSite=Strict`, general rate limiting, and a written
+     threat model.* Only sign-in throttling exists.
+  10. `BQ-10` *Device types and commands beyond `HD-04`*: a label printer, a customer display, and the ESP32's command
+      set are in the master goal's hardware list and in no rule.
+  11. `BQ-11` *The idempotency-key retention window.* `ADR-30` ties it to the longest offline window, which has no value.
+- **Why not answerable from `/docs`:** each is a technology or policy choice the record leaves out. Stack choices are the
+  owner's (CLAUDE.md, "Ask the owner only for"), through an ADR.
+- **Blocked:** nothing in v1's built slice. Each item names what it blocks.
+- *Meanwhile:* the blueprint says "not built, and not decided" for each and invents no design.
+
 ## How to use this file
 
 - Add an entry the moment you hit something the specification does not answer. Then continue with a different task.
