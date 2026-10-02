@@ -15,6 +15,8 @@ import { sessionAuthenticator, type SessionPolicy } from './modules/identity/ses
 import { adjustmentMachine, adjustmentRoutes } from './modules/inventory/adjustments.ts';
 import { reasonRoutes } from './modules/inventory/reasons.ts';
 import { stockRoutes } from './modules/inventory/stock.ts';
+import { refundMachine, refundRoutes } from './modules/returns/refunds.ts';
+import { returnMachine, returnRoutes } from './modules/returns/returns.ts';
 import { organizationRoutes } from './modules/organization/routes.ts';
 import { paymentMethodRoutes } from './modules/sales/payment-methods.ts';
 import { quoteSigner } from './modules/sales/quotes.ts';
@@ -69,12 +71,14 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   await app.register(paymentMethodRoutes, v1);
   await app.register(saleRoutes, { ...v1, quotes, quoteMaxAgeMinutes: options.quoteMaxAgeMinutes, lockTimeoutMs: options.lockTimeoutMs });
   await app.register(shiftCloseRoutes, v1);
+  await app.register(returnRoutes, v1);
+  await app.register(refundRoutes, v1);
   await app.register(reasonRoutes, v1);
   await app.register(adjustmentRoutes, v1);
   await app.register(stockRoutes, v1);
   await app.register(transitionRoutes, {
     ...v1,
-    machines: [employeeMachine, productMachine, deviceMachine, adjustmentMachine, shiftMachine],
+    machines: [employeeMachine, productMachine, deviceMachine, adjustmentMachine, shiftMachine, returnMachine, refundMachine],
     lockTimeoutMs: options.lockTimeoutMs,
   });
 
