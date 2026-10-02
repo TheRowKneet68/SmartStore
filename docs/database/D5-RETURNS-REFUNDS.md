@@ -472,3 +472,17 @@ draft, blocks the sale. Each follows from option 1 and from `PY-37`; none adds a
 |---|---|---|
 | `SS058` | A refund of a payment asks for more than the payment has left to give back; `DETAIL` is the remainder | `apply_refund_hold()` |
 | `SS059` | A payment with a sale is refunded through the sale; a payment being refunded cannot make one; only a card payment is taken back without its sale | `refund_before_write()`, `apply_refund_hold()`, `assert_sale_complete()` |
+
+## 14. Owner decision D-19: a failed refund is cancelled (2026-10-02)
+
+Migration `20261002141000_d19_cancel_a_failed_refund.sql`; tests in `payments/card.test.ts`. Supersedes §11's "A gap this exposed" and `OQ-038`.
+
+- **The edge.** `Failed → Cancelled`, on the refund's `cancel` event, under `Sale.Refund` (D-16 Q9), with a live reason (`SM-42`, `BI-40`), audited as `Refund.StateChange`, through the transition endpoint like the other cancels. The same pattern as the withdrawal of a draft (§12). A refund can now be cancelled from `Draft` (withdrawn), `Approved`, `Processing` and `Failed`, and not from `PendingApproval`.
+- **The hold is released.** It is taken entering `Processing` and kept through `Failed` (`RR-24`, `SM-41`). A cancellation from `Processing` or from `Failed` releases it: on each sold line, or, for a refund with no sale, on the payment (§13). So a refund the provider keeps declining no longer holds its money for ever, and the same money can be refunded again. `sale_counter_drift()` and `payment_refund_drift()` count a held refund as `Processing`, `Failed` or `Completed` only, so they agree.
+- **Final.** A cancelled refund is not retried (`SS035`). Retry remains the other way out of `Failed`.
+
+| Rule | Test (`card.test.ts`) |
+|---|---|
+| D-19, `SM-42`, `BI-40`, `RR-24` | A failed card refund of a sale is held through the failure; cancelling needs a reason and `Sale.Refund`; the line is free and the drift check empty; it cannot be retried; the money can be refunded again |
+| D-19, D-18, `PY-22` | A failed refund of a payment with no sale holds the payment; cancelling releases it, the report shows it as unsettled with nothing held, and the whole payment can be asked for again |
+| D-19 | The edge contract and the audit table name `Failed → Cancelled` |

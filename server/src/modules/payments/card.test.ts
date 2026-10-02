@@ -898,3 +898,44 @@ describe('what the database holds about a refund with no sale (D-18)', () => {
     expect(await sqlState(insert({ currency_code: 'NPR' })), 'another currency').toBeDefined();
   });
 });
+
+describe('owner decision D-19: a failed refund is cancelled, and its hold is released (OQ-038, SM-41, RR-24)', () => {
+  it('SM-42, BI-40, D-16 Q9: a failed card refund of a sale is cancelled with a reason under Sale.Refund, and the line is free again', async () => {
+    const s = await shop();
+    const { id, bread, sale } = await approvedCardRefund(s, 'TEST-REFUND-DECLINE');
+    expect((await call('POST', `${s.store}/refunds/${id}/pay`, s.clerk)).json().error.code).toBe('refund_failed');
+    expect(await refundedOf(bread.saleLineId), 'held through the failure').toBe(500);
+    expect((await s.go(s.manager, 'Refund', 'cancel', id)).json().error.code, 'a reason is required').toBe('SS055');
+    expect((await s.go(s.manager2, 'Refund', 'cancel', id, { reasonCodeId: s.reason })).statusCode, 'Sale.Large.Approve is not Sale.Refund').toBe(403);
+    const cancelled = await s.go(s.manager, 'Refund', 'cancel', id, { reasonCodeId: s.reason });
+    expect(cancelled.json().state).toBe('Cancelled');
+    expect(await refundedOf(bread.saleLineId), 'released by the cancellation').toBe(0);
+    expect((await db.app.query('SELECT count(*)::int AS n FROM sale_counter_drift()')).rows[0].n).toBe(0);
+    expect((await db.app.query(`SELECT cancel_reason_code_id FROM refund WHERE id = $1`, [id])).rows[0].cancel_reason_code_id).toBe(s.reason);
+    const events = await db.app.query(`SELECT event_type FROM audit_event WHERE entity_id = $1`, [id]);
+    expect(events.rows.map((r: Json) => r.event_type)).toContain('Refund.StateChange');
+    // Cancelled is final: it is not retried, and the same money can be refunded again.
+    expect((await call('POST', `${s.store}/refunds/${id}/retry`, s.manager)).json().error.code).toBe('illegal_transition');
+    const again = await call('POST', `${s.store}/refunds`, s.manager, {
+      clientOperationId: randomUUID(), saleId: sale.saleId, method: 'OriginalTender', paymentId: sale.payments[0].paymentId, reasonCodeId: s.reason,
+      lines: [{ saleLineId: bread.saleLineId, amount: 500 }],
+    });
+    expect(again.statusCode, again.body).toBe(201);
+  });
+
+  it('PY-22, RR-24, D-18, D-19: a failed refund of a payment with no sale is cancelled, the payment is free again, and the report shows it as unsettled', async () => {
+    const s = await shop();
+    const { paymentId } = await orphan(s, 'TEST-REFUND-DECLINE');
+    const id = await approvedRefundOf(s, paymentId, 3_000);
+    expect((await payRefund(s, id)).json().error.code).toBe('refund_failed');
+    expect(await heldOn(paymentId)).toBe(3_000);
+    const viewer = await s.staff(['Payment.View']);
+    expect((await call('GET', `${s.store}/payments/attention?olderThanMinutes=0`, viewer)).json().items).toMatchObject([{ heldBack: 3_000, givenBack: 0 }]);
+    expect((await s.go(s.clerk, 'Refund', 'cancel', id, { reasonCodeId: s.reason })).json().state).toBe('Cancelled');
+    expect(await heldOn(paymentId), 'released').toBe(0);
+    expect((await db.app.query('SELECT count(*)::int AS n FROM payment_refund_drift()')).rows[0].n).toBe(0);
+    expect((await call('GET', `${s.store}/payments/attention?olderThanMinutes=0`, viewer)).json().items).toMatchObject([{ heldBack: 0, givenBack: 0 }]);
+    // Free again: the whole payment can be asked for once more.
+    expect((await refundOf(s, paymentId, 3_000)).statusCode).toBe(201);
+  });
+});

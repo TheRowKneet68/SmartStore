@@ -351,7 +351,7 @@ Step 3 rules, given by the owner on 2026-10-01 with "start Step 3":
 - **Phase C is done:** the permission-key proposal waits for the owner's answer.
 - **2026-10-02: the owner answered it.** The answers are owner decision D-16. The owner said "go" after the report of
   affected files and rule IDs, and the keys are applied (Phase E, step 1: migration `20261002100000_d7_d16_permission_keys.sql`;
-  D7 §11, D4 §14). What Phase E still holds: the locations routes, reopening a shift (OQ-033), and a failed card refund's cancel (OQ-038).
+  D7 §11, D4 §14). What Phase E still holds: the locations routes and reopening a shift (OQ-033).
   Domain 5's application layer (step 2), the card path through a simulated gateway (step 3), owner decision D-17 (step 4),
   the void and the report of unsettled payments (step 5) and owner decision D-18 (step 6) are built.
 - **Phase D is under way.** The audit-log read is not built (OQ-024 item 2). The identity admin screens and the
@@ -522,8 +522,7 @@ sets the order. Phase A (housekeeping and the push) is done.
 
    **The keys are decided (D-16, 2026-10-02) and applied** (Phase E, step 1; see the log). Q8, a refund's retry under
    `Sale.Refund` while paying it is `Refund.Pay`, was raised back to the owner, who gave no change. **Still to build:**
-   routes for warehouses and storage locations (`Config.Organization`), and a failed card refund's cancel (`OQ-038`,
-   the owner's: it needs an edge). **Domain 5's
+   routes for warehouses and storage locations (`Config.Organization`). **Domain 5's
    application layer is built** (step 2 in the log; its focused mutation check is there too). **Not buildable yet:**
    reopening a shift (OQ-033).
 5. **Phase F:**
@@ -1470,4 +1469,10 @@ Append-only. One dated line per step, including failed and abandoned attempts.
   - **Tests:** 9 new in `payments/card.test.ts`, including the concurrency proof (five refunds of 1,000 against 3,000: exactly three) and
     the table's own refusals. Server: 502 pass; the server typechecks. Migrations: 16.
   - **Mutation check:** `plan-d18.mjs`, 23 mutations: the table's shape (return, tax, reason, store and currency), the sale-or-payment exclusion in both directions, the hold and its release, the frozen payment, the counter's bounds, the drift check, the report, and the application. 22 were detected, the last of them after two tests were added (the table's own refusals, and a payment-bound refund with a stray return). One survived and is equivalent: the reason is required twice, by `ck_refund_sale_or_payment` and by the older `ck_refund_goodwill_reason`, so dropping the first changes nothing. **22 of 22 detectable**, restored byte for byte.
+  - **Staging:** BUILD-STATUS, OPEN-QUESTIONS and OWNER-DECISIONS hold another session's uncommitted work, so their staged copies are the committed files plus this step's lines only.
+- 2026-10-02 — **Phase E, step 7: owner decision D-19, a failed refund can be cancelled (`OQ-038` closed).** D5 §14, OWNER-DECISIONS D-19.
+  - **The owner chose the pattern of D-17:** `Failed → Cancelled` on the refund's `cancel` event, under `Sale.Refund`, with a required reason, audited as `Refund.StateChange`. Cancelling **releases the hold**. **No key is new.**
+  - **Migration `20261002141000_d19_cancel_a_failed_refund.sql`:** the edge, and `apply_refund_hold()` releases a hold on a cancellation from `Processing` or from `Failed`, on the sold lines or, for a refund with no sale, on the payment (D-18). The edge contract and the audit table name the new edge. `Cancelled` is final: it is not retried.
+  - **Tests:** 2 new in `payments/card.test.ts` (a failed refund of a sale, and of a payment with no sale: held through the failure, cancelled with a reason under the key, released, the drift checks empty, the money refundable again). Server: 504 pass; the server typechecks. Migrations: 17.
+  - **Mutation check:** `plan-d19.mjs`, 4 mutations: the edge, its key and reason, and the release of the hold on a payment and on a sold line. All 4 caught; the first because the migration then refuses to apply. **4 of 4**, restored byte for byte.
   - **Staging:** BUILD-STATUS, OPEN-QUESTIONS and OWNER-DECISIONS hold another session's uncommitted work, so their staged copies are the committed files plus this step's lines only.

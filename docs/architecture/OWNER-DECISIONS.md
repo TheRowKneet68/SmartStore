@@ -584,6 +584,26 @@ CONVENTIONS (`SS058`, `SS059`); OPEN-QUESTIONS `OQ-036` closed, `OQ-038` new.
 
 ---
 
+## D-19 — A failed refund can be cancelled (`OQ-038`)
+
+**Status:** DECIDED — 2026-10-02 (owner). Closes `OQ-038`. Numbered 19: `D-15` is held by another session's uncommitted work.
+
+**Decision:** the same pattern as D-17. A refund in `Failed` may be cancelled, under `Sale.Refund` with a required reason, and
+cancelling it **releases the hold**. No new key.
+
+| | |
+|---|---|
+| The edge | `Refund`: `Failed → Cancelled`, event `cancel`, key `Sale.Refund`, a reason, audit type `Refund.StateChange`: the other cancels' (D-16 Q9, D-17) |
+| The hold | Taken when the refund enters `Processing` and kept through `Failed` (`RR-24`, `SM-41`); released by a cancellation from `Processing` or from `Failed`: on the sold lines, or on the payment of a refund that has no sale (D-18) |
+
+**What it closes.** A refund the provider kept declining kept its money held for ever, on a sold line or on a payment, because §22.7 had no
+cancel from `Failed`. Retry remains the other way out, and `Cancelled` is final.
+
+**Applied (2026-10-02):** migration `20261002141000_d19_cancel_a_failed_refund.sql`; D5 §14; `state-machines.md` §22.7;
+`actors-and-roles.md` §2.4; OPEN-QUESTIONS `OQ-038`.
+
+---
+
 ## Decision log
 
 | ID | Question | Answer | Date |
@@ -605,3 +625,4 @@ CONVENTIONS (`SS058`, `SS059`); OPEN-QUESTIONS `OQ-036` closed, `OQ-038` new.
 | D-16 | Permission keys for the transitions and creations with none (`PERMISSION-KEY-PROPOSAL.md` Q1–Q14) | Reused: `Sale.Create` (card submit; reading a receipt at the till), `Employee.Edit` (back from leave), `Device.Disable` (till re-enable), `Sale.Refund` (refund retry and cancel), `Return.Create` (return cancel), `Config.Organization` (warehouses and storage locations), `Role.Create`/`Role.Edit` (`Config.Roles` authorizes nothing). New: `Payment.Capture`, `Payment.Void`, `Employee.Reactivate`, `Refund.Pay`, `Shift.Reopen` (catalogue 117 → 122). Closes OQ-018, OQ-026, OQ-028 and the key parts of OQ-014, OQ-023, OQ-025; narrows GAP-036 (27 → 20 rows). Documentation applied; implementation waits for the owner's go-ahead | 2026-10-02 |
 | D-17 | Reading returns and refunds; the payer at the till; withdrawing a draft refund (`OQ-035` items 4, 5, 7, 8) | The payer of a drawer refund is signed in at the refund's till. A draft refund may be withdrawn: `Draft → Cancelled` on `cancel`, under `Sale.Refund`, with a reason (read from D-16 Q9; raised for veto). New keys `Return.View` and `Refund.View` (catalogue 122 → 124) | 2026-10-02 |
 | D-18 | The money of a payment that never became a sale (`OQ-036` item 2, part B) | Option 1: a refund tied to a captured card payment, not a sale; the sale and lines are optional on it. Keys: `Sale.Refund` to issue, `Sale.Refund.Large.Approve` to approve, `Refund.Pay` to pay. No new key. Read from option 1, for veto: card payments only, partial, a reason, and a refund (even a draft) blocks the sale | 2026-10-02 |
+| D-19 | A failed refund can be cancelled (`OQ-038`) | The same pattern as D-17: `Failed → Cancelled` on `cancel`, under `Sale.Refund`, with a required reason; cancelling releases the hold. No new key | 2026-10-02 |

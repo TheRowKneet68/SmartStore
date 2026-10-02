@@ -1699,3 +1699,9 @@ Supersedes §13's "not built: voiding a payment and the reconciliation job" in p
 ## 16. Update, 2026-10-02, owner decision D-18
 
 Supersedes §15's "part B". **Built:** a refund may name a captured card payment instead of a sale (`refund.sale_id` optional; `payment.refunded_amount`; one migration, `20261002130000`, so the count is 16; `SS058`, `SS059`). It reuses the refund machine, its keys (`Sale.Refund`, `Sale.Refund.Large.Approve`, `Refund.Pay`), the approval and the audit. A payment being refunded cannot become a sale. `OQ-036` is closed; a failed card refund's cancel is `OQ-038`. D5 §13. Tests: 502.
+
+---
+
+## 17. Update, 2026-10-02, owner decision D-19
+
+A failed refund can be cancelled (`Failed → Cancelled` on `cancel`, `Sale.Refund`, a reason), which releases its hold (one migration, `20261002141000`, so the count is 17). `OQ-038` is closed. D5 §14. Tests: 504.

@@ -96,7 +96,7 @@ The transitions that some existing keys now authorize are named in their rows. `
 | `Sale.Suspend` / `Sale.Resume` | Park and resume a cart |
 | `Sale.Void` | Void a sale that has not yet been finalized |
 | `Sale.Void.Posted.Approve` | Approve voiding an already-finalized sale. **A compensating document is created, never a delete** |
-| `Sale.Refund` | Issue a refund within the permitted amount. Also retries a failed refund, cancels an unpaid one (§22.7, D-16) and withdraws a draft (D-17) |
+| `Sale.Refund` | Issue a refund within the permitted amount. Also retries a failed refund, cancels an unpaid one (§22.7, D-16), withdraws a draft (D-17) and cancels a failed one, releasing its hold (D-19) |
 | `Sale.Refund.Large.Approve` | Approve a refund beyond the store threshold |
 | `Refund.Pay` | Submit an approved refund for payment, from the drawer or to the provider (§22.7, "submit to provider"). **Separate from `Sale.Refund`** (D-16). A drawer refund is paid by someone signed in at the till it was drafted at (D-17) |
 | `Refund.View` | See refunds: the list and one refund (D-17). **Separate from `Payment.View`** |

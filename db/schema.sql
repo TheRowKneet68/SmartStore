@@ -226,7 +226,7 @@ BEGIN
         SELECT amount - refunded_amount INTO v_left FROM payment WHERE id = NEW.payment_id;
         RAISE EXCEPTION 'only % of that payment can still be given back', v_left USING ERRCODE = 'SS058', DETAIL = v_left::text;
       END IF;
-    ELSIF NEW.status = 'Cancelled' AND OLD.status = 'Processing' THEN
+    ELSIF NEW.status = 'Cancelled' AND OLD.status IN ('Processing', 'Failed') THEN
       UPDATE payment SET refunded_amount = refunded_amount - NEW.amount WHERE id = NEW.payment_id;
     END IF;
     RETURN NULL;
@@ -260,7 +260,7 @@ BEGIN
           USING ERRCODE = 'SS052';
       END IF;
     END LOOP;
-  ELSIF NEW.status = 'Cancelled' AND OLD.status = 'Processing' THEN
+  ELSIF NEW.status = 'Cancelled' AND OLD.status IN ('Processing', 'Failed') THEN
     UPDATE sale_line l
       SET refunded_amount = l.refunded_amount - r.amount,
           refunded_tax_amount = l.refunded_tax_amount - r.tax_amount
@@ -276,7 +276,7 @@ $$;
 -- Name: FUNCTION apply_refund_hold(); Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON FUNCTION public.apply_refund_hold() IS 'Cites: RR-03, RR-06, RR-24, RR-42, BI-10, SM-40, SM-41, PY-22, PY-23, PY-37, D-18. Entering Processing takes the hold with one conditional increment: on each sold line, which affects no row past its settled amount or its proportional tax; or, for a refund with no sale, on the payment, which affects no row past what the payment took. Failed and Completed keep it, and only a cancellation releases it. A refund for a return pays only the lines the posted return took back. A payment that has become a sale is no longer refunded without it.';
+COMMENT ON FUNCTION public.apply_refund_hold() IS 'Cites: RR-03, RR-06, RR-24, RR-42, BI-10, SM-40, SM-41, PY-22, PY-23, PY-37, D-18, D-19. Entering Processing takes the hold with one conditional increment: on each sold line, which affects no row past its settled amount or its proportional tax; or, for a refund with no sale, on the payment, which affects no row past what the payment took. Failed and Completed keep it, and only a cancellation, from Processing or from Failed, releases it. A refund for a return pays only the lines the posted return took back. A payment that has become a sale is no longer refunded without it.';
 
 
 --
@@ -11599,4 +11599,5 @@ INSERT INTO public.schema_migrations (version) VALUES
     ('20261001140000'),
     ('20261002100000'),
     ('20261002120000'),
-    ('20261002130000');
+    ('20261002130000'),
+    ('20261002141000');

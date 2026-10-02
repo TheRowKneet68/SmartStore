@@ -1176,6 +1176,7 @@ The post-sale states are projections, not edges anyone fires (SM-35, SM-35a).
 | `Processing` → `Completed` | complete | *none — provider* | The provider confirmed | The customer has the money | `Payment.Refund` | **None.** A completed refund is corrected by a further **linked** refund with a reason (BI-09) |
 | `Processing` → `Failed` | fail | *none — provider* | A technical failure | The amount stays held; **retryable, and notified** (SM-41) | `Payment.Refund` | Retry to `Processing`, under `Sale.Refund` (D-16) |
 | `Approved`/`Processing` → `Cancelled` | cancel | `Sale.Refund` (D-16) | Reason; nothing settled | The hold is released | `Refund.StateChange` | — |
+| `Failed` → `Cancelled` | cancel | `Sale.Refund` (D-19) | Reason. The provider could not pay it | The hold is released | `Refund.StateChange` | — |
 | `Draft` → `Cancelled` | cancel (withdraw) | `Sale.Refund` (D-17) | Reason. The refund was never submitted | None: a draft holds nothing (RR-24). Its lines stay as drafted (AP-03) | `Refund.StateChange` | — |
 
 **Owner decision D-18 (2026-10-02)** lets a refund name a captured card payment instead of a sale, when the payment never became one: the same machine, keys and audit, with no lines and no tax (D5 §13).

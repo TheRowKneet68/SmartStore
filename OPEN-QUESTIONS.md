@@ -690,6 +690,9 @@ fallback is a design that holds either answer, not a guess at the answer.
 - **Blocked:** releasing the money of a refund that cannot be made to succeed.
 - *Meanwhile:* retry, and the provider's own recovery. Nothing is invented.
 
+- **Closed by owner decision D-19, 2026-10-02.** The owner decided the same pattern as D-17: a failed refund is cancelled under `Sale.Refund`
+  with a required reason, and cancelling releases the hold. Built as `Failed → Cancelled` on `cancel` (D5 §14). No key is new.
+
 ## How to use this file
 
 - Add an entry the moment you hit something the specification does not answer. Then continue with a different task.

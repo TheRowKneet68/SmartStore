@@ -489,6 +489,7 @@ describe('the permission each transition needs (architecture s8.4, SM-02d, D-01)
       key('Refund', 'Approved', 'Processing', 'Refund.Pay'),
       system('Refund', 'Processing', 'Completed'),
       system('Refund', 'Processing', 'Failed'),
+      key('Refund', 'Failed', 'Cancelled', 'Sale.Refund'), // D-19: a failed refund is cancelled
       key('Refund', 'Failed', 'Processing', 'Sale.Refund'),
       key('Refund', 'Approved', 'Cancelled', 'Sale.Refund'),
       key('Refund', 'Processing', 'Cancelled', 'Sale.Refund'),
