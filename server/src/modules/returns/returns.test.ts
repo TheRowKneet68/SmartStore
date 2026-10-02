@@ -511,6 +511,8 @@ describe('owner decision D-17: the payer is at the till, a draft can be withdraw
     const theirs = (await open(elsewhere, elsewhere.clerk)).json().id as string;
     expect((await call('GET', `${s.store}/returns/${theirs}`, viewer)).statusCode).toBe(404);
     expect((await call('GET', `${s.store}/refunds/${randomUUID()}`, viewer)).statusCode).toBe(404);
+    const theirRefund = (await draft(elsewhere, { lines: [{ saleLineId: elsewhere.bread.saleLineId, amount: 500 }], reasonCodeId: elsewhere.reason }, elsewhere.clerk)).json().id as string;
+    expect((await call('GET', `${s.store}/refunds/${theirRefund}`, viewer)).statusCode, "another store's refund").toBe(404);
     expect((await call('GET', `${s.store}/returns`, {})).statusCode).toBe(401);
   });
 });
