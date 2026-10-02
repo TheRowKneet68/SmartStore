@@ -360,3 +360,37 @@ from and its audit event, whether the person who pays must be at the refund's ti
 | `BI-26`, `AP-08`, `AP-03`, `D-16` | The approver is not the submitter; paying is `Refund.Pay`; creating and cancelling are `Sale.Refund`; lines fixed after submission |
 | `PY-27`, `PT-03`, `SS025` | A drawer refund is refused whole at a till out of service |
 | `RR-23`, `PY-25` | A card refund is refused whole, holding nothing |
+
+## 11. Card refunds, through the simulated gateway (2026-10-02)
+
+Code: `refunds.ts` (`payByProvider`), `payments/`; tests `payments/card.test.ts`. The gateway and its marking are D4 §15. A refund
+whose disbursement is `Provider` (§4.1: an original-tender refund of a captured card payment) is now payable.
+
+| Act | Route | Key |
+|---|---|---|
+| Pay | `POST /stores/:storeId/refunds/:id/pay` | `Refund.Pay` (D-16) |
+| Retry a failed one | `POST /stores/:storeId/refunds/:id/retry` | `Sale.Refund` (D-16) |
+| Draft, submit, approve, cancel | as §10: the draft route, and the transition endpoint | as §10 |
+
+A card refund is drafted without a till (§4.1: no drawer), so a back-office session may draft it. It is paid by its own routes
+and the transition endpoint refuses it (`use_pay_route`), because the provider is never asked inside a transaction (`PY-36`).
+Three steps, each committed: (1) `Approved → Processing` (or `Failed → Processing` on a retry), where the owner's trigger
+takes the hold, which stays through failure and retry (`RR-24`, `SM-40`, `SM-41`); (2) the provider is asked to refund the
+captured payment under the refund's id as the merchant reference, so asking again is never a second refund; (3) the answer
+is recorded.
+
+| The provider says | The refund becomes |
+|---|---|
+| `Approved` | `Completed`, with the provider's reference (`SIM-RF-…`); the line keeps its hold |
+| `Declined`, `Failed`, `Errored` (a first answer) | `Failed`: held, retryable, answered `refund_failed` |
+| `Timeout`, or does not know a refund it was already asked about | stays `Processing`, answered `refund_pending`; paying again asks the provider what it holds and does not refund twice (`PY-11`, `PY-41`) |
+
+Paying a refund that is `Processing` resumes it; one that is `Completed` returns unchanged and asks the provider nothing
+(`SM-04`). A pending refund may be cancelled with a reason, which releases the hold (§4.3).
+
+**A gap this exposed (OQ-036 item 1):** the contract has `Approved|Processing → Cancelled` and `Failed → Processing`, and no cancel
+from `Failed`. A refund the provider keeps declining therefore keeps its hold until a retry succeeds; nothing may release it.
+Not built around: an edge is the owner's to add.
+
+Not built: the failure **notification** (`SM-41`, `RR-23`), with the notification outbox; the refund **cap per tender**
+(OQ-023 item 6); the reconciliation job (`PY-40`).

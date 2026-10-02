@@ -595,6 +595,52 @@ fallback is a design that holds either answer, not a guess at the answer.
 - *Meanwhile:* the writes above, as D5 §10 describes them. A card refund is refused because the payment provider is not
   built, which is not a question for the owner.
 
+- **Update 2026-10-02, the owner’s table of eight questions about OQ-035** (the table’s numbering: 1 the key for creating a
+  return, 2 for creating a refund, 3 the late approver, 4 whether the payer must be at the till, 5 withdrawing a draft, 6 the
+  amount of a line, 7 and 8 the keys for reading returns and refunds). **Answered as recommended:** 1 and 2 (the creating keys
+  stay `Return.Create` and `Sale.Refund`), 3 (the late approver is another employee holding `Return.Approve`) and 6 (the server
+  works out the most a line can still have refunded, and the person may only reduce it). All four are what is built, so
+  nothing changes in the code. **Not yet decided, waiting for the owner:**
+  - **4.** Must the person who pays be at the refund’s till and drawer? Yes or no.
+  - **5.** May a refund draft be withdrawn while it is a draft? Yes would add an edge to §22.7, a contract change.
+  - **7 and 8.** The keys for reading returns, and for reading refunds. The options, all of them existing or named here:
+    - *Returns:* `Sale.View` (existing, "see sales"); a new `Return.View`; or `Return.Create` (existing, so only those
+      who may create can read, which a manager reviewing returns would not be).
+    - *Refunds:* `Sale.View`; `Payment.View` (existing); a new `Refund.View`; or `Sale.Refund` (existing, issuers only).
+    - The catalogue’s own convention is `.View`, not `.Read`, so a new key would be `Return.View` and `Refund.View`. A new
+      key grows the catalogue from 122 to 123 or 124 and needs a migration like D-16’s.
+
+### OQ-036 — Card payments through the simulated gateway: what the specification leaves out
+
+- **Unknown:** the card path was built from `PY-07` to `PY-48` and left these unsettled. Each was built the narrowest
+  way, and none invents a key.
+  1. *A failed card refund cannot be cancelled.* §22.7 has `Failed → Processing` (retry) and
+     `Approved|Processing → Cancelled`, and no cancel from `Failed`. `SM-41` and `RR-24` say only a cancellation releases the
+     hold. A refund the provider keeps declining therefore keeps its hold until a retry succeeds. Needs an edge, and its key.
+  2. *A payment that is captured and has no sale, or is left `Authorized` or `Pending`.* `PY-37` and `PY-40` send it to the
+     reconciliation job, "reported for voiding or refund". The job is not built, voiding has a key (`Payment.Void`) but no
+     route, and a refund needs a sale, so a captured payment with no sale has no way out but a person with the database.
+     This happens when the cart no longer adds up after the card was charged, or the sale cannot be saved and is never
+     sent again. Needs the job, a void route, and an answer for refunding a payment that never became a sale.
+  3. *A retry after a decline.* `PY-54` makes it a new `Payment`; D4 §1 says "against the same checkout". A resent request
+     cannot be told from a deliberate retry, so each checkout holds one card payment, and a retry is a new operation id
+     and a new checkout. The same operation id replayed after a decline returns the decline and charges nothing.
+  4. *How the outcomes map to states.* `PY-10` lists six outcomes and the payment machine has six states, not the same
+     six. `Declined` is `Declined`; `Failed` is `Failed`; `Errored`, `Timeout` and `Pending` leave a payment `Pending`;
+     `Approved` moves it on. A refund differs only in that `Declined`, `Failed` and `Errored` fail it, as it has no
+     `Declined`, and a failed refund is retryable.
+  5. *The order of a split.* `PY-20` asks for a deterministic order, recorded. The card is first, because only it can fail
+     and cash is taken inside the completion that cannot be half done.
+  6. *Who needs `Payment.Capture`.* D-16 names it for a card's capture. A till operator taking a card therefore holds
+     `Sale.Create` and `Payment.Capture`, and the route refuses one who does not before the provider is asked. The Cashier
+     template (`actors-and-roles.md` §4) lists "payment capture" among a cashier's sensitive actions, which agrees.
+  7. *Provider per store and method* (`PY-09`) and `Payment.Provider.Configure`: not built; one gateway serves the process.
+  8. *What a card payment records for display* (`PY-43`: last four, scheme, expiry): no column holds them, and the
+     simulated provider supplies none.
+- **Why not answerable from `/docs`:** items 1 and 2 are contract gaps; the rest are choices inside the specification's room.
+- **Blocked:** a real acquirer (the owner's: an account and secrets), and the reconciliation of orphaned payments (item 2).
+- *Meanwhile:* the gateway is simulated and says so everywhere it can; an orphaned payment is visible on its open checkout.
+
 ## How to use this file
 
 - Add an entry the moment you hit something the specification does not answer. Then continue with a different task.

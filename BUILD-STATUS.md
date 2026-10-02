@@ -351,8 +351,8 @@ Step 3 rules, given by the owner on 2026-10-01 with "start Step 3":
 - **Phase C is done:** the permission-key proposal waits for the owner's answer.
 - **2026-10-02: the owner answered it.** The answers are owner decision D-16. The owner said "go" after the report of
   affected files and rule IDs, and the keys are applied (Phase E, step 1: migration `20261002100000_d7_d16_permission_keys.sql`;
-  D7 §11, D4 §14). What Phase E still holds: the card path, the locations routes, and reopening a shift (OQ-033). Domain 5's
-  application layer is built (Phase E, step 2).
+  D7 §11, D4 §14). What Phase E still holds: the locations routes and reopening a shift (OQ-033). Domain 5's application layer
+  (step 2) and the card path through a simulated gateway (step 3) are built.
 - **Phase D is under way.** The audit-log read is not built (OQ-024 item 2). The identity admin screens and the
   reference-data screen are written and tested in `web/`; they are committed with their server routes.
 - The UI steps below are the earlier part of this work. U5 is Phase B's fourth step.
@@ -521,8 +521,8 @@ sets the order. Phase A (housekeeping and the push) is done.
 
    **The keys are decided (D-16, 2026-10-02) and applied** (Phase E, step 1; see the log). Q8, a refund's retry under
    `Sale.Refund` while paying it is `Refund.Pay`, was raised back to the owner, who gave no change. **Still to build:**
-   card payments through the simulated gateway (and with them a card refund's payment), routes for warehouses and
-   storage locations (`Config.Organization`), and a key for reading returns and refunds (OQ-035). **Domain 5's
+   routes for warehouses and storage locations (`Config.Organization`), a key for reading returns and refunds (OQ-035),
+   and the card path's void and reconciliation (OQ-036 item 2). **Domain 5's
    application layer is built** (step 2 in the log; its focused mutation check is there too). **Not buildable yet:**
    reopening a shift (OQ-033).
 5. **Phase F:**
@@ -1396,3 +1396,21 @@ Append-only. One dated line per step, including failed and abandoned attempts.
   - **Mutation check:** `plan-d5-app.mjs`, 33 mutations (the new routes, both machines' bindings, the shared hook, the error detail, the sale detail). 31 were detected at once. Two survived, a store predicate on a line added to another store's return and on a refund's sale, because the database's keys refused them with another status; `MS-04` tests (a 404) were added, and both are now detected. **33 of 33**, restored byte for byte.
   - **Staging:** BUILD-STATUS and OPEN-QUESTIONS hold another session's uncommitted work, so their staged copies are
     the committed files plus this step's lines only.
+- 2026-10-02 — **Phase E, step 3: card payments and card refunds, through a simulated gateway.** D4 §15, D5 §11; `OQ-036`.
+  - **The gateway is TEST / simulated, and says so:** `PaymentGateway` is the interface (the five commands of `PY-07`, the
+    closed outcomes of `PY-10`, a merchant reference per call); `SimulatedGateway` moves no money. It is marked in its
+    header, in a startup warning, in `SIM-` references, and as `simulated: true` on a payment and a refund. It accepts only
+    `TEST-` tokens, so a real card number is declined and stored nowhere. A token picks the outcome, timeouts included.
+    Nothing outside the gateway files and `main.ts` names it (a test, `PY-08`). A real acquirer is the owner's call.
+  - **A card sale** (`card: { token, amount? }` on `POST /sales`, beside or instead of `cash`): planned and the tender checked
+    first, then authorize, capture and commit (`PY-38`), the provider called between transactions (`PY-36`), resumable by the
+    cart's operation id, never charging twice. Split with cash, the card first. Capturing needs `Payment.Capture` (D-16).
+  - **A card refund:** `POST /refunds/:id/pay` (`Refund.Pay`) and `/retry` (`Sale.Refund`); a failure is held and retryable, a
+    timeout is resolved by asking the provider. The transition endpoint refuses a card refund.
+  - **No permission key is new, and none was open.** The shared test shop moved to `server/test/shop.ts`.
+  - **Not built:** void and the reconciliation job, the provider per store, the card's display fields, offline card, and a
+    failed card refund's cancel, which has no edge (`OQ-036` items 1 and 2).
+  - **Tests:** `payments/card.test.ts`, 24. Server: 480 pass; the server typechecks.
+  - **Mutation check:** `plan-card.mjs`, 29 mutations: the card sale (the steps, the tender, the keys, the concurrency), the card refund (the routes, the keys, the states) and the gateway's own promises. 26 were detected at once. Three survived: a concurrent record guard and a concurrent save (both now proved by a test of two copies of one resumed request, which also found a real race: the loser was told the card was taken and the sale not saved, when it was saved), and a capture-key check made redundant by the route's earlier one (removed). **29 of 29**, restored byte for byte.
+  - **Staging:** BUILD-STATUS and OPEN-QUESTIONS hold another session's uncommitted work, so their staged copies are the
+    committed files plus this step's lines only.

@@ -1656,3 +1656,24 @@ OPEN-QUESTIONS.md.
 4. **A built flow cites the code, and a specified flow cites the rule.** If a section says BUILT, a reader must be able to find the
    file; if it says SPECIFIED, the rule IDs. A flow with neither is not justified and is to be sent back.
 5. **It is not a requirement document.** Where it and `/docs` disagree, `/docs` wins and this document is the defect.
+
+---
+
+## 13. Update, 2026-10-02, after commit `f68fdc3`
+
+Appended as §12 requires. It supersedes what §5.3, §5.4, §6.5, §7.3, §9.6 and §11.1 say about card payments, returns and
+refunds, and nothing else. The header's counts (migrations, tables, functions, triggers) are unchanged: no migration was added.
+
+| Was (at `f68fdc3`) | Now |
+|---|---|
+| Returns and refunds: schema built, application layer not built (§5.4, §11.1) | **BUILT.** `server/src/modules/returns/`: open, fill and post a return; late approval; draft, submit, approve, pay, cancel a refund. Both machines are bound to `POST /transitions`, which now binds nine. D5 §10, `OQ-035` |
+| Card payments: specified, keys decided, not built (§5.3) | **BUILT against a simulated gateway.** `server/src/modules/payments/`; a card sale authorizes, captures, then commits, resumably, alone or split with cash. D4 §15, `OQ-036` |
+| Card refunds not built (§5.4) | **BUILT** against the same gateway: `POST /refunds/:id/pay` (`Refund.Pay`) and `/retry` (`Sale.Refund`). D5 §11 |
+| The payment provider: an interface required, none chosen (§1.2, `BQ`-adjacent) | `PaymentGateway` is the interface (`PY-07`, `PY-10`). **`SimulatedGateway` is TEST / simulated**: it moves no money, accepts only `TEST-` tokens, is marked in its header, a startup warning, `SIM-` references and `simulated: true` on a payment and a refund. A real acquirer needs an account and secrets, the owner's call (ADR-31 §13 item 4) |
+| §7.3 route table | Adds `POST/DELETE /stores/:storeId/returns[/:id/lines[/:lineId]]`, `POST …/returns/:id/late-approval` (`Return.Approve`), `POST /stores/:storeId/refunds`, `POST …/refunds/:id/pay`, `POST …/refunds/:id/retry`; `POST /sales` takes `card`. A sale's detail names its lines' counters and its payments |
+| §9.6 `completeCashSale` | Now `completeSale`, planned by `planSale` and tendered by `splitTender`; a card sale is driven by `completeCardSale` |
+| Tests: 437 | 480 |
+
+**Still not built in this area:** voiding a payment and the reconciliation job (`OQ-036` item 2), the provider per store (`PY-09`),
+the card's display fields (`PY-43`), reading returns and refunds (no key, `OQ-035`), settle and close of a return (`OQ-023`),
+the notification of a failed refund, and offline card payment.
