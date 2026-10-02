@@ -467,3 +467,189 @@ describe('who may do what with the gateway (PY-08, PY-45)', () => {
     expect((await sim.authorize({ merchantReference: randomUUID(), token: 'TEST-NOPE', amount: 1, currencyCode: 'XTS' })).rawCode).toBe('SIM_UNKNOWN_TEST_TOKEN');
   });
 });
+
+const voidIt = (s: Shop, paymentId: string, as: Record<string, string>) => call('POST', `${s.store}/payments/${paymentId}/void`, as, {});
+const paymentIdOf = async (s: Shop, operation: string): Promise<string> => (await payments(s.storeId, operation))[0]!.id as string;
+
+describe('voiding a card payment that is not settled (PY-13, PY-36, PY-54, D-16 Q3)', () => {
+  it('PY-11, PY-13: a payment left Pending that the provider holds is voided at the provider, abandons its cart, and the same sale cannot go on', async () => {
+    const s = await shop();
+    const first = await pay(s, { card: { token: 'TEST-TIMEOUT' } });
+    expect(first.response.json().error.code).toBe('card_pending');
+    const id = await paymentIdOf(s, first.operation);
+    const voider = await s.staff(['Payment.Void']);
+    gateway.calls = [];
+    const voided = await voidIt(s, id, voider);
+    expect(voided.statusCode, voided.body).toBe(200);
+    expect(voided.json()).toEqual({ paymentId: id, status: 'Voided', providerHeld: true, simulated: true });
+    expect(gateway.calls, 'it asked what the provider held, then voided it').toEqual(['query']);
+    expect(await payments(s.storeId, first.operation)).toMatchObject([{ status: 'Voided', checkout: 'Abandoned', provider_raw_code: 'SIM_VOIDED' }]);
+    const again = await pay(s, { card: { token: 'TEST-TIMEOUT' } }, first.operation);
+    expect(again.response.json().error.code).toBe('card_voided');
+    expect(await salesWith(first.operation)).toBe(0);
+    const events = await db.app.query(`SELECT event_type FROM audit_event WHERE entity_id = $1`, [id]);
+    expect(events.rows.map((r: Json) => r.event_type)).toContain('Payment.StateChange');
+  });
+
+  it('PY-41, PY-13: a payment the provider never saw is voided here, by a person, and the answer says the provider held nothing', async () => {
+    const s = await shop();
+    const first = await pay(s, { card: { token: 'TEST-TIMEOUT-LOST' } });
+    const id = await paymentIdOf(s, first.operation);
+    const voided = await voidIt(s, id, await s.staff(['Payment.Void']));
+    expect(voided.json()).toMatchObject({ status: 'Voided', providerHeld: false });
+    expect(await payments(s.storeId, first.operation)).toMatchObject([{ status: 'Voided', provider_raw_code: 'NOT_HELD_BY_PROVIDER', checkout: 'Abandoned' }]);
+  });
+
+  it('PY-13: an authorization never captured is voided at the provider, and voiding it again changes and asks nothing', async () => {
+    const s = await shop();
+    const first = await pay(s, { card: { token: 'TEST-CAPTURE-FAIL' } });
+    const id = await paymentIdOf(s, first.operation);
+    expect(await payments(s.storeId, first.operation)).toMatchObject([{ status: 'Authorized' }]);
+    const voider = await s.staff(['Payment.Void']);
+    gateway.calls = [];
+    expect((await voidIt(s, id, voider)).json()).toMatchObject({ status: 'Voided', providerHeld: true });
+    expect(await payments(s.storeId, first.operation)).toMatchObject([{ status: 'Voided', checkout: 'Abandoned' }]);
+    gateway.calls = [];
+    const repeat = await voidIt(s, id, voider);
+    expect(repeat.statusCode).toBe(200);
+    expect(gateway.calls).toEqual([]);
+  });
+
+  it('PY-11, PY-41: a void the provider does not confirm leaves the payment as it was; one it did carry out is found, and done once', async () => {
+    const s = await shop();
+    const voider = await s.staff(['Payment.Void']);
+    const refusing = await pay(s, { card: { token: 'TEST-VOID-FAIL' } });
+    expect(refusing.response.json().error.code).toBe('card_capture_failed');
+    const id = await paymentIdOf(s, refusing.operation);
+    const failed = await voidIt(s, id, voider);
+    expect(failed.statusCode).toBe(409);
+    expect(failed.json().error.code).toBe('void_failed');
+    expect(await payments(s.storeId, refusing.operation), 'unchanged, and the cart still open').toMatchObject([{ status: 'Authorized', checkout: 'Open' }]);
+
+    const lost = await pay(s, { card: { token: 'TEST-VOID-TIMEOUT' } });
+    const lostId = await paymentIdOf(s, lost.operation);
+    const first = await voidIt(s, lostId, voider);
+    expect(first.json().error.code).toBe('void_pending');
+    expect(await payments(s.storeId, lost.operation)).toMatchObject([{ status: 'Authorized' }]);
+    const again = await voidIt(s, lostId, voider);
+    expect(again.statusCode, again.body).toBe(200);
+    expect(again.json().status).toBe('Voided');
+    expect(await payments(s.storeId, lost.operation)).toMatchObject([{ status: 'Voided', checkout: 'Abandoned' }]);
+  });
+
+  it('PY-12, PY-13, PY-54: a captured, declined or cash payment is not voided; a void needs Payment.Void, in the store', async () => {
+    const s = await shop();
+    const voider = await s.staff(['Payment.Void']);
+    const settled = await pay(s, { card: { token: 'TEST-APPROVE' } });
+    const captured = await paymentIdOf(s, settled.operation);
+    const refused = await voidIt(s, captured, voider);
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().error.code).toBe('cannot_void');
+    expect(refused.json().error.message).toMatch(/refunded, not voided/);
+    const declined = await pay(s, { card: { token: 'TEST-DECLINE' } });
+    expect((await voidIt(s, await paymentIdOf(s, declined.operation), voider)).json().error.code).toBe('cannot_void');
+    const cashPayment = s.sale.payments[0].paymentId as string;
+    expect((await voidIt(s, cashPayment, voider)).json().error.code).toBe('not_a_card_payment');
+
+    const stuck = await pay(s, { card: { token: 'TEST-TIMEOUT' } });
+    const id = await paymentIdOf(s, stuck.operation);
+    expect((await voidIt(s, id, s.clerk)).statusCode, 'Payment.Capture does not void').toBe(403);
+    const viewer = await s.staff(['Payment.View']);
+    expect((await voidIt(s, id, viewer)).statusCode, 'Payment.View does not void').toBe(403);
+    const other = await shop();
+    expect((await voidIt(other, id, await other.staff(['Payment.Void']))).statusCode, "another store's payment").toBe(404);
+    expect(await payments(s.storeId, stuck.operation)).toMatchObject([{ status: 'Pending' }]);
+  });
+});
+
+describe('the card payments that need a person (PY-37, PY-40, PY-41)', () => {
+  const attention = (s: Shop, query: string, as: Record<string, string>) => call('GET', `${s.store}/payments/attention?${query}`, as);
+
+  it('PY-40: pending, authorized-and-never-captured, and captured-with-no-sale are listed, with what a person needs; settled and over ones are not', async () => {
+    const s = await shop();
+    const viewer = await s.staff(['Payment.View']);
+    const pending = await pay(s, { card: { token: 'TEST-TIMEOUT' } });
+    const authorized = await pay(s, { card: { token: 'TEST-CAPTURE-FAIL' } });
+    await insertSettings(db.app, s.storeId, 'BlockNegative');
+    const orphan = await pay(s, { card: { token: 'TEST-APPROVE' } });
+    expect(orphan.response.json().error.code).toBe('SS011');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await insertSettings(db.app, s.storeId, 'AllowNegative');
+    // Over or settled: a sale, a decline, a failure, a void.
+    await pay(s, { card: { token: 'TEST-APPROVE' } });
+    await pay(s, { card: { token: 'TEST-DECLINE' } });
+    await pay(s, { card: { token: 'TEST-FAIL' } });
+    const voided = await pay(s, { card: { token: 'TEST-TIMEOUT' } });
+    await voidIt(s, await paymentIdOf(s, voided.operation), await s.staff(['Payment.Void']));
+
+    const found = await attention(s, 'olderThanMinutes=0', viewer);
+    expect(found.statusCode, found.body).toBe(200);
+    expect(found.json().summary).toEqual({ PendingTooLong: 1, AuthorizedNotCaptured: 1, CapturedNoSale: 1 });
+    const byKind = Object.fromEntries(found.json().items.map((i: Json) => [i.kind, i]));
+    expect(byKind.PendingTooLong).toMatchObject({ paymentId: await paymentIdOf(s, pending.operation), status: 'Pending', amount: 3_000, currencyCode: 'XTS', providerOutcome: 'Timeout', simulated: null, operationId: pending.operation, storeId: s.storeId });
+    expect(byKind.AuthorizedNotCaptured).toMatchObject({ status: 'Authorized', operationId: authorized.operation, simulated: true });
+    expect(byKind.CapturedNoSale).toMatchObject({ status: 'Captured', operationId: orphan.operation, simulated: true });
+    expect(JSON.stringify(found.json())).not.toMatch(/TEST-/);
+  });
+
+  it('PY-40: how long is too long is the caller’s, measured from when the payment entered its state', async () => {
+    const s = await shop();
+    const viewer = await s.staff(['Payment.View']);
+    const first = await pay(s, { card: { token: 'TEST-TIMEOUT' } });
+    expect((await attention(s, 'olderThanMinutes=60', viewer)).json().items).toEqual([]);
+    await db.owner.query(`UPDATE payment SET status_changed_at = now() - interval '90 minutes' WHERE id = $1`, [await paymentIdOf(s, first.operation)]);
+    const old = await attention(s, 'olderThanMinutes=60', viewer);
+    expect(old.json().items).toMatchObject([{ kind: 'PendingTooLong', ageMinutes: 90 }]);
+    expect((await attention(s, 'olderThanMinutes=120', viewer)).json().items).toEqual([]);
+    expect((await attention(s, '', viewer)).statusCode, 'the window is required, never defaulted').toBe(400);
+    expect((await attention(s, 'olderThanMinutes=-1', viewer)).statusCode).toBe(400);
+  });
+
+  it('PY-40, MS-02, AC-01: it is read under Payment.View, in the store, a page at a time, and changes nothing', async () => {
+    const s = await shop();
+    const viewer = await s.staff(['Payment.View']);
+    for (let i = 0; i < 3; i++) await pay(s, { card: { token: 'TEST-TIMEOUT' } });
+    const before = await db.app.query(`SELECT count(*)::int AS n, count(*) FILTER (WHERE status = 'Pending')::int AS pending FROM payment WHERE store_id = $1`, [s.storeId]);
+    const page = await attention(s, 'olderThanMinutes=0&limit=2', viewer);
+    expect(page.json().items).toHaveLength(2);
+    expect(page.json().summary.PendingTooLong, 'the summary counts all, not the page').toBe(3);
+    expect(page.json().next).not.toBeNull();
+    const rest = await attention(s, `olderThanMinutes=0&limit=2&after=${page.json().next}`, viewer);
+    expect(rest.json().items).toHaveLength(1);
+    expect(rest.json().next).toBeNull();
+    const ids = [...page.json().items, ...rest.json().items].map((i: Json) => i.paymentId);
+    expect(new Set(ids).size).toBe(3);
+    expect((await attention(s, 'olderThanMinutes=0', s.clerk)).statusCode, 'Sale.Create does not read payments').toBe(403);
+    expect((await attention(s, 'olderThanMinutes=0', await s.staff(['Payment.Void']))).statusCode, 'Payment.Void does not read').toBe(403);
+    const other = await shop();
+    expect((await attention(other, 'olderThanMinutes=0', await other.staff(['Payment.View']))).json().summary, "another store's payments are not here").toEqual({ PendingTooLong: 0, AuthorizedNotCaptured: 0, CapturedNoSale: 0 });
+    const after = await db.app.query(`SELECT count(*)::int AS n, count(*) FILTER (WHERE status = 'Pending')::int AS pending FROM payment WHERE store_id = $1`, [s.storeId]);
+    expect(after.rows[0]).toEqual(before.rows[0]);
+  });
+});
+
+describe('npm run payments:check (PY-40)', () => {
+  it('PY-40: lists what needs a person and exits non-zero, says so when nothing does, and will not guess a window', async () => {
+    const { spawnSync } = await import('node:child_process');
+    const { join } = await import('node:path');
+    const url = new URL(db.appUrl);
+    url.searchParams.delete('options');
+    const run = (...args: string[]) =>
+      spawnSync(process.execPath, ['src/cli/payments-check.ts', ...args], {
+        cwd: join(import.meta.dirname, '..', '..', '..'),
+        env: { ...process.env, DATABASE_URL: url.toString() },
+        encoding: 'utf8',
+      });
+    const s = await shop();
+    const stuck = await pay(s, { card: { token: 'TEST-TIMEOUT' } });
+    const found = run('--older-than', '0', '--store', s.storeId);
+    expect(found.status, found.stderr).toBe(1);
+    expect(found.stdout).toContain(`PendingTooLong: payment ${await paymentIdOf(s, stuck.operation)}`);
+    expect(found.stdout).toContain('Nothing was changed.');
+    const none = run('--older-than', '100000', '--store', s.storeId);
+    expect(none.status).toBe(0);
+    expect(none.stdout).toContain('No card payment needs a person.');
+    expect(run().status, 'no window given').not.toBe(0);
+    expect(run().stderr).toContain('Say how long a payment may wait');
+  });
+});

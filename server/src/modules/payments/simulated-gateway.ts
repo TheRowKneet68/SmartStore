@@ -30,6 +30,8 @@ import type { GatewayResult, PaymentGateway } from './gateway.ts';
  * | `TEST-REFUND-DECLINE`    | Approved                                 | Refund Declined                             |
  * | `TEST-REFUND-FAIL`       | Approved                                 | Refund Failed                               |
  * | `TEST-REFUND-TIMEOUT`    | Approved                                 | Refund Timeout; the provider did refund     |
+ * | `TEST-VOID-FAIL`         | Approved                                 | Capture Failed, so it stays authorized; void Failed |
+ * | `TEST-VOID-TIMEOUT`      | Approved                                 | Capture Failed; void Timeout, the provider did void |
  *
  * It remembers what the "provider" did, in memory, by merchant reference: a repeated call returns the first answer
  * (the idempotency §13.3 relies on), and `query` finds what a timed-out call really did. A restart forgets it, as a
@@ -38,7 +40,7 @@ import type { GatewayResult, PaymentGateway } from './gateway.ts';
 const PREFIX = 'SIM-';
 const TOKENS = new Set([
   'APPROVE', 'DECLINE', 'FAIL', 'ERROR', 'TIMEOUT', 'TIMEOUT-LOST', 'CAPTURE-FAIL', 'CAPTURE-TIMEOUT',
-  'REFUND-DECLINE', 'REFUND-FAIL', 'REFUND-TIMEOUT',
+  'REFUND-DECLINE', 'REFUND-FAIL', 'REFUND-TIMEOUT', 'VOID-FAIL', 'VOID-TIMEOUT',
 ]);
 
 const result = (outcome: GatewayResult['outcome'], providerReference: string | null, rawCode: string | null): GatewayResult => ({
@@ -92,7 +94,7 @@ export class SimulatedGateway implements PaymentGateway {
     if (!providerReference.startsWith(PREFIX)) return result('Failed', null, 'SIM_UNKNOWN_AUTHORIZATION');
     const behaviour = providerReference.slice(providerReference.lastIndexOf('.') + 1);
     const approved = result('Approved', providerReference, 'SIM_CAPTURED');
-    if (behaviour === 'CAPTURE-FAIL') return result('Failed', null, 'SIM_CAPTURE_FAILED');
+    if (behaviour === 'CAPTURE-FAIL' || behaviour.startsWith('VOID-')) return result('Failed', null, 'SIM_CAPTURE_FAILED');
     if (behaviour === 'CAPTURE-TIMEOUT') {
       return this.once(`capture:${merchantReference}`, merchantReference, () => approved, result('Timeout', null, 'SIM_TIMEOUT'));
     }
@@ -113,7 +115,11 @@ export class SimulatedGateway implements PaymentGateway {
 
   async void({ merchantReference, providerReference }: { merchantReference: string; providerReference: string }): Promise<GatewayResult> {
     if (!providerReference.startsWith(PREFIX)) return result('Failed', null, 'SIM_UNKNOWN_AUTHORIZATION');
-    return this.once(`void:${merchantReference}`, merchantReference, () => result('Approved', providerReference, 'SIM_VOIDED'));
+    const behaviour = providerReference.slice(providerReference.lastIndexOf('.') + 1);
+    if (behaviour === 'VOID-FAIL') return result('Failed', null, 'SIM_VOID_FAILED');
+    const voided = result('Approved', providerReference, 'SIM_VOIDED');
+    if (behaviour === 'VOID-TIMEOUT') return this.once(`void:${merchantReference}`, merchantReference, () => voided, result('Timeout', null, 'SIM_TIMEOUT'));
+    return this.once(`void:${merchantReference}`, merchantReference, () => voided);
   }
 
   async query({ merchantReference }: { merchantReference: string }): Promise<GatewayResult> {

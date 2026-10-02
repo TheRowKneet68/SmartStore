@@ -24,7 +24,8 @@
     "web": "npm run dev --workspace web",
     "perf": "npm run perf --workspace server",
     "demo": "npm run demo --workspace server",
-    "ledger:check": "npm run ledger:check --workspace server"
+    "ledger:check": "npm run ledger:check --workspace server",
+    "payments:check": "npm run payments:check --workspace server --"
   },
   "devDependencies": {
     "dbmate": "2.36.0"

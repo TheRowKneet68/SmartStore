@@ -19,6 +19,7 @@ import { refundMachine, refundRoutes } from './modules/returns/refunds.ts';
 import { returnMachine, returnRoutes } from './modules/returns/returns.ts';
 import { organizationRoutes } from './modules/organization/routes.ts';
 import type { PaymentGateway } from './modules/payments/gateway.ts';
+import { paymentRoutes } from './modules/payments/routes.ts';
 import { paymentMethodRoutes } from './modules/sales/payment-methods.ts';
 import { quoteSigner } from './modules/sales/quotes.ts';
 import { saleRoutes } from './modules/sales/sales.ts';
@@ -75,6 +76,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   await app.register(saleRoutes, { ...v1, quotes, quoteMaxAgeMinutes: options.quoteMaxAgeMinutes, lockTimeoutMs: options.lockTimeoutMs, gateway: options.gateway });
   await app.register(shiftCloseRoutes, v1);
   await app.register(returnRoutes, v1);
+  await app.register(paymentRoutes, { ...v1, gateway: options.gateway });
   await app.register(refundRoutes, { ...v1, gateway: options.gateway, lockTimeoutMs: options.lockTimeoutMs });
   await app.register(reasonRoutes, v1);
   await app.register(adjustmentRoutes, v1);
