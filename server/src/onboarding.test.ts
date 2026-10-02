@@ -58,7 +58,7 @@ describe('onboarding (organization-model s9, actors-and-roles s3.2 and s4, CONVE
        FROM permission`,
       [o.ownerEmployeeId, o.storeId],
     );
-    expect(held.rows[0]).toEqual({ in_store: 117, organization_wide: 117, catalogue: 117 });
+    expect(held.rows[0]).toEqual({ in_store: 122, organization_wide: 122, catalogue: 122 });
     const roles = await db.app.query(
       `SELECT r.name, a.store_id FROM employee_role_assignment a JOIN role r ON r.id = a.role_id WHERE a.employee_id = $1`,
       [o.ownerEmployeeId],

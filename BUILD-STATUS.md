@@ -349,8 +349,10 @@ Step 3 rules, given by the owner on 2026-10-01 with "start Step 3":
 - **Phase B, finishing Domain 4, is done.** Domain 4's full mutation check detected 126 of 126. A gap found
   afterwards, a sold service's unit kind, is closed by a forward-only migration (Next, item 1.7; D4 §12).
 - **Phase C is done:** the permission-key proposal waits for the owner's answer.
-- **2026-10-02: the owner answered it.** The answers are recorded as owner decision D-16 and applied to the
-  documentation only. Implementation waits for the owner's go-ahead, after the report of affected files and rule IDs.
+- **2026-10-02: the owner answered it.** The answers are owner decision D-16. The owner said "go" after the report of
+  affected files and rule IDs, and the keys are applied (Phase E, step 1: migration `20261002100000_d7_d16_permission_keys.sql`;
+  D7 §11, D4 §14). What Phase E still holds: Domain 5's application layer, the card path, the locations routes, and
+  reopening a shift (OQ-033).
 - **Phase D is under way.** The audit-log read is not built (OQ-024 item 2). The identity admin screens and the
   reference-data screen are written and tested in `web/`; they are committed with their server routes.
 - The UI steps below are the earlier part of this work. U5 is Phase B's fourth step.
@@ -426,6 +428,7 @@ domain, detected 126 of 126** (D4 §11).
 | 11 | Veto, or accept, two choices for receipts. (a) Recording a print's outcome and reprinting need `Sale.Create`: the catalogue has no reprint key, and receipt issuance is the cashier's work (actors-and-roles §4). (b) A reprint has no audit event: AU-12 has no type for one, and the `receipt_reprint` row is the record. The reprint's mandatory reason is your instruction of 2026-10-01; `/docs` asks for none. **Reading a receipt at the till is decided by D-16 (Q13): `Sale.Create`.** (a) and (b) stay for veto | D4 §10 | Nothing |
 | 12 | Authorize one forward-only migration for manual weigh entry: the sale line's weight source (`PR-27`) and its reason code (`PR-28`), and a per-store threshold. Also give the threshold: the interim proposed is zero, so every manual weight needs a reason | OQ-032 | Manual weigh entry at the till |
 | 13 | Archiving brands, units and tax categories: whether they can be archived, and what an archive stops | OQ-031 | Archiving those three only; editing them is built |
+| 14 | Reopening a closed shift: what the recount counts, whether the closing float is declared again, and who the row names as closer. `Shift.Reopen` exists (D-16); the edge does not | OQ-033, `CD-26` | Reopening a shift |
 
 Until then, tests run on a scratch PostgreSQL 17.11 cluster and a portable Node 26 in the session scratch directory
 (ADR-31 §14). Nothing on the owner's PostgreSQL service is touched.
@@ -516,9 +519,11 @@ sets the order. Phase A (housekeeping and the push) is done.
    - card payments through the simulated gateway;
    - Domain 5's mutation check.
 
-   **The keys are decided: D-16, 2026-10-02.** They are recorded in the documentation only. The owner asked for the
-   affected files and rule IDs first, so **implementation starts on the owner's go-ahead.** Q8, a refund's retry under
-   `Sale.Refund` while paying it is `Refund.Pay`, was raised back to the owner.
+   **The keys are decided (D-16, 2026-10-02) and applied** (Phase E, step 1; see the log). Q8, a refund's retry under
+   `Sale.Refund` while paying it is `Refund.Pay`, was raised back to the owner, who gave no change. **Still to build:**
+   Domain 5's application layer (returns, then refunds, bound to the transition endpoint), card payments through the
+   simulated gateway, routes for warehouses and storage locations (`Config.Organization`), and Domain 5's mutation
+   check. **Not buildable yet:** reopening a shift (OQ-033).
 5. **Phase F:**
    - typecheck, tests, perf, ledger check and audit check, measured against the p95 ≤ 100 ms budget;
    - a "what is left before a real store can use this" list. It names GAP-044, GATE-Q2-LICENCE and GAP-038 as release
@@ -1342,3 +1347,24 @@ Append-only. One dated line per step, including failed and abandoned attempts.
   - **Raised back to the owner:** Q8, a refund's retry under `Sale.Refund` while paying it is `Refund.Pay`.
   - **Staging:** OWNER-DECISIONS, OPEN-QUESTIONS and BUILD-STATUS hold other sessions' uncommitted work. Their staged
     copies are the working files with those blocks taken back out.
+- 2026-10-02 — **Phase E, step 1: owner decision D-16's keys applied.** D7 §11, D4 §14.
+  - **Migration `20261002100000_d7_d16_permission_keys.sql`** (forward-only; applied to the dev database, and
+    `db/schema.sql` regenerated):
+    - five keys join the catalogue, which now holds 122: `Payment.Capture`, `Payment.Void`, `Employee.Reactivate`,
+      `Refund.Pay`, `Shift.Reopen`;
+    - nine groups of edges stop refusing everyone: a card's submit (`Sale.Create`), capture and void, back from leave
+      and reactivation, a till's re-enable, a return's cancel, a refund's payment, retry and both cancels;
+    - `grant_to_complete_roles(keys)`, for migrations only, gives every live role that holds every other key the new
+      ones, each in the name of whoever granted that role its first key, so the Owner still holds everything.
+  - **The reopen edge is not created.** What a reopened shift's recount counts is unspecified: OQ-033, new.
+  - **Reading a receipt now needs `Sale.Create`** (Q13). The list and a sale's detail stay under `Sale.View`.
+  - **Tests:** the catalogue is 122 in three tests; the edge contract names every key; the employee test that proved
+    an undecided edge refused everyone now proves each reactivation's own key and its reason; the till test now proves
+    a re-enabled till trades again; the receipt's key; and the grant, on a role written as an Owner's was before D-16, a
+    role missing one key, and an archived role. 437 server tests pass, and the server typechecks.
+  - **Mutation check:** `plan-e1.mjs`, 16 of 16 detected, restored byte for byte. `plan-b3`'s R01 was repointed at the
+    receipt's new key and re-run, and `plan-d4-edges`' V02, which mutated the old refusal, is retired.
+  - **One path lost its proof:** the gate's `not_permitted` on an edge with no key has no edge left to prove it on
+    among the bound machines. D7 §11 says so.
+  - **Staging:** BUILD-STATUS, OPEN-QUESTIONS and `onboarding.test.ts` hold another session's uncommitted work, so
+    their staged copies are the committed files plus this step's lines only.

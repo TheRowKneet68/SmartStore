@@ -414,6 +414,18 @@ describe('the receipt (SP-57..SP-60, SP-03, RT-140, UX-22)', () => {
     expect(shown.body, 'SP-60: no cost or margin field').not.toMatch(/cost|margin/i);
   });
 
+  it('D-16 (Q13), SP-57, MS-02: reading a receipt is receipt issuance, under Sale.Create; Sale.View alone lists and opens sales, and reads no receipt', async () => {
+    const s = await shop();
+    await openShift(s);
+    const sale = await sold(s, '012345678905', 1_250);
+    const seller = await employeeWithAccess(db.app, s.organizationId, ['Sale.Create'], { assignedStore: s.storeId, accessStores: [s.storeId] });
+    expect((await receipt(s, sale.saleId, signedInAs(seller, s.organizationId))).statusCode, 'a cashier without Sale.View').toBe(200);
+    const reader = signedInAs(await employeeWithAccess(db.app, s.organizationId, ['Sale.View'], { assignedStore: s.storeId, accessStores: [s.storeId] }), s.organizationId);
+    expect((await receipt(s, sale.saleId, reader)).statusCode).toBe(403);
+    expect((await call('GET', `/stores/${s.storeId}/sales/${sale.saleId}`, reader)).statusCode, "the sale's detail").toBe(200);
+    expect((await call('GET', `/stores/${s.storeId}/sales`, reader)).statusCode, 'the list').toBe(200);
+  });
+
   it('SP-03, SP-58, UX-22: the till records whether the first print worked, once; a failure puts the sale in the reprint queue', async () => {
     const s = await shop();
     await openShift(s);
@@ -517,14 +529,19 @@ describe("the till's other edges (s22.12 disable, retire; HD-08, HD-31, HD-32; O
     expect((await call('POST', `/stores/${s.storeId}/shift`, s.at, { openingFloat: 0 })).json().error.code, 'no new shift at a disabled till').toBe('SS025');
   });
 
-  it('OQ-025, SM-02d, HD-32: a disabled till is not re-enabled, by anyone, until the owner names the permission', async () => {
+  it('D-16, HD-32, s22.12: a disabled till goes back into service with Device.Disable and a reason, and trades again', async () => {
     const s = await shop();
     const reason = (await ok('POST', '/reason-codes', s.owner, { code: 'FAULT', name: 'Till fault' })).id as string;
     await device(s.owner, 'disable', s.till, reason);
-    const again = await device(s.owner, 'activate', s.till, reason);
-    expect(again.statusCode).toBe(403);
-    expect(again.json().error.code).toBe('not_permitted');
+    const editor = await employeeWithAccess(db.app, s.organizationId, ['Device.Edit', 'Device.View'], { assignedStore: s.storeId, accessStores: [s.storeId] });
+    const refused = await device(signedInAs(editor, s.organizationId), 'activate', s.till, reason);
+    expect(refused.statusCode, 'Device.Edit activates a new till, but does not re-enable one').toBe(403);
+    expect(refused.json().error.message).toContain('Device.Disable');
+    expect((await device(s.owner, 'activate', s.till)).json().error.code, 'a reason, always').toBe('SS055');
     expect(await tillStatus(s, s.till)).toBe('Disabled');
+    expect((await device(s.owner, 'activate', s.till, reason)).json()).toEqual({ subject: s.till, state: 'Active', changed: true });
+    await openShift(s);
+    expect((await sell(s, [{ quote: await quote(s, '4006381333931'), quantity: 1 }], 500)).statusCode, 'in service again').toBe(201);
   });
 
   it('s22.12, HD-08, BI-40: retiring needs Device.Edit and a reason; a retired till is never deleted, and nothing leaves Retired', async () => {

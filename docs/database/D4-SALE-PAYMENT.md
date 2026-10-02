@@ -427,3 +427,17 @@ refusal is still `SS021`, and names the first use.
 - **Mutation check:** the route's 10 mutants are all detected (`plan-d-name.mjs`): the wildcard, the organization,
   an archived variant, a product not released, an unclassified variant, no price at the store, the variant's name,
   the limit, the barcode, and the key. The scan's 9 mutants were run again after the refactor, and all are detected.
+
+## 14. Owner decision D-16 in Domain 4 (2026-10-02)
+
+- **Reading a receipt needs `Sale.Create`** (Q13), not `Sale.View`. It is receipt issuance, the cashier's work. The
+  sales list and a sale's detail stay under `Sale.View` (`MS-02`).
+  - A test proves both.
+  - Its mutant is detected (`plan-e1.mjs` R01), and `plan-b3.mjs`'s R01 was repointed at the new key.
+- **A disabled till goes back into service** with `Device.Disable` and a reason (Q6, `HD-32`). The test that proved the
+  edge refused now proves this, and that the till then trades again. `plan-d4-edges.mjs`'s V02, which mutated the old
+  refusal, is retired.
+- **A card tender's keys are in the data** (Q1–Q3): submit under `Sale.Create`, capture under `Payment.Capture`, void
+  under `Payment.Void`. The card path itself is not built yet; that is Phase E's card step.
+- **Reopening a shift stays unbuilt.** D-16 names `Shift.Reopen`, but what the recount counts, and what happens to the
+  float already handed on, is not specified (OQ-033).

@@ -521,6 +521,25 @@ fallback is a design that holds either answer, not a guess at the answer.
 - *Suggested interim, once the migration is authorized:* a threshold of zero, so that every manual weight needs a
   reason, as OQ-020 does for the shift variance.
 
+### OQ-033 — Reopening a closed shift: what the recount counts, and the money already handed on
+
+- **Unknown:** D-16 names the key (`Shift.Reopen`). `SM-56` and `SM-57` give the path: `Closed → Reopened →
+  Reconciling → Closed`. Each recount is a new pass, and the original count stands. Three things that path needs are
+  not specified:
+  1. *The drawer.* A recount happens in `Reconciling`, and a drawer has at most one shift `Open` or `Reconciling`
+     (`CD-01`, `CD-03`). Once the next shift has opened at that drawer, the reopened shift cannot be recounted until
+     the next one closes, and by then its drawer holds the next shift's money. What is the recount a count of?
+  2. *The closing float.* The first close declared a closing float and handed it on (`CD-20`), and the next shift
+     counted its own opening float (`CD-10`). Closing the reopened shift again would declare a second. Is it declared
+     again, carried over, or not at all? And what does the recount's expected amount (`CD-06`) include?
+  3. *Who closed it.* The schema clears `closed_by` and `closed_at` while a shift is not `Closed`
+     (`ck_cash_shift_closed_when`), so a reopen removes the first close from the row. Its audit event keeps it.
+     Confirm that is the record intended.
+- **Why not answerable from `/docs`:** the documents give the path and its controls (a reason, the audit, the standing
+  report: `CD-26`), not the money.
+- **Blocked:** the reopen edge. The key exists in the catalogue (D-16); the edge does not, so a reopen still refuses.
+- *Meanwhile:* reopening is not built, as D4 §8 has said since Domain 4's design.
+
 ## How to use this file
 
 - Add an entry the moment you hit something the specification does not answer. Then continue with a different task.

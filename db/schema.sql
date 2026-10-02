@@ -1693,6 +1693,40 @@ COMMENT ON FUNCTION public.freeze_used_quantity_kind() IS 'Cites: PR-14, RT-491.
 
 
 --
+-- Name: grant_to_complete_roles(text[]); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.grant_to_complete_roles(p_keys text[]) RETURNS integer
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+  v_granted integer;
+BEGIN
+  INSERT INTO role_permission (role_id, organization_id, permission_key, granted_by)
+  SELECT r.id, r.organization_id, k.key,
+         (SELECT g.granted_by FROM role_permission g WHERE g.role_id = r.id ORDER BY g.granted_at, g.id LIMIT 1)
+  FROM role r CROSS JOIN unnest(p_keys) AS k(key)
+  WHERE r.archived_at IS NULL
+    AND NOT EXISTS (SELECT 1 FROM role_permission g
+                    WHERE g.role_id = r.id AND g.permission_key = k.key AND g.revoked_at IS NULL)
+    AND NOT EXISTS (SELECT 1 FROM permission p
+                    WHERE p.key <> ALL (p_keys)
+                      AND NOT EXISTS (SELECT 1 FROM role_permission g
+                                      WHERE g.role_id = r.id AND g.permission_key = p.key AND g.revoked_at IS NULL));
+  GET DIAGNOSTICS v_granted = ROW_COUNT;
+  RETURN v_granted;
+END
+$$;
+
+
+--
+-- Name: FUNCTION grant_to_complete_roles(p_keys text[]); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.grant_to_complete_roles(p_keys text[]) IS 'Cites: AC-01, AC-02, D-01, D-16. Gives every live role that holds every other catalogue key the keys named, so that a role holding everything (the Owner''s, actors-and-roles s3.2, s4) still does when keys are added. Each grant names whoever granted the role its first key, as onboarding records the Owner granting their own. For migrations only.';
+
+
+--
 -- Name: gtin_check_digit_valid(text); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -11475,4 +11509,5 @@ INSERT INTO public.schema_migrations (version) VALUES
     ('20261001120000'),
     ('20261001120100'),
     ('20261001130000'),
-    ('20261001140000');
+    ('20261001140000'),
+    ('20261002100000');

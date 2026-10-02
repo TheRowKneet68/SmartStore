@@ -339,8 +339,12 @@ export async function saleRoutes(
     return { items: rows, next: last === null ? null : String(last), before: last };
   });
 
-  /** The receipt of a sale of this store (`SP-57`, `SP-59`, `SP-60`). */
-  app.get('/stores/:storeId/sales/:saleId/receipt', inStore('Sale.View'), async (request) => {
+  /**
+   * The receipt of a sale of this store (`SP-57`, `SP-59`, `SP-60`). Reading it is receipt issuance, the cashier's
+   * work, so it needs `Sale.Create` (owner decision D-16, Q13). The sales list and one sale's detail stay under
+   * `Sale.View`.
+   */
+  app.get('/stores/:storeId/sales/:saleId/receipt', inStore('Sale.Create'), async (request) => {
     const { saleId } = SaleRef.parse(request.params);
     const found = await one<{ id: string }>(pool, 'SELECT id FROM sale WHERE id = $1 AND store_id = $2', [saleId, request.storeId]);
     if (found === undefined) throw new AppError(404, 'not_found', 'There is no such sale in this store.');
