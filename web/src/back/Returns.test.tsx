@@ -302,6 +302,22 @@ describe('posting, the window, the late approval and cancelling (RR-10, RR-11, A
     expect(screen.queryByLabelText('Item')).toBeNull();
   });
 
+  it('RR-01: a posted return offers a refund of it to someone who may issue refunds, and only then', async () => {
+    const posted = { ...oneLine, status: 'Posted' };
+    serve({ [LIST]: { body: { items: [row({ status: 'Posted', lines: 1 })], next: null } }, ...detailRoutes(posted) });
+    const started = vi.fn();
+    const { unmount } = render(<Returns storeId="s1" permissions={[...ALL, 'Sale.Refund']} onRefund={started} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Open return 7' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Refund this return' }));
+    expect(started).toHaveBeenCalledWith('r1');
+    unmount();
+    serve({ [LIST]: { body: { items: [row({ status: 'Posted', lines: 1 })], next: null } }, ...detailRoutes(posted) });
+    render(<Returns storeId="s1" permissions={ALL} onRefund={started} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Open return 7' }));
+    await screen.findByRole('heading', { name: /Return 7 of sale 42/ });
+    expect(screen.queryByRole('button', { name: 'Refund this return' }), 'Sale.Refund is the key').toBeNull();
+  });
+
   it('AC-01: a manager who only approves late sees the approval and nothing else to change', async () => {
     serve({ [LIST]: { body: { items: [row({ lines: 1 })], next: null } }, ...detailRoutes(oneLine) });
     await openFirst(['Return.View', 'Return.Approve', 'Sale.View']);

@@ -83,7 +83,8 @@ const trim = (quantity: string): string => (quantity.includes('.') ? quantity.re
 const when = (date: string) => new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(new Date(`${date}T00:00:00`));
 const operation = (): string => crypto.randomUUID();
 
-export function Returns({ storeId, permissions }: { storeId: string; permissions: string[] }) {
+/** `onRefund` starts a refund of a posted return on the refunds screen (`RR-01`), for someone who may issue refunds (`Sale.Refund`). */
+export function Returns({ storeId, permissions, onRefund }: { storeId: string; permissions: string[]; onRefund?: (returnId: string) => void }) {
   const [open, setOpen] = useState<string | null>(null);
   const canCreate = permissions.includes('Return.Create');
   if (open !== null) {
@@ -95,6 +96,7 @@ export function Returns({ storeId, permissions }: { storeId: string; permissions
         canApprove={permissions.includes('Return.Approve')}
         canSeeSales={permissions.includes('Sale.View')}
         canSeeLocations={permissions.includes('Inventory.View')}
+        onRefund={onRefund !== undefined && permissions.includes('Sale.Refund') ? onRefund : undefined}
         onBack={() => setOpen(null)}
       />
     );
@@ -228,6 +230,7 @@ function ReturnDetail({
   canApprove,
   canSeeSales,
   canSeeLocations,
+  onRefund,
   onBack,
 }: {
   storeId: string;
@@ -236,6 +239,7 @@ function ReturnDetail({
   canApprove: boolean;
   canSeeSales: boolean;
   canSeeLocations: boolean;
+  onRefund: ((returnId: string) => void) | undefined;
   onBack: () => void;
 }) {
   const [doc, setDoc] = useState<ReturnDoc | null>(null);
@@ -362,6 +366,13 @@ function ReturnDetail({
         </table>
       )}
 
+      {doc.status === 'Posted' && onRefund !== undefined && (
+        <div className="actions">
+          <button type="button" className="primary" onClick={() => onRefund(doc.id)}>
+            Refund this return
+          </button>
+        </div>
+      )}
       {draft && canCreate && <AddLine storeId={storeId} doc={doc} sale={sale} locations={locations} onAdded={() => act(async () => undefined, 'Line added.')} />}
       {draft && canCreate && (
         <div className="actions">

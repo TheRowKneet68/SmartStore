@@ -1505,3 +1505,22 @@ Append-only. One dated line per step, including failed and abandoned attempts.
   - **Not here:** linking a posted return to a refund (the Refunds screen, next); the store's default disposition (reading settings needs `Config.Store`, so the person chooses); who
     opened or approved (the API returns ids, not names).
   - **Tests:** web 19 new, plus 2 in `App.test.tsx` (Returns appears with `Return.View` only). The web typechecks.
+- 2026-10-02 — **UI, step 2: the Refunds screen** (`web/src/back/Refunds.tsx`, `Refunds.test.tsx`, 29 tests; and `Returns` gains "Refund this return", 1 test). The second of the owner's five screens.
+  - **Draft, from a sale:** find the sale by number (or arrive from a posted return); each refundable item shows **the most it can still be refunded** (settled less held, from the sale's detail), an item with nothing
+    left is not offered, and choosing an item fills in that most for the person to **only reduce** (agreed in the owner's OQ-035 table, item 6); more than is left is refused in place, and a server refusal that names
+    what remains (`SS049`) is shown as the amount to reduce to. Where the money goes is chosen from the sale's own tenders or as cash from the drawer, and is sent as the server takes it (`OriginalTender` with the payment, or
+    `Cash` with none). A reason is required with no return (`RR-35`) and optional with one. With a return chosen, **only the lines that return took back are offered** and each shows how much came back (`SS051`).
+  - **Draft, from a card payment with no sale (D-18):** the payments the report calls `CapturedNoSale` (read with `Payment.View`) are listed with what each can still give back; the amount starts at that and can
+    only be reduced; a reason is required; and the body is exactly the strict shape the server takes (`clientOperationId`, `method`, `paymentId`, `amount`, `reasonCodeId`). `SS058` is shown in money.
+  - **View:** a list (newest first, by status, "show more" on the server's cursor) with what each is for, its status in words, how it is paid, and the amount in the store currency; a detail with its lines, tax and status.
+    A refund with no sale says so. A refund that went through the **simulated gateway says so** ("Simulated card gateway: no real money moved"), in the list and the detail (ADR-31 §13).
+  - **Acts, each only with its own key (`UX-05`, `UX-08`):** send for approval, withdraw a draft and cancel (`Sale.Refund`, with a reason chosen, never typed); approve (`Sale.Refund.Large.Approve`; without it the screen says
+    someone else must, and the server's refusal of the submitter is shown in place); pay (`Refund.Pay`): **cash on the transition endpoint**, **a card at its own route** (`PY-36`); retry a failed card refund at its route
+    (`Sale.Refund`); **cancel a failed refund** (D-19) and a refund the provider has not confirmed, saying that cancelling releases the money held. A failed or unconfirmed card refund is shown as a state with its next
+    step, not only an error, and is reloaded.
+  - **Away from a till:** a cash refund is drafted and paid at one till (D-17, `PY-27`), so the cash choices are shown, explained and cannot be chosen, and a cash refund's Pay is disabled with the reason. The screen takes
+    `atTill`; the back office passes false. The till will pass true when the card panel and the till tools are built (step 3).
+  - **Coordination with the other session:** the same two shapes as step 1. The committed `App.tsx`/`App.test.tsx` are the committed files plus the Refunds tab, its state and the "Refund this return" hand-over; they were
+    tested in a clean checkout of HEAD (65 tests, typecheck clean). The working `App.tsx` has the same entry in their groups and their `NotYet.tsx` "Refunds" placeholder is **removed**, because the screen exists. Their files stay uncommitted.
+  - **Not here:** the card panel on the sale screen, the void action and the payments report (steps 3 to 5); the refund's tax per line is shown but computed by the server; who drafted or approved (ids only).
+  - **Tests:** web 29 new + 1 (`Returns`) + 2 (`App`). The web typechecks. Not run in a real browser.

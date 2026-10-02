@@ -5,6 +5,7 @@ import { check, problemOf, ProblemNotice, type Problem } from './lib/Problem.tsx
 import { People } from './back/People.tsx';
 import { Prices } from './back/Prices.tsx';
 import { ReferenceData } from './back/Reference.tsx';
+import { Refunds } from './back/Refunds.tsx';
 import { Returns } from './back/Returns.tsx';
 import { Roles } from './back/Roles.tsx';
 import { ShiftReview } from './back/Shifts.tsx';
@@ -178,12 +179,15 @@ function BackOffice({ store, organization, stores, onTillSet }: { store: Store; 
     ...(store.permissions.includes('Cash.Count.View') ? [['shifts', 'Shifts'] as const] : []),
     ...(store.permissions.includes('Device.View') ? [['till', 'Till set-up'] as const] : []),
     ...(store.permissions.includes('Return.View') ? [['returns', 'Returns'] as const] : []),
+    ...(store.permissions.includes('Refund.View') ? [['refunds', 'Refunds'] as const] : []),
     ...(organization.includes('Employee.View') ? [['people', 'People'] as const] : []),
     ...(organization.includes('Role.View') ? [['roles', 'Roles'] as const] : []),
     ...(organization.includes('Product.View') || organization.includes('Tax.View') ? [['reference', 'Units, tax and brands'] as const] : []),
     ...(organization.includes('Product.View') && organization.includes('Price.View') ? [['prices', 'Prices'] as const] : []),
   ];
   const [section, setSection] = useState<string>(sections[0]?.[0] ?? 'till');
+  // A refund of a posted return starts on the Returns screen and opens on the Refunds screen.
+  const [refundFrom, setRefundFrom] = useState<string | null>(null);
   const currency = { code: store.currencyCode, exponent: store.minorUnitExponent };
   return (
     <>
@@ -199,7 +203,9 @@ function BackOffice({ store, organization, stores, onTillSet }: { store: Store; 
       {section === 'shifts' ? (
         <ShiftReview storeId={store.id} currency={currency} canAcknowledge={store.permissions.includes('Cash.Variance.Acknowledge')} />
       ) : section === 'returns' ? (
-        <Returns storeId={store.id} permissions={store.permissions} />
+        <Returns storeId={store.id} permissions={store.permissions} onRefund={(id) => (setRefundFrom(id), setSection('refunds'))} />
+      ) : section === 'refunds' ? (
+        <Refunds storeId={store.id} permissions={store.permissions} currency={currency} startFromReturn={refundFrom} onStarted={() => setRefundFrom(null)} />
       ) : section === 'people' ? (
         <People permissions={organization} stores={stores} />
       ) : section === 'roles' ? (

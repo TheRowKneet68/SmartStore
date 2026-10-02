@@ -201,6 +201,24 @@ describe('the till shell (UX-35, UX-52, UX-07, UX-08)', () => {
     expect(screen.queryByRole('button', { name: 'Returns' })).toBeNull();
   });
 
+  it('UX-05, UX-08, D-17: Refund.View held in the store adds Refunds, and without it there is none', async () => {
+    const manager = { ...atTill, terminal: null, stores: [{ ...store, permissions: ['Cash.Count.View', 'Refund.View'] }] };
+    serve({ 'GET /api/v1/session': manager, 'GET /api/v1/stores/s1/shifts': { items: [] }, 'GET /api/v1/stores/s1/refunds?limit=50': { items: [], next: null } });
+    render(<App />);
+    expect(await screen.findByRole('heading', { name: 'Shifts' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Refunds' }));
+    expect(await screen.findByRole('heading', { name: 'Refunds' })).toBeTruthy();
+    expect(await screen.findByText('No refunds to show.')).toBeTruthy();
+  });
+
+  it('UX-08: without Refund.View there is no Refunds', async () => {
+    const manager = { ...atTill, terminal: null, stores: [{ ...store, permissions: ['Cash.Count.View'] }] };
+    serve({ 'GET /api/v1/session': manager, 'GET /api/v1/stores/s1/shifts': { items: [] } });
+    render(<App />);
+    expect(await screen.findByRole('heading', { name: 'Shifts' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Refunds' })).toBeNull();
+  });
+
   it('UX-07, MS-05: an employee with no store access sees an empty workspace that says who to ask', async () => {
     serve({ 'GET /api/v1/session': { ...atTill, stores: [], terminal: null } });
     render(<App />);
