@@ -873,3 +873,28 @@ describe('owner decision D-18: the money of a payment that never became a sale g
     expect((await call('GET', `${s.store}/refunds/${made.json().id}`, viewer)).json()).toMatchObject({ saleId: null, paymentId, lines: [] });
   });
 });
+
+describe('what the database holds about a refund with no sale (D-18)', () => {
+  it('RR-01, RR-35, PY-25, SS050: the table refuses a refund with no sale that names a return, tax, no reason, or a payment of another store', async () => {
+    const s = await shop();
+    const { paymentId } = await orphan(s);
+    const other = await shop();
+    const otherOrphan = await orphan(other);
+    const insert = (over: Json) => {
+      const row: Json = {
+        store_id: s.storeId, organization_id: s.organizationId, client_operation_id: randomUUID(), method: 'OriginalTender',
+        payment_id: paymentId, amount: 100, tax_amount: 0, currency_code: 'XTS', reason_code_id: s.reason,
+        created_by: s.ownerEmployeeId, status_changed_by: s.ownerEmployeeId, ...over,
+      };
+      const columns = Object.keys(row);
+      return db.app.query(`INSERT INTO refund (${columns.join(', ')}) VALUES (${columns.map((_, i) => `$${i + 1}`).join(', ')})`, columns.map((c) => row[c]));
+    };
+    expect(await sqlState(insert({})), 'the shape that is allowed').toBeUndefined();
+    expect(await sqlState(insert({ tax_amount: 1 })), 'no sale charged any tax').toBe('23514');
+    expect(await sqlState(insert({ reason_code_id: null })), 'a reason').toBe('23514');
+    expect(await sqlState(insert({ payment_id: null, method: 'Cash' })), 'a cash refund names a sale').toBe('23514');
+    expect(await sqlState(insert({ customer_return_id: randomUUID() })), 'no return without a sale').toBe('23514');
+    expect(await sqlState(insert({ payment_id: otherOrphan.paymentId })), "another store's payment").toBe('SS050');
+    expect(await sqlState(insert({ currency_code: 'NPR' })), 'another currency').toBeDefined();
+  });
+});
