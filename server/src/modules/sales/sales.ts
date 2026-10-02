@@ -81,7 +81,22 @@ export interface SaleSummary {
   tendered: number;
   change: number;
   receiptStatus: string;
-  lines: { lineNumber: number; description: string; quantity: string; unitPrice: number; lineTotal: number }[];
+  /** `Completed`, then `PartiallyReturned` and `Returned` as returns post: a cache of the line counters (`SP-66`). */
+  status: string;
+  /** The captured payments, so a refund can name the tender it goes back to (`PY-25`). */
+  payments: { paymentId: string; methodType: string; amount: number }[];
+  /** Each line carries what has come back and gone back, so a return or refund screen knows what is left (`RR-14`, `RR-03`). */
+  lines: {
+    saleLineId: string;
+    lineNumber: number;
+    description: string;
+    quantity: string;
+    unitPrice: number;
+    lineTotal: number;
+    returnedQuantity: string;
+    settledAmount: number;
+    refundedAmount: number;
+  }[];
 }
 
 interface PlannedLine {
@@ -99,20 +114,27 @@ interface PlannedLine {
 }
 
 async function summary(db: Queryable, saleId: string): Promise<SaleSummary> {
-  const sale = await db.query<Omit<SaleSummary, 'lines' | 'tendered'> & { tendered: number }>(
+  const sale = await db.query<Omit<SaleSummary, 'lines' | 'payments' | 'tendered'> & { tendered: number }>(
     `SELECT s.id AS "saleId", s.document_number AS "documentNumber", s.business_date::text AS "businessDate",
             s.completed_at AS "completedAt", s.currency_code AS "currencyCode", s.subtotal, s.tax_total AS "taxTotal",
             s.total_due AS "totalDue", s.total_due + s.change_given AS tendered, s.change_given AS change,
-            s.receipt_status AS "receiptStatus"
+            s.receipt_status AS "receiptStatus", s.status
      FROM sale s WHERE s.id = $1`,
     [saleId],
   );
   const lines = await db.query<SaleSummary['lines'][number]>(
-    `SELECT line_number AS "lineNumber", description, quantity::text AS quantity, unit_price AS "unitPrice", line_total AS "lineTotal"
+    `SELECT id AS "saleLineId", line_number AS "lineNumber", description, quantity::text AS quantity, unit_price AS "unitPrice",
+            line_total AS "lineTotal", returned_quantity::text AS "returnedQuantity", settled_amount AS "settledAmount",
+            refunded_amount AS "refundedAmount"
      FROM sale_line WHERE sale_id = $1 ORDER BY line_number`,
     [saleId],
   );
-  return { ...sale.rows[0]!, lines: lines.rows };
+  const payments = await db.query<SaleSummary['payments'][number]>(
+    `SELECT p.id AS "paymentId", p.method_type AS "methodType", p.amount
+     FROM sale s JOIN payment p ON p.checkout_id = s.checkout_id WHERE s.id = $1 AND p.status = 'Captured' ORDER BY p.sequence_number`,
+    [saleId],
+  );
+  return { ...sale.rows[0]!, payments: payments.rows, lines: lines.rows };
 }
 
 const one = async <T>(db: Queryable, sql: string, params: unknown[]): Promise<T | undefined> =>

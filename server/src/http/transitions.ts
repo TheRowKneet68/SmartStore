@@ -37,6 +37,12 @@ export interface MachineBinding {
    * example inventory-domain §5's opening balance). It returns the edge's own key otherwise.
    */
   keyFor?: (subject: Record<string, unknown>, event: string, key: string) => string;
+  /**
+   * The column that records why the subject entered `to`, when its table keeps one (for example `cancel_reason_code_id`).
+   * It is set from the request's reason in the same statement as the state, because a table's own check ties the two
+   * together. A request with no reason is refused before the subject is touched (`SS055`, `BI-40`).
+   */
+  reasonColumnFor?: (to: string) => string | null;
   /** Work the transition's use case does with it, in its transaction (for example SM-47's session revocation). */
   after?: (client: pg.PoolClient, subjectId: string, from: string, to: string, principal: Principal, correlationId: string) => Promise<void>;
 }
@@ -95,7 +101,7 @@ export async function transitionRoutes(
       return await withTransaction(
         pool,
         auditContext(request, { clientOperationId: body.clientOperationId ?? null, reasonCodeId: body.reasonCodeId ?? null }),
-        (c) => transition(c, principal, binding, body.event, body.subject, request.id, payload),
+        (c) => transition(c, principal, binding, body.event, body.subject, request.id, payload, body.reasonCodeId),
         // A transition may move stock (posting an adjustment), so it waits for a balance only so long (IV-23).
         { lockTimeoutMs: options.lockTimeoutMs },
       );
@@ -119,6 +125,7 @@ async function transition(
   subjectId: string,
   correlationId: string,
   payload: unknown,
+  reasonCodeId?: string,
 ): Promise<{ subject: string; state: string; changed: boolean }> {
   const store = binding.storeColumn === null ? 'NULL::uuid' : binding.storeColumn;
   const extra = (binding.extraColumns ?? []).map((column) => `, ${column}`).join('');
@@ -170,11 +177,18 @@ async function transition(
 
   // The database enforces the edge again, records its event and requires its reason (SS004, SS055; D6).
   const actors = [binding.actorColumn, ...(binding.actorColumnsFor?.(step.to_state) ?? [])].map((column) => `${column} = $3`).join(', ');
-  await c.query(`UPDATE ${binding.table} SET ${binding.stateColumn} = $2, ${actors} WHERE id = $1`, [
-    subjectId,
-    step.to_state,
-    principal.employeeId,
-  ]);
-  await binding.after?.(c, subjectId, subject.state, step.to_state, principal, correlationId);
-  return { subject: subjectId, state: step.to_state, changed: true };
+  const reasonColumn = binding.reasonColumnFor?.(step.to_state) ?? null;
+  if (reasonColumn !== null && reasonCodeId === undefined) {
+    throw new AppError(409, 'SS055', 'This needs a reason. Choose one and try again.');
+  }
+  await c.query(
+    `UPDATE ${binding.table} SET ${binding.stateColumn} = $2, ${actors}${reasonColumn === null ? '' : `, ${reasonColumn} = $4`} WHERE id = $1`,
+    [subjectId, step.to_state, principal.employeeId, ...(reasonColumn === null ? [] : [reasonCodeId])],
+  );
+  if (binding.after === undefined) return { subject: subjectId, state: step.to_state, changed: true };
+  await binding.after(c, subjectId, subject.state, step.to_state, principal, correlationId);
+  // The use case may have moved the subject on (a drawer refund is paid, and so completed, as it is submitted), so the
+  // answer is the state it is in now.
+  const now = await c.query<{ state: string }>(`SELECT ${binding.stateColumn} AS state FROM ${binding.table} WHERE id = $1`, [subjectId]);
+  return { subject: subjectId, state: now.rows[0]!.state, changed: true };
 }
