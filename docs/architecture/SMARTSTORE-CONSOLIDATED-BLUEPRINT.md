@@ -1677,3 +1677,13 @@ refunds, and nothing else. The header's counts (migrations, tables, functions, t
 **Still not built in this area:** voiding a payment and the reconciliation job (`OQ-036` item 2), the provider per store (`PY-09`),
 the card's display fields (`PY-43`), reading returns and refunds (no key, `OQ-035`), settle and close of a return (`OQ-023`),
 the notification of a failed refund, and offline card payment.
+
+---
+
+## 14. Update, 2026-10-02, owner decision D-17
+
+Supersedes §13's "reading returns and refunds (no key)" and the permission count of §4.2 (122 keys). The catalogue holds **124**:
+`Return.View` and `Refund.View` are new. Returns and refunds are read at `GET /stores/:storeId/returns[/:id]` and
+`…/refunds[/:id]`. A draft refund may be withdrawn (`Draft → Cancelled` on `cancel`, `Sale.Refund`, a reason; one migration,
+`20261002120000`, so the migration count is 15). A drawer refund is paid by someone signed in at its till. `OQ-035` is closed;
+tests are 483. Still open in this area: the orphaned-payment path, `OQ-036` item 2.

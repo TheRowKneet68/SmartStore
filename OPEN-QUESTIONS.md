@@ -610,6 +610,16 @@ fallback is a design that holds either answer, not a guess at the answer.
     - The catalogue’s own convention is `.View`, not `.Read`, so a new key would be `Return.View` and `Refund.View`. A new
       key grows the catalogue from 122 to 123 or 124 and needs a migration like D-16’s.
 
+- **Closed by owner decision D-17, 2026-10-02.** The owner decided the four open items of the table:
+  - **4.** The person who pays a drawer refund is signed in at the refund's till. Built.
+  - **5.** A draft refund may be withdrawn, with the required edge. Built as `Draft → Cancelled` on `cancel`, under
+    `Sale.Refund` with a reason, as D-16 Q9 names the other cancels. The owner did not name the key or the reason, so that
+    reading stands for the owner's veto.
+  - **7 and 8.** The keys are `Return.View` and `Refund.View`, new. Built, with the routes that read returns and refunds.
+
+  Items 1 to 3 and 6 were answered earlier in this entry and stand. Nothing in OQ-035 is open. Recorded in
+  OWNER-DECISIONS D-17, D5 §12 and D7 §12.
+
 ### OQ-036 — Card payments through the simulated gateway: what the specification leaves out
 
 - **Unknown:** the card path was built from `PY-07` to `PY-48` and left these unsettled. Each was built the narrowest

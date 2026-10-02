@@ -394,3 +394,31 @@ Not built around: an edge is the owner's to add.
 
 Not built: the failure **notification** (`SM-41`, `RR-23`), with the notification outbox; the refund **cap per tender**
 (OQ-023 item 6); the reconciliation job (`PY-40`).
+
+## 12. Owner decision D-17 (2026-10-02)
+
+Migration `20261002120000_d17_return_refund_view_and_withdraw.sql`; code `returns.ts`, `refunds.ts`; tests in `returns.test.ts`.
+
+- **A draft refund may be withdrawn** (item 5). `Draft → Cancelled` on `cancel`, under `Sale.Refund` (D-16 Q9), with a live reason
+  (`SM-42`, `BI-40`), audited as `Refund.StateChange`, through the transition endpoint like the other cancels. A draft holds
+  nothing (§4.3: the hold is taken at `Processing`), so nothing is released, and its lines stay as drafted (`AP-03`). It is final:
+  a withdrawn refund cannot be submitted. Not offered from `PendingApproval`. A withdrawn draft was never submitted, so
+  `ck_refund_submitted_when` gains its one exception, a cancelled refund that was never approved (`SM-03`). The key and reason
+  are this design's reading of D-16 Q9, raised for the owner's veto (OWNER-DECISIONS D-17).
+- **The payer is at the refund's till** (item 4, `PY-27`). A drawer refund is drafted at a till and goes out of that till's
+  drawer and shift (§4.4), so the person who pays it, `submit to provider`, must be signed in at that till. Anyone else, and a
+  back-office session, is refused `not_at_refund_till`, whole: nothing is held and nothing is paid. A card refund has no till and
+  is not affected. It is an application rule, in the refund machine's before-hook, because the session's till is known only to
+  the application.
+- **Returns and refunds are read** (items 7 and 8). `GET /stores/:storeId/returns` and `…/returns/:id` under `Return.View`;
+  `GET /stores/:storeId/refunds` and `…/refunds/:id` under `Refund.View`. Newest first, a page at a time by document number
+  (`limit`, `after`, answering `{ items, next }`), filtered by `status` or `saleId`. A list row carries the document and its
+  sale's number; one document carries its lines. Another store's document does not exist to the caller (`MS-04`). Neither key is
+  implied by a write key: `Return.Create` does not read, and `Sale.Refund` does not read.
+
+| Rule | Test (`returns.test.ts`) |
+|---|---|
+| D-17 item 4, `PY-27` | A drawer refund is paid at its till, and refused whole at another till and at the back office |
+| D-17 item 5, `SM-42`, `BI-40` | A draft is withdrawn with a reason under `Sale.Refund`; no key is refused; withdrawn is final; one past `Draft` is not withdrawable |
+| D-17 items 7 and 8, `MS-02` | Each read is its own key, in the store, paged and filtered; no write key stands in; another store's document is `404`; no session is `401` |
+| D-17 | The catalogue is 124; the Owner holds both keys; the edge contract and the audit table name the new edge |

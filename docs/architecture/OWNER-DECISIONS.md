@@ -526,6 +526,37 @@ and design documents (D4, D7) wait for the owner's go-ahead.
 
 ---
 
+## D-17 — Reading returns and refunds, the payer at the till, and withdrawing a draft refund
+
+**Status:** DECIDED — 2026-10-02 (owner). Closes the open items of `OQ-035` (the owner's table, items 4, 5, 7 and 8).
+Numbered 17: `D-15` is held by another session's uncommitted work, and `D-16` is recorded above.
+
+**Decision:**
+
+| Item | Question | Decision |
+|---|---|---|
+| 4 | Must the person who pays a refund be at the refund's till? | **Yes.** A drawer refund is paid by someone signed in at the till it was drafted at. A card refund has no till and is not affected |
+| 5 | May a draft refund be withdrawn? | **Yes, with the required state-machine edge.** `Draft → Cancelled`, on the refund's `cancel` event |
+| 7 | The key for reading returns | **`Return.View`**, new to the catalogue |
+| 8 | The key for reading refunds | **`Refund.View`**, new to the catalogue |
+
+The owner's earlier answers in the same table stand, and are what was built: the creating keys stay `Return.Create` and
+`Sale.Refund`; a late approver is another employee holding `Return.Approve`; the server works out the most a line can still
+have refunded and the person may only reduce it.
+
+**What it adds.** Two keys, so the catalogue grows from 122 to 124. One edge. One application rule.
+
+**One thing the owner did not name, and how it was read.** Item 5 asks for "the required state-machine edge" and does not say
+which permission, reason or audit it carries. It is built as the refund's other cancels are (D-16 Q9): key `Sale.Refund`, a
+reason required, audit type `Refund.StateChange`. Nothing is held in `Draft`, so withdrawing releases nothing. Raised for the
+owner's veto; no new key was invented for it. A refund past `Draft` is not withdrawable from `PendingApproval`: that edge was
+not asked for.
+
+**Applied (2026-10-02):** migration `20261002120000_d17_return_refund_view_and_withdraw.sql`; D5 §12; D7 §12;
+`actors-and-roles.md` §2.4 and §2.5; `state-machines.md` §22.7; OPEN-QUESTIONS `OQ-035`.
+
+---
+
 ## Decision log
 
 | ID | Question | Answer | Date |
@@ -545,3 +576,4 @@ and design documents (D4, D7) wait for the owner's go-ahead.
 | D-13 | RPO/RTO | | |
 | D-14 | `Payment` `Failed` terminal (CON-03) | (PY-54) A customer `Payment` in `Failed` is terminal for that record; a retry is a new `Payment` against the same sale. `Declined` still retryable (PY-14). `SM-30` and `SM-41` unchanged. `SM-53` and `RT-420` reworded, all citations kept. Closes the last Phase 3 blocker | 2026-09-30 |
 | D-16 | Permission keys for the transitions and creations with none (`PERMISSION-KEY-PROPOSAL.md` Q1–Q14) | Reused: `Sale.Create` (card submit; reading a receipt at the till), `Employee.Edit` (back from leave), `Device.Disable` (till re-enable), `Sale.Refund` (refund retry and cancel), `Return.Create` (return cancel), `Config.Organization` (warehouses and storage locations), `Role.Create`/`Role.Edit` (`Config.Roles` authorizes nothing). New: `Payment.Capture`, `Payment.Void`, `Employee.Reactivate`, `Refund.Pay`, `Shift.Reopen` (catalogue 117 → 122). Closes OQ-018, OQ-026, OQ-028 and the key parts of OQ-014, OQ-023, OQ-025; narrows GAP-036 (27 → 20 rows). Documentation applied; implementation waits for the owner's go-ahead | 2026-10-02 |
+| D-17 | Reading returns and refunds; the payer at the till; withdrawing a draft refund (`OQ-035` items 4, 5, 7, 8) | The payer of a drawer refund is signed in at the refund's till. A draft refund may be withdrawn: `Draft → Cancelled` on `cancel`, under `Sale.Refund`, with a reason (read from D-16 Q9; raised for veto). New keys `Return.View` and `Refund.View` (catalogue 122 → 124) | 2026-10-02 |

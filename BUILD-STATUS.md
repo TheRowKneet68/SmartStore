@@ -351,8 +351,9 @@ Step 3 rules, given by the owner on 2026-10-01 with "start Step 3":
 - **Phase C is done:** the permission-key proposal waits for the owner's answer.
 - **2026-10-02: the owner answered it.** The answers are owner decision D-16. The owner said "go" after the report of
   affected files and rule IDs, and the keys are applied (Phase E, step 1: migration `20261002100000_d7_d16_permission_keys.sql`;
-  D7 §11, D4 §14). What Phase E still holds: the locations routes and reopening a shift (OQ-033). Domain 5's application layer
-  (step 2) and the card path through a simulated gateway (step 3) are built.
+  D7 §11, D4 §14). What Phase E still holds: the locations routes, reopening a shift (OQ-033), and the orphaned-payment path (void,
+  reconciliation, OQ-036 item 2). Domain 5's application layer (step 2), the card path through a simulated gateway
+  (step 3) and owner decision D-17 (step 4) are built.
 - **Phase D is under way.** The audit-log read is not built (OQ-024 item 2). The identity admin screens and the
   reference-data screen are written and tested in `web/`; they are committed with their server routes.
 - The UI steps below are the earlier part of this work. U5 is Phase B's fourth step.
@@ -521,8 +522,8 @@ sets the order. Phase A (housekeeping and the push) is done.
 
    **The keys are decided (D-16, 2026-10-02) and applied** (Phase E, step 1; see the log). Q8, a refund's retry under
    `Sale.Refund` while paying it is `Refund.Pay`, was raised back to the owner, who gave no change. **Still to build:**
-   routes for warehouses and storage locations (`Config.Organization`), a key for reading returns and refunds (OQ-035),
-   and the card path's void and reconciliation (OQ-036 item 2). **Domain 5's
+   routes for warehouses and storage locations (`Config.Organization`), and the card path's void and reconciliation
+   (OQ-036 item 2), which is the next step. **Domain 5's
    application layer is built** (step 2 in the log; its focused mutation check is there too). **Not buildable yet:**
    reopening a shift (OQ-033).
 5. **Phase F:**
@@ -1414,3 +1415,25 @@ Append-only. One dated line per step, including failed and abandoned attempts.
   - **Mutation check:** `plan-card.mjs`, 29 mutations: the card sale (the steps, the tender, the keys, the concurrency), the card refund (the routes, the keys, the states) and the gateway's own promises. 26 were detected at once. Three survived: a concurrent record guard and a concurrent save (both now proved by a test of two copies of one resumed request, which also found a real race: the loser was told the card was taken and the sale not saved, when it was saved), and a capture-key check made redundant by the route's earlier one (removed). **29 of 29**, restored byte for byte.
   - **Staging:** BUILD-STATUS and OPEN-QUESTIONS hold another session's uncommitted work, so their staged copies are the
     committed files plus this step's lines only.
+- 2026-10-02 — **Phase E, step 4: owner decision D-17 (`OQ-035` closed).** D5 §12, D7 §12, OWNER-DECISIONS D-17.
+  - **Item 4:** a drawer refund is paid by someone signed in at the till it was drafted at (`not_at_refund_till`, whole: nothing
+    is held or paid). An application rule in the refund machine's before-hook. A card refund is not affected.
+  - **Item 5:** a draft refund may be withdrawn. Migration `20261002120000_d17_return_refund_view_and_withdraw.sql` adds
+    `Draft → Cancelled` on `cancel`, under `Sale.Refund` with a reason, audited as `Refund.StateChange`. **The owner did not
+    name that key or reason:** it is read from D-16 Q9, and raised for the owner's veto. A draft held nothing, so nothing is
+    released. `ck_refund_submitted_when` gained its one exception (a cancelled refund never approved), because a withdrawn
+    draft was never submitted.
+  - **Items 7 and 8:** `Return.View` and `Refund.View` join the catalogue (122 → 124), granted to every role that held all the
+    others. `GET /stores/:storeId/returns[/:id]` and `/refunds[/:id]`, newest first, paged by document number, filtered by
+    status or sale. No write key reads.
+  - **Tests:** 3 new in `returns.test.ts`; the catalogue counts, the edge contract and the audit table updated. Server: 483
+    pass; the server typechecks.
+  - **Mutation check:** `plan-d17.mjs`, 14 mutations (the reads, their keys and scoping, paging and filters, the payer at the till, the edge and its constraint). 13 were detected at once, one of them (the edge) because the migration then refuses to apply. One survived, a refund read outside its own store; a test of another store's refund now detects it. One is not detectable in a test: the migration's grant of the two keys to roles that already hold every other key, because the test database has no such role when the migration runs (the grant function itself is proved by D-16's test, and the Owner's role by onboarding). **13 of 13 detectable, restored byte for byte.**
+  - **Next, the orphaned payments** (`OQ-036` item 2), in two parts. **A, buildable now, no new key:** void a `Pending` or
+    `Authorized` card payment (`Payment.Void`, `PY-13`, the provider asked outside the transaction), and report payments that
+    need a person (`PY-40`): `Pending` past a window, `Authorized` and never captured, `Captured` on an open checkout with no
+    sale. The report is read under `Payment.View` (existing: "see payments and refunds") by a route and by a command like
+    `ledger:check`, because the scheduler is `BQ-02`. **B, waits for the owner:** what returns the money of a payment that was
+    captured and never became a sale. The payment has no way out but a linked refund, and a refund needs a sale.
+  - **Staging:** BUILD-STATUS, OPEN-QUESTIONS, OWNER-DECISIONS and `onboarding.test.ts` hold another session's uncommitted work, so
+    their staged copies are the committed files plus this step's lines only.

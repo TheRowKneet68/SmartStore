@@ -344,3 +344,12 @@ Migration `20261002100000_d7_d16_permission_keys.sql`:
   again by the provider's `System` edges once payments and refunds are bound to the transition endpoint.
 - **Mutation check:** `plan-e1.mjs`, 16 of 16: each edge's key, the catalogue's five, the grant's four conditions, and
   the receipt's key (D4 §14).
+
+## 12. Owner decision D-17 applied (2026-10-02)
+
+Migration `20261002120000_d17_return_refund_view_and_withdraw.sql`:
+- **Two keys join the catalogue,** which now holds 124: `Return.View` and `Refund.View`.
+- **The refund machine gains an edge:** `Draft → Cancelled`, event `cancel`, key `Sale.Refund`, a reason, audit type
+  `Refund.StateChange` (D5 §12). The edge contract in `d7-employee.test.ts` and the audit table in `d6-audit.test.ts` name it.
+- **The Owner's role still holds everything.** `grant_to_complete_roles()` (§11) gives every live role that held every other key
+  the two new ones, in its first granter's name. Onboarding gives the Owner all 124 (`onboarding.test.ts`).
