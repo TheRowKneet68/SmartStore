@@ -194,6 +194,10 @@ fallback is a design that holds either answer, not a guess at the answer.
   list, and the contract's `Closed → Reopened` edge has an `OPEN DECISION` permission (`GAP-036`).
 - **Blocked:** abandoning a count back to trading, and reopening a closed shift (`CD-26`).
 - **Meanwhile:** both are refused (`SS004`); the architecture's fallback for an unkeyed transition is to refuse.
+- **Answered in part, 2026-10-02 (D-16):**
+  - Reopening a closed shift takes `Shift.Reopen`, a new key. The edge is not built yet; it waits for the owner's
+    go-ahead.
+  - Abandoning a count (`Reconciling → Open`) is still undecided, and refused.
 
 ### OQ-015 — Cash drawer arithmetic: change and cash refunds
 
@@ -244,6 +248,11 @@ fallback is a design that holds either answer, not a guess at the answer.
   sale's completion transaction, and its creation, authorization and capture there are that transition's side effects,
   authorized by `Sale.Create`. No cash payment is ever submitted or captured on its own. Card submit, capture and void
   remain separate transitions with `OPEN DECISION` permissions, and the gate refuses them.
+- **RESOLVED 2026-10-02 (D-16):**
+  - Submit takes `Sale.Create`, capture takes `Payment.Capture`, and void takes `Payment.Void`. The last two are new
+    keys.
+  - Card payments can be built once the owner gives the go-ahead.
+  - The Step 3 reading for cash still stands for the owner's veto: D-16 answered questions about card payments.
 
 ### OQ-019 — Which location a till sells from
 
@@ -307,6 +316,11 @@ fallback is a design that holds either answer, not a guess at the answer.
      to the card. *Meanwhile:* no such cap; the per-line and per-sale bounds hold.
 - **Why not answerable from `/docs`:** permission keys are the owner's to name; the rest is silent or contradictory.
 - **Blocked:** paying any refund in Step 3 (the first point). Nothing else.
+- **Answered in part, 2026-10-02 (D-16):**
+  - Paying a refund (`submit to provider`) takes `Refund.Pay`, a new key.
+  - Cancelling a refund takes `Sale.Refund`, and cancelling a return takes `Return.Create`.
+  - So the first point no longer blocks paying a refund.
+  - A return's `settle` and `close`, and items 1 to 6, stay open.
 
 ### OQ-024 — Audit: vocabulary gaps and two contradictions
 
@@ -382,6 +396,13 @@ fallback is a design that holds either answer, not a guess at the answer.
 - **Why not answerable from `/docs`:** naming permission keys is the owner's (`SM-02d`, as OQ-018 and OQ-023); the
   rest is silent or contradictory.
 - **Blocked:** item 1's features in Step 3. Nothing else.
+- **Item 1 answered, 2026-10-02 (D-16):**
+  - returning from leave takes `Employee.Edit`;
+  - reactivating after suspension takes `Employee.Reactivate`, a new key;
+  - re-enabling a till takes `Device.Disable`;
+  - retrying a failed refund takes `Sale.Refund`.
+
+  In item 5, `Payment.Capture` is now a catalogue key. Items 2 to 7 stay open.
 
 ### OQ-026 — Which permission authorizes managing warehouses and storage locations
 
@@ -399,6 +420,8 @@ fallback is a design that holds either answer, not a guess at the answer.
 - **Blocked:** any location beyond the Default, including the Quarantine, Damaged and ExpiredHold locations that a
   return's non-sellable dispositions need (D5). Put to the owner with the key list before Domain 5 (working
   agreement 8). Nothing else.
+- **RESOLVED 2026-10-02 (D-16):** `Config.Organization`, because locations are organization-global (`D-03`). The routes
+  wait for the owner's go-ahead.
 
 ### OQ-027 — How long a session lasts, and how many failed sign-ins throttle a credential
 
@@ -440,6 +463,8 @@ fallback is a design that holds either answer, not a guess at the answer.
   it is the owner's (`SM-02d`).
 - *Meanwhile:* the routes ask for the narrower `Role.*` keys (D7 §9). `Config.Roles` authorizes nothing yet.
 - **Blocked:** nothing. Put to the owner with the key list before Domain 5 (working agreement 8).
+- **RESOLVED 2026-10-02 (D-16):** as built. `Role.Create` and `Role.Edit` define roles, `Role.Assign` assigns them,
+  and `Config.Roles` authorizes nothing.
 
 ### OQ-029 — May the declared closing float exceed what was counted?
 

@@ -448,6 +448,84 @@ machine table and `BI-25` already stated this and were **not** changed â€” 
 
 ---
 
+## D-16 — Permission keys for the transitions and creations that had none
+
+**Status:** DECIDED — 2026-10-02 (owner). Answers `PERMISSION-KEY-PROPOSAL.md` Q1–Q14. Closes `OQ-018`, `OQ-026` and
+`OQ-028`, and the key parts of `OQ-014`, `OQ-023` and `OQ-025`. Narrows `GAP-036`. Satisfies `SM-02d`: each key is
+named by the owner, none derived from a neighbour.
+
+**Decision:**
+
+| Q | Action | Key | Against the proposal |
+|---|---|---|---|
+| 1 | Card payment: submit (creation → `Pending`, state-machines §22.10) | `Sale.Create` | As recommended |
+| 2 | Card payment: capture (`Authorized` → `Captured`) | **`Payment.Capture`**, new to the catalogue | As recommended (B) |
+| 3 | Card payment: void (`Pending`/`Authorized` → `Voided`) | **`Payment.Void`**, new | B; the recommendation was `Sale.Void` |
+| 4 | Employee: back from leave (`OnLeave` → `Active`, §22.9) | `Employee.Edit` | As recommended |
+| 5 | Employee: reactivate after suspension (`Suspended` → `Active`) | **`Employee.Reactivate`**, new | B; the recommendation was `Employee.Edit` |
+| 6 | Till: re-enable (`Disabled` → `Active`, §22.12) | `Device.Disable` | As recommended |
+| 7 | Refund: pay it (`Approved` → `Processing`, "submit to provider", §22.7) | **`Refund.Pay`**, new | B; the recommendation was `Sale.Refund` |
+| 8 | Refund: retry a failed one (`Failed` → `Processing`) | `Sale.Refund` | As recommended (A) |
+| 9 | Refund: cancel (`Approved`/`Processing` → `Cancelled`) | `Sale.Refund` | As recommended |
+| 10 | Customer return: cancel (`Draft` → `Cancelled`) | `Return.Create` | As recommended |
+| 11 | Warehouses and storage locations: create, rename, mark sellable (`WH-03`) | `Config.Organization` | As recommended |
+| 12 | Defining roles | `Role.Create`/`Role.Edit`; **`Config.Roles` authorizes nothing** | As recommended |
+| 13 | Reading a receipt at the till | `Sale.Create`. `Sale.View` keeps the sales list and one sale's detail | As recommended (B) |
+| 14 | Shift: reopen a closed shift (`Closed` → `Reopened`, §22.11) | **`Shift.Reopen`**, new | B; the recommendation was `Cash.Variance.Acknowledge` |
+
+**The owner's reasons, where the answer differs from the recommendation.** Recorded as given:
+- **Q3.** Voiding a payment authorization is a payment-provider operation. `Payment.Void` gives the authorization
+  model a distinct capability, and avoids making `Sale.Void` broader than necessary.
+- **Q5.** Suspending an employee and restoring access are different security-sensitive actions. A dedicated key lets
+  an organization delegate ordinary employee editing without granting the ability to restore suspended access.
+- **Q7.** Creating or issuing a refund, and actually submitting it for payment, are different operations. A dedicated
+  key gives clearer authorization and audit boundaries.
+- **Q14.** Reopening a closed shift changes the lifecycle of a financially significant document. It is not implied by
+  the ability to acknowledge a cash variance. Its reason and audit requirement stay in force (`CD-26`).
+- **The rest** follow the proposed reuse, because the existing key already represents the operation without
+  materially broadening its authority. Q11 takes `Config.Organization` because warehouses and storage locations are
+  organization-global (`D-03`). Q13 takes `Sale.Create` for reading a receipt at the till, while `Sale.View` keeps
+  the sales list and a sale's detail.
+
+**What it adds to the catalogue.** Five keys, so the catalogue grows from 117 to 122: `Payment.Capture`, `Payment.Void`,
+`Employee.Reactivate`, `Refund.Pay` and `Shift.Reopen`. `Payment.Capture` is the name `SEP-06` already used, so that
+advisory separation from `Payment.Provider.Configure` now applies to a real key. With `Config.Roles` authorizing
+nothing, `SEP-03` (`Config.Roles` with `Role.Assign`) has nothing to separate.
+
+**What it does not decide:**
+- **Which role templates hold the new keys** (actors-and-roles §4). The templates are notation, not data (OQ-025 item
+  5), and none is seeded: onboarding gives the Owner every catalogue key.
+- **A cash tender's capture.** Q1–Q3 were asked for card payments. A cash tender is created, authorized and captured
+  inside the sale's completion, under `Sale.Create` (§22.6). That is OQ-018's Step 3 reading, still listed in
+  BUILD-STATUS for the owner's veto.
+- **The non-key questions:**
+  - OQ-014: abandoning a count;
+  - OQ-023: settling and closing a return, skipped approval, the window's edges, service refunds, refund tax rounding,
+    and a cap per tender;
+  - OQ-025: its items 2 to 7.
+
+  They stay open.
+
+**Noted, not changed.** Q8 puts the retry of a failed refund under `Sale.Refund`, while Q7 puts the first payment
+under `Refund.Pay`. A retry submits the refund for payment again (§22.7, `Failed` → `Processing`). Raised with the
+owner on 2026-10-02. It stands as answered until the owner says otherwise.
+
+**Applied, documentation only (2026-10-02):**
+- `actors-and-roles.md` §2: the five keys added, and the transitions that reused keys now cover named in their rows.
+  `Config.Roles` is marked as authorizing nothing.
+- `state-machines.md` §22:
+  - the permission cells of §22.7, §22.10 and §22.11;
+  - the reversal cells of §22.7, §22.9 and §22.12;
+  - §22.0's census: seven rows leave the no-key bucket (27 → 20), and the catalogue goes from 117 to 122.
+- `OPEN-QUESTIONS.md`: OQ-014, OQ-018, OQ-023, OQ-025, OQ-026 and OQ-028.
+- `PERMISSION-KEY-PROPOSAL.md`: the answers, appended.
+- `PRE-PHASE-3-GAP-REGISTER.md` §7.8: GAP-036 narrowed.
+
+**Not applied yet.** The catalogue migration, the edges' keys, the reopen edge, the receipt read's key, and their tests
+and design documents (D4, D7) wait for the owner's go-ahead.
+
+---
+
 ## Decision log
 
 | ID | Question | Answer | Date |
@@ -466,3 +544,4 @@ machine table and `BI-25` already stated this and were **not** changed â€” 
 | D-12 | Tax config vs legal | | |
 | D-13 | RPO/RTO | | |
 | D-14 | `Payment` `Failed` terminal (CON-03) | (PY-54) A customer `Payment` in `Failed` is terminal for that record; a retry is a new `Payment` against the same sale. `Declined` still retryable (PY-14). `SM-30` and `SM-41` unchanged. `SM-53` and `RT-420` reworded, all citations kept. Closes the last Phase 3 blocker | 2026-09-30 |
+| D-16 | Permission keys for the transitions and creations with none (`PERMISSION-KEY-PROPOSAL.md` Q1–Q14) | Reused: `Sale.Create` (card submit; reading a receipt at the till), `Employee.Edit` (back from leave), `Device.Disable` (till re-enable), `Sale.Refund` (refund retry and cancel), `Return.Create` (return cancel), `Config.Organization` (warehouses and storage locations), `Role.Create`/`Role.Edit` (`Config.Roles` authorizes nothing). New: `Payment.Capture`, `Payment.Void`, `Employee.Reactivate`, `Refund.Pay`, `Shift.Reopen` (catalogue 117 → 122). Closes OQ-018, OQ-026, OQ-028 and the key parts of OQ-014, OQ-023, OQ-025; narrows GAP-036 (27 → 20 rows). Documentation applied; implementation waits for the owner's go-ahead | 2026-10-02 |

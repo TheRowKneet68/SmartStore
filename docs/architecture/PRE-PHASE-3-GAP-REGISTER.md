@@ -306,3 +306,18 @@ No notification or edge-case rule asserts that a customer `Payment` `Failed` can
   Neither gates schema derivation.
 
 **No Phase 3 artifact has been created. The gate condition is met; Phase 3 has still not been started.**
+
+### 7.8 `GAP-036` narrowed by owner decision D-16 (2026-10-02)
+
+Appended; nothing above is changed. The owner named the permission keys that `PERMISSION-KEY-PROPOSAL.md` asked for
+(D-16).
+- **Seven of `GAP-036`'s 27 transitions now carry keys:**
+  - state-machines §22.7: the return's cancel, and the refund's `submit to provider` and cancel;
+  - §22.10: the payment's submit, capture and void;
+  - §22.11: the shift's reopen.
+- **`GAP-036` stays open for the other 20** (state-machines §22.0.2): batches, purchasing, goods receipts, supplier
+  invoices, transfers, and a return's settle and close.
+- **D-16 also named keys outside the 27:** four reversal edges (a refund's retry, an employee's return from leave and
+  reactivation, and a till's re-enable), and managing warehouses and storage locations.
+- Five keys are new, so the catalogue holds 122.
+- `GAP-036` stays non-blocking, as section 5 records.

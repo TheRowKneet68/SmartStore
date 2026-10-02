@@ -349,6 +349,8 @@ Step 3 rules, given by the owner on 2026-10-01 with "start Step 3":
 - **Phase B, finishing Domain 4, is done.** Domain 4's full mutation check detected 126 of 126. A gap found
   afterwards, a sold service's unit kind, is closed by a forward-only migration (Next, item 1.7; D4 §12).
 - **Phase C is done:** the permission-key proposal waits for the owner's answer.
+- **2026-10-02: the owner answered it.** The answers are recorded as owner decision D-16 and applied to the
+  documentation only. Implementation waits for the owner's go-ahead, after the report of affected files and rule IDs.
 - **Phase D is under way.** The audit-log read is not built (OQ-024 item 2). The identity admin screens and the
   reference-data screen are written and tested in `web/`; they are committed with their server routes.
 - The UI steps below are the earlier part of this work. U5 is Phase B's fourth step.
@@ -414,14 +416,14 @@ domain, detected 126 of 126** (D4 §11).
 | 1 | The five numbers `/docs` does not give: session lifetime, sign-in failure limit and window, quote age, lock timeout | OQ-027, `.env.example` | Starting the server (`npm start`), not the tests |
 | 2 | The sale-save budget: p95 ≤ 100 ms is proposed (measured p95 27 ms) | ADR-31 §16 | Nothing |
 | 3 | Accept or veto the reading that a cash tender is captured as part of completing the sale, under `Sale.Create` (§22.6) | OQ-018 "Step 3 reading" | Nothing now; cash sales rely on it |
-| 4 | Name the keys for card submit, capture and void | OQ-018 | Card payments in Domain 4 |
-| 5 | The permission-key list, presented before Domain 5 (working agreement 8): refund submit and cancel, reversal edges, location management, `Config.Roles` | OQ-023, OQ-025, OQ-026, OQ-028 | Domain 5, and the till re-enable and refund retry edges |
+| 4 | ~~Name the keys for card submit, capture and void~~ **Decided, D-16:** `Sale.Create`, `Payment.Capture`, `Payment.Void` | OQ-018 | Nothing; implementation waits for the owner's go-ahead |
+| 5 | ~~The permission-key list~~ **Decided, D-16** (2026-10-02). Applied to the documentation only | OQ-014, OQ-023, OQ-025, OQ-026, OQ-028 | Nothing; implementation waits for the owner's go-ahead |
 | 6 | The route permissions chosen where the catalogue was not explicit, listed for veto | D1 §9, D7 §9, D2 §9, D3 §9 | Nothing |
 | 7 | ~~What to do with the untracked `SmartStore.zip`~~ **Resolved:** `*.zip` is ignored (owner, 2026-10-01) | Item 4 above | Nothing |
 | 8 | Whether a shift count records a denomination breakdown. `RT-526` (`CD-20`) says "the denomination total is derived from the breakdown", but D4 deferred `CD-27`..`CD-29`, so the schema has no denomination tables and the count is a total. Building it needs a migration | `RT-526`, D4 | Nothing; counts are totals until decided |
 | 9 | The variance tolerance and the higher threshold that needs a different approver. Interim: the tolerance is zero, so every non-zero variance needs an acknowledgement with a reason, and no second approver is required. "Closes automatically within tolerance" and the second-approver gate are unbuilt, because the numbers do not exist | OQ-020, `CD-23` | Those two behaviours only |
 | 10 | Whether the declared closing float may exceed the counted amount. Interim: recorded as declared; it feeds no expected amount | OQ-029, `CD-20` | Nothing |
-| 11 | Veto, or accept, two choices for receipts. (a) Recording a print's outcome and reprinting need `Sale.Create`: the catalogue has no reprint key, and receipt issuance is the cashier's work (actors-and-roles §4). (b) A reprint has no audit event: AU-12 has no type for one, and the `receipt_reprint` row is the record. The reprint's mandatory reason is your instruction of 2026-10-01; `/docs` asks for none | D4 §10 | Nothing |
+| 11 | Veto, or accept, two choices for receipts. (a) Recording a print's outcome and reprinting need `Sale.Create`: the catalogue has no reprint key, and receipt issuance is the cashier's work (actors-and-roles §4). (b) A reprint has no audit event: AU-12 has no type for one, and the `receipt_reprint` row is the record. The reprint's mandatory reason is your instruction of 2026-10-01; `/docs` asks for none. **Reading a receipt at the till is decided by D-16 (Q13): `Sale.Create`.** (a) and (b) stay for veto | D4 §10 | Nothing |
 | 12 | Authorize one forward-only migration for manual weigh entry: the sale line's weight source (`PR-27`) and its reason code (`PR-28`), and a per-store threshold. Also give the threshold: the interim proposed is zero, so every manual weight needs a reason | OQ-032 | Manual weigh entry at the till |
 | 13 | Archiving brands, units and tax categories: whether they can be archived, and what an archive stops | OQ-031 | Archiving those three only; editing them is built |
 
@@ -513,6 +515,10 @@ sets the order. Phase A (housekeeping and the push) is done.
    - Domain 5: returns, then refunds;
    - card payments through the simulated gateway;
    - Domain 5's mutation check.
+
+   **The keys are decided: D-16, 2026-10-02.** They are recorded in the documentation only. The owner asked for the
+   affected files and rule IDs first, so **implementation starts on the owner's go-ahead.** Q8, a refund's retry under
+   `Sale.Refund` while paying it is `Refund.Pay`, was raised back to the owner.
 5. **Phase F:**
    - typecheck, tests, perf, ledger check and audit check, measured against the p95 ≤ 100 ms budget;
    - a "what is left before a real store can use this" list. It names GAP-044, GATE-Q2-LICENCE and GAP-038 as release
@@ -1316,3 +1322,23 @@ Append-only. One dated line per step, including failed and abandoned attempts.
     comes before calling it a regression. Appended to ADR-31 as a dated re-measurement.
   - **The list** names the release blockers (`GAP-044`, `GATE-Q2-LICENCE`, `GAP-038`) and the owner answers that
     unblock building. It also lists the engineering left, and what v1 leaves out by decision.
+- 2026-10-02 — **Owner decision D-16: the permission keys, recorded in the documentation only.**
+  - The owner answered `PERMISSION-KEY-PROPOSAL.md` Q1–Q14, and asked for three things in order: record the answers,
+    update the catalogue, state-machine and actor-role documents, then report the affected files and rule IDs before
+    any implementation.
+  - **Recorded:**
+    - `OWNER-DECISIONS.md` D-16, with the owner's reasons for Q3, Q5, Q7 and Q14. It is numbered 16 because the other
+      session's uncommitted D-15 (the NPR currency) holds 15.
+    - `PERMISSION-KEY-PROPOSAL.md`: the answers, appended.
+  - **Applied to the documentation:**
+    - actors-and-roles §2: five new keys. The rows of the reused keys name what they now cover. `Config.Roles`
+      authorizes nothing.
+    - state-machines §22: seven permission cells and four reversal cells. §22.0's census goes from 27 rows with no key
+      to 20, and from 117 keys to 122.
+    - OPEN-QUESTIONS: OQ-014, OQ-018, OQ-023, OQ-025, OQ-026 and OQ-028.
+    - The gap register, §7.8: GAP-036 narrowed.
+  - **Not touched:** migrations, code and tests, nor the design documents that describe the built schema (D4, D7). They
+    change with the implementation.
+  - **Raised back to the owner:** Q8, a refund's retry under `Sale.Refund` while paying it is `Refund.Pay`.
+  - **Staging:** OWNER-DECISIONS, OPEN-QUESTIONS and BUILD-STATUS hold other sessions' uncommitted work. Their staged
+    copies are the working files with those blocks taken back out.
