@@ -1524,3 +1524,25 @@ Append-only. One dated line per step, including failed and abandoned attempts.
     tested in a clean checkout of HEAD (65 tests, typecheck clean). The working `App.tsx` has the same entry in their groups and their `NotYet.tsx` "Refunds" placeholder is **removed**, because the screen exists. Their files stay uncommitted.
   - **Not here:** the card panel on the sale screen, the void action and the payments report (steps 3 to 5); the refund's tax per line is shown but computed by the server; who drafted or approved (ids only).
   - **Tests:** web 29 new + 1 (`Returns`) + 2 (`App`). The web typechecks. Not run in a real browser.
+- 2026-10-02 — **UI, step 3: the card payment panel on the till, and the till's tools** (`web/src/pos/Tender.tsx`, `TillWork.tsx`; `Sale.tsx`; `SaleCard.test.tsx` 21 tests, `TillWork.test.tsx` 5). The third of the owner's five screens, with the void.
+  - **Paying a sale (D4 §15):** with `Payment.Capture` (D-16 Q2) the payment step offers **Cash**, **Card** or **Card and cash**, cash first; without the key the till is exactly the cash sale it was (the 17 existing sale tests pass
+    unchanged). A card sale sends `{ card: { token } }` and nothing the client computed; a split sends `{ card: { token, amount }, cash: { tendered } }`. The total, the card amount, the cash given, what the card leaves and the change are
+    shown as they are typed; a card for the whole total, an amount that is not money, and cash that is short are each refused in place before the card is touched (`PY-16`, `PY-19`, `SP-40`). A card is never shown change. The outcome lists
+    each payment (`Card $2.50 (simulated)`, `Cash $1.50`).
+  - **The simulated-gateway warning:** choosing a card says in words, in a note beside a symbol, "SIMULATED card gateway: type a test card token. No real card is read and no money moves", and the outcome says it again when a payment
+    was simulated (`UX-52`, ADR-31 §13). The server offers the till no way to ask beforehand whether the gateway is simulated, so `GATEWAY_IS_SIMULATED` is a constant of the build, to be changed when a real acquirer is connected. The token
+    field offers the test cards (`TEST-APPROVE`, `-DECLINE`, `-FAIL`, `-TIMEOUT`) and is never stored.
+  - **The failure modes (`PY-14`, `PY-54`, `SP-43`, `PY-11`, `PY-41`, `PY-39`):** a **decline** or a **technical failure** (and a void, a refund, `SS059`) ends that attempt: the message is said in place, the cart is kept, and the next payment is a **new
+    payment on a new operation id**. A **timeout**, a **capture that did not go through**, and **money taken with the sale not saved** are *the same sale sent again*: the cart, the lookups and the tender are fixed ("Do not charge the card again"), the
+    button becomes "Check the card payment and finish the sale" (or "Send the sale again"), and it resends the same body under the same operation id. A server failure is the system's, and a retry is the same operation. A store that does not take
+    cards says so in place.
+  - **The void (D-16 Q3, `PY-13`, `PY-40`):** while a card payment is pending or authorized, someone holding **`Payment.Void` and `Payment.View`** may "Void the card payment": the screen finds this cart's payment on the report by its operation id,
+    voids it, keeps the cart, and the next payment is a new one. Anyone else is told who can. A void the provider does not confirm is said in place and the payment stays as it was. A captured payment is never offered a void: the screen says a manager
+    can give the money back (D-18). The void also belongs on the report of payments that need a person (step 5), which will reuse the route.
+  - **At a till (D-17, `PY-27`):** `TillWork` wraps the sale and offers **Returns** (`Return.View`) and **Refunds** (`Refund.View`) as tools, each only with its key. The sale stays mounted, hidden, so the cart survives (`UX-57`), and "Back to the
+    sale" puts the cursor in the scan field (`UX-01`). The screens are the back office's, here with `atTill`, so **a cash refund can be drafted and paid at the till**. A posted return hands over to the refund of it.
+  - **Coordination with the other session:** `App.tsx` and `App.test.tsx` again have two shapes. The committed ones are the committed files plus `ShiftGate` handing the store's keys to `TillWork` and 2 shell tests; they were tested in a clean
+    checkout of HEAD with the whole web suite (186 tests, typecheck clean). The same edit is applied to their working `App.tsx`. `Sale.tsx` and `lib/api.ts` (the sale's `payments`) are mine and were unmodified by them. Their `SaleScreen.test.tsx` and
+    `ShiftClose.test.tsx` pass against the new `Sale.tsx`.
+  - **Not here:** the report of payments that need a person as a screen (step 5); a receipt for a card sale; reading the card (a real terminal is hardware and the owner's); the card panel's behaviour against a real acquirer.
+  - **Tests:** web 26 new + 2 (`App`). The web typechecks. Not run in a real browser.

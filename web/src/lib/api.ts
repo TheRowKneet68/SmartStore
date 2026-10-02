@@ -57,4 +57,6 @@ export interface Sale {
   totalDue: number;
   tendered: number;
   change: number;
+  /** The captured payments of the sale; `simulated` is true for one the simulated gateway took (ADR-31 §13). */
+  payments?: { paymentId: string; methodType: string; amount: number; simulated: boolean }[];
 }

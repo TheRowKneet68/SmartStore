@@ -9,7 +9,7 @@ import { Refunds } from './back/Refunds.tsx';
 import { Returns } from './back/Returns.tsx';
 import { Roles } from './back/Roles.tsx';
 import { ShiftReview } from './back/Shifts.tsx';
-import { SaleScreen } from './pos/Sale.tsx';
+import { TillWork } from './pos/TillWork.tsx';
 import { BeginCount, CountDrawer } from './pos/ShiftClose.tsx';
 
 /**
@@ -136,6 +136,7 @@ function SignedIn({ workspace, onSignedOut }: { workspace: Workspace; onSignedOu
             canSell={store.permissions.includes('Sale.Create')}
             canClose={store.permissions.includes('Shift.Close')}
             canAcknowledge={store.permissions.includes('Cash.Variance.Acknowledge')}
+            permissions={store.permissions}
             shift={shift}
             onShift={setShift}
           />
@@ -286,6 +287,7 @@ function ShiftGate({
   canSell,
   canClose,
   canAcknowledge,
+  permissions,
   shift,
   onShift,
 }: {
@@ -295,6 +297,8 @@ function ShiftGate({
   canSell: boolean;
   canClose: boolean;
   canAcknowledge: boolean;
+  /** The keys held in this store: what the till may take a card with, and which of its tools it offers (D-16, D-17). */
+  permissions: string[];
   shift: TillShift | null | undefined;
   onShift: (shift: TillShift | null) => void;
 }) {
@@ -362,7 +366,7 @@ function ShiftGate({
             )}
           </div>
         )}
-        <SaleScreen storeId={storeId} currency={currency} onCartChange={setCartLines} />
+        <TillWork storeId={storeId} currency={currency} permissions={permissions} onCartChange={setCartLines} />
       </>
     );
   }

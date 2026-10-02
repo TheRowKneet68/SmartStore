@@ -219,6 +219,23 @@ describe('the till shell (UX-35, UX-52, UX-07, UX-08)', () => {
     expect(screen.queryByRole('button', { name: 'Refunds' })).toBeNull();
   });
 
+  it('D-16 Q2, D-17, UX-05: a till whose employee holds Payment.Capture offers a card, and one who holds Refund.View offers Refunds, and neither otherwise', async () => {
+    const cashier = { ...atTill, stores: [{ ...store, permissions: [...store.permissions, 'Payment.Capture', 'Refund.View'] }] };
+    serve({ 'GET /api/v1/session': cashier, 'GET /api/v1/stores/s1/shift': { shift: { id: 'sh1', status: 'Open' } } });
+    render(<App />);
+    expect(await screen.findByRole('group', { name: 'How is it paid?' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Refunds' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Returns' })).toBeNull();
+  });
+
+  it('D-16 Q2, UX-08: a till without those keys is the cash sale it was', async () => {
+    serve({ 'GET /api/v1/session': atTill, 'GET /api/v1/stores/s1/shift': { shift: { id: 'sh1', status: 'Open' } } });
+    render(<App />);
+    expect(await screen.findByLabelText(/Cash given/)).toBeTruthy();
+    expect(screen.queryByRole('group', { name: 'How is it paid?' })).toBeNull();
+    expect(screen.queryByRole('navigation', { name: 'At the till' })).toBeNull();
+  });
+
   it('UX-07, MS-05: an employee with no store access sees an empty workspace that says who to ask', async () => {
     serve({ 'GET /api/v1/session': { ...atTill, stores: [], terminal: null } });
     render(<App />);
