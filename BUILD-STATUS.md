@@ -1546,3 +1546,20 @@ Append-only. One dated line per step, including failed and abandoned attempts.
     `ShiftClose.test.tsx` pass against the new `Sale.tsx`.
   - **Not here:** the report of payments that need a person as a screen (step 5); a receipt for a card sale; reading the card (a real terminal is hardware and the owner's); the card panel's behaviour against a real acquirer.
   - **Tests:** web 26 new + 2 (`App`). The web typechecks. Not run in a real browser.
+- 2026-10-02 — **UI, step 4: the card payments to check** (`web/src/back/PaymentsAttention.tsx`, `PaymentsAttention.test.tsx`, 19 tests; `Refunds` gains `startFromPayment`, 2 tests). The last UI piece of this slice. **All five of the owner's screens now exist:** returns, refunds, the card panel with its void,
+  and this report.
+  - **What it shows (D4 §16):** the existing report as it is: `PendingTooLong` ("Waiting on the provider"), `AuthorizedNotCaptured` ("Approved, not taken"), `CapturedNoSale` ("Taken, no sale"), each in words beside a symbol with its amount, how long
+    it has waited ("12 min", "2 h 15 min", "1 d 1 h"), what the provider last said (`PY-10`), a simulated mark, what has been held and given back of a payment taken with no sale, what to do next, and the **cart reference** (the first eight characters of
+    the operation id) so a person can find the cart at the till. The counts are the server's, over all pages; the list can be narrowed to one kind; "Show more" is the server's cursor.
+  - **How long is too long (`OQ-037`):** the screen **asks and never fills it in**. The field is empty and has focus; a window that is empty, not a whole number, negative or beyond a year is said in place and nothing is read; 0 means every payment that has not
+    settled. The value is sent as typed. Refresh asks again with the same window.
+  - **Void (D-16 Q3, `PY-13`):** offered only with `Payment.Void`, and only on a pending or authorized payment (a captured one is refunded, never voided). It asks first, in place, with the focus on "Yes, void it" and a safe "Keep it"; sending nothing until
+    confirmed. The report is read again and the outcome is spoken, saying whether the provider voided it or **a person voided it here because the provider held nothing for it** (`PY-41`). A void the provider does not confirm (`void_pending`,
+    `void_failed`) or a refusal (`cannot_void`) is said in place and the payment stays as it was.
+  - **Refund a payment taken with no sale (D-18):** offered on `Taken, no sale` only, with `Sale.Refund` **and** `Refund.View` (the screen where it is made and seen), while some of the payment can still go back. It hands over to the Refunds screen, which opens on **that
+    payment already chosen**, the amount at the most it can still give back for the person to only reduce, and a reason required; if the payment is no longer waiting, the person is told and the list is shown.
+  - **Reading** is `Payment.View`, which offers the screen (back office, under Money in the other session's navigation, and as a tab in the committed one). No key is new and none is invented.
+  - **Coordination with the other session:** again two shapes of `App.tsx`/`App.test.tsx`. The committed ones are the committed files plus the tab, the hand-over state and 2 shell tests, tested in a clean checkout of HEAD with the **whole web suite (209 tests,
+    typecheck clean)**. The same edit is in their working copy, under their Money group. Nothing of theirs was staged.
+  - **Not here:** a till-side report (the till's void is on the sale screen, step 3); notifications that something needs a person (`BQ-02`); any scheduler.
+  - **Tests:** web 21 new + 2 (`App`). The web typechecks. Not run in a real browser.

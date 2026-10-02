@@ -120,6 +120,7 @@ export function Refunds({
   currency,
   atTill = false,
   startFromReturn = null,
+  startFromPayment = null,
   onStarted,
 }: {
   storeId: string;
@@ -127,14 +128,17 @@ export function Refunds({
   currency: Currency;
   atTill?: boolean;
   startFromReturn?: string | null;
+  /** Opens the refund of a captured card payment with no sale on this payment (D-18), from the report of payments to check. */
+  startFromPayment?: string | null;
   onStarted?: () => void;
 }) {
   const [open, setOpen] = useState<string | null>(null);
-  const [creating, setCreating] = useState<'sale' | 'payment' | null>(startFromReturn === null ? null : 'sale');
+  const [creating, setCreating] = useState<'sale' | 'payment' | null>(startFromReturn !== null ? 'sale' : startFromPayment !== null ? 'payment' : null);
   const can = (key: string) => permissions.includes(key);
   useEffect(() => {
     if (startFromReturn !== null) setCreating('sale');
-  }, [startFromReturn]);
+    else if (startFromPayment !== null) setCreating('payment');
+  }, [startFromReturn, startFromPayment]);
 
   if (open !== null) {
     return <RefundDetail storeId={storeId} refundId={open} permissions={permissions} currency={currency} atTill={atTill} onBack={() => setOpen(null)} />;
@@ -153,7 +157,15 @@ export function Refunds({
     );
   }
   if (creating === 'payment') {
-    return <FromPayment storeId={storeId} currency={currency} onBack={() => setCreating(null)} onMade={(id) => (setCreating(null), setOpen(id))} />;
+    return (
+      <FromPayment
+        storeId={storeId}
+        currency={currency}
+        preselect={startFromPayment}
+        onBack={() => (setCreating(null), onStarted?.())}
+        onMade={(id) => (setCreating(null), onStarted?.(), setOpen(id))}
+      />
+    );
   }
   return <RefundList storeId={storeId} currency={currency} canDraft={can('Sale.Refund')} canSeePayments={can('Payment.View')} onOpen={setOpen} onCreate={setCreating} />;
 }
@@ -529,7 +541,19 @@ function FromSale({
 const trimQuantity = (quantity: string): string => (quantity.includes('.') ? quantity.replace(/\.?0+$/, '') : quantity);
 
 /** A refund of a card payment that never became a sale (D-18): money taken for nothing, given back to the card (`PY-37`). */
-function FromPayment({ storeId, currency, onBack, onMade }: { storeId: string; currency: Currency; onBack: () => void; onMade: (id: string) => void }) {
+function FromPayment({
+  storeId,
+  currency,
+  preselect,
+  onBack,
+  onMade,
+}: {
+  storeId: string;
+  currency: Currency;
+  preselect: string | null;
+  onBack: () => void;
+  onMade: (id: string) => void;
+}) {
   const [orphans, setOrphans] = useState<Orphan[] | null>(null);
   const [chosen, setChosen] = useState<Orphan | null>(null);
   const [amount, setAmount] = useState('');
@@ -542,7 +566,16 @@ function FromPayment({ storeId, currency, onBack, onMade }: { storeId: string; c
   useEffect(() => {
     // Every payment taken with no sale, however recently: how long is too long is not this screen's to say (OQ-037).
     api<{ items: Orphan[] }>('GET', `/stores/${storeId}/payments/attention?olderThanMinutes=0&limit=200`).then(
-      (r) => setOrphans(r.items.filter((o) => o.kind === 'CapturedNoSale')),
+      (r) => {
+        const found = r.items.filter((o) => o.kind === 'CapturedNoSale');
+        setOrphans(found);
+        // Arriving from the report with a payment in mind: it is chosen, or the person is told it is no longer waiting.
+        const wanted = preselect === null ? undefined : found.find((o) => o.paymentId === preselect);
+        if (wanted !== undefined) {
+          setChosen(wanted);
+          setAmount(typed(wanted.amount - wanted.heldBack, currency.exponent));
+        } else if (preselect !== null) setProblem(check('That payment is not waiting without a sale any more. Choose another, or go back.'));
+      },
       (e: unknown) => (setProblem(problemOf(e)), setOrphans([])),
     );
     api<{ items: Reason[] }>('GET', '/reason-codes').then((r) => setReasons(r.items), () => undefined);

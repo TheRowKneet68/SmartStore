@@ -4,6 +4,7 @@ import { parseMoney, type Currency } from './lib/money.ts';
 import { check, problemOf, ProblemNotice, type Problem } from './lib/Problem.tsx';
 import { People } from './back/People.tsx';
 import { Prices } from './back/Prices.tsx';
+import { PaymentsAttention } from './back/PaymentsAttention.tsx';
 import { ReferenceData } from './back/Reference.tsx';
 import { Refunds } from './back/Refunds.tsx';
 import { Returns } from './back/Returns.tsx';
@@ -181,6 +182,7 @@ function BackOffice({ store, organization, stores, onTillSet }: { store: Store; 
     ...(store.permissions.includes('Device.View') ? [['till', 'Till set-up'] as const] : []),
     ...(store.permissions.includes('Return.View') ? [['returns', 'Returns'] as const] : []),
     ...(store.permissions.includes('Refund.View') ? [['refunds', 'Refunds'] as const] : []),
+    ...(store.permissions.includes('Payment.View') ? [['attention', 'Card payments to check'] as const] : []),
     ...(organization.includes('Employee.View') ? [['people', 'People'] as const] : []),
     ...(organization.includes('Role.View') ? [['roles', 'Roles'] as const] : []),
     ...(organization.includes('Product.View') || organization.includes('Tax.View') ? [['reference', 'Units, tax and brands'] as const] : []),
@@ -189,6 +191,8 @@ function BackOffice({ store, organization, stores, onTillSet }: { store: Store; 
   const [section, setSection] = useState<string>(sections[0]?.[0] ?? 'till');
   // A refund of a posted return starts on the Returns screen and opens on the Refunds screen.
   const [refundFrom, setRefundFrom] = useState<string | null>(null);
+  // A refund of a captured payment with no sale starts on the payments report and opens on the Refunds screen (D-18).
+  const [refundPayment, setRefundPayment] = useState<string | null>(null);
   const currency = { code: store.currencyCode, exponent: store.minorUnitExponent };
   return (
     <>
@@ -206,7 +210,9 @@ function BackOffice({ store, organization, stores, onTillSet }: { store: Store; 
       ) : section === 'returns' ? (
         <Returns storeId={store.id} permissions={store.permissions} onRefund={(id) => (setRefundFrom(id), setSection('refunds'))} />
       ) : section === 'refunds' ? (
-        <Refunds storeId={store.id} permissions={store.permissions} currency={currency} startFromReturn={refundFrom} onStarted={() => setRefundFrom(null)} />
+        <Refunds storeId={store.id} permissions={store.permissions} currency={currency} startFromReturn={refundFrom} startFromPayment={refundPayment} onStarted={() => (setRefundFrom(null), setRefundPayment(null))} />
+      ) : section === 'attention' ? (
+        <PaymentsAttention storeId={store.id} permissions={store.permissions} currency={currency} onRefund={(id) => (setRefundPayment(id), setSection('refunds'))} />
       ) : section === 'people' ? (
         <People permissions={organization} stores={stores} />
       ) : section === 'roles' ? (

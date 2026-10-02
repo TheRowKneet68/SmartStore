@@ -334,6 +334,25 @@ describe('refunding a card payment with no sale (D-18, PY-37, PY-22)', () => {
     });
   });
 
+  it('D-18: arriving from the report of payments to check, the payment is already chosen, with the most it can give back, and the person only reduces it', async () => {
+    serve({
+      [ATTENTION]: { body: { summary: {}, items: [orphan, { ...orphan, paymentId: 'pk2', amount: 900, heldBack: 0 }], next: null } },
+      [REASONS]: { body: reasons },
+    });
+    render(<Refunds storeId="s1" permissions={ALL} currency={GBP} startFromPayment="pk1" />);
+    const amount = (await screen.findByLabelText('Amount to give back (GBP)')) as HTMLInputElement;
+    expect(amount.value, '3,000 less the 1,000 held back').toBe('20.00');
+    expect(screen.getByText(/Payment of £30.00/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Refund the payment of/ }), 'no list to choose from').toBeNull();
+  });
+
+  it('D-18: a payment that is no longer waiting without a sale is said in place, and the list to choose from is shown instead', async () => {
+    serve({ [ATTENTION]: { body: { summary: {}, items: [orphan], next: null } }, [REASONS]: { body: reasons } });
+    render(<Refunds storeId="s1" permissions={ALL} currency={GBP} startFromPayment="gone" />);
+    expect((await screen.findByRole('alert')).textContent).toMatch(/not waiting without a sale any more/);
+    expect(screen.getByRole('button', { name: 'Refund the payment of £30.00' })).toBeTruthy();
+  });
+
   it('SS058: a refusal that names what is left is shown in money', async () => {
     await chooseOrphan({ [`POST ${S}/refunds`]: { status: 409, body: { error: { code: 'SS058', message: 'That is more than is still left to give back to that payment.', remaining: '1200' } } } });
     const amount = await screen.findByLabelText('Amount to give back (GBP)');
