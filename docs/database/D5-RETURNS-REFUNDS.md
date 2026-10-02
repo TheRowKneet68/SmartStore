@@ -422,3 +422,53 @@ Migration `20261002120000_d17_return_refund_view_and_withdraw.sql`; code `return
 | D-17 item 5, `SM-42`, `BI-40` | A draft is withdrawn with a reason under `Sale.Refund`; no key is refused; withdrawn is final; one past `Draft` is not withdrawable |
 | D-17 items 7 and 8, `MS-02` | Each read is its own key, in the store, paged and filtered; no write key stands in; another store's document is `404`; no session is `401` |
 | D-17 | The catalogue is 124; the Owner holds both keys; the edge contract and the audit table name the new edge |
+
+## 13. Owner decision D-18: a refund of a payment that never became a sale (2026-10-02)
+
+Migration `20261002130000_d18_refund_of_a_payment.sql`; code `refunds.ts`, `payments/attention.ts`, `payments/card-payment.ts`; tests in
+`payments/card.test.ts`. `OQ-036` item 2, part B, the owner's option 1. The keys are the refund's own, unchanged: draft and submit
+`Sale.Refund`, approve `Sale.Refund.Large.Approve`, pay `Refund.Pay`.
+
+**Why.** A card is charged, the sale cannot be saved, and the till never sends it again: money taken for nothing (`PY-37`). A
+captured payment's only way out is a linked refund (`PY-12`), and a refund needed a sale (`RR-01`). So a refund may now name a
+captured card payment **instead of a sale**. Everything else about a refund is as it was: the machine of §22.7, the second-person
+approval (`BI-26`), the hold (`RR-24`), the provider round trip outside the transaction (`PY-36`), the failure, retry and
+cancel (§11), the withdrawal of a draft (§12), the audit, and the reads.
+
+| | A refund of a sale | A refund of a payment (D-18) |
+|---|---|---|
+| Names | A sale, its lines, optionally a return | A captured card payment of the same store and currency, an amount |
+| Lines, tax | Allocated to sold lines, each with its proportional tax (`RR-06`) | None: no sale charged any tax, so the tax is 0 |
+| Reason | When it has no return (`RR-35`) | Always (it is goodwill in the sense of `RR-35`) |
+| Paid | The drawer or the provider, by the tender | The provider, to the card |
+| Bounded by | Each line's settled amount, held on the line (`SS049`) | What the payment took less what is held back to it, held on **`payment.refunded_amount`** (`SS058`) |
+| The hold | One conditional `UPDATE` on each line, when it enters `Processing` | One conditional `UPDATE` on the payment, at the same moment |
+
+**The counter.** `payment.refunded_amount` is written only by the owner's hold trigger, never more than the payment took
+(`ck_payment_refunded`), and only a captured payment gives anything back. The payment stays frozen in every other column (`PY-12`,
+`SS035`): `payment_before_write()` lets the hold move that one counter. Entering `Processing` raises it with one conditional increment,
+atomic with no read-then-write race, so five refunds of 1,000 against a payment of 3,000 paid at once make exactly three (tested). `Failed`
+and `Completed` keep the hold, and only a cancellation releases it (`SM-40`, `SM-41`). `payment_refund_drift()` rebuilds the counter
+from the refunds and never repairs, as `sale_counter_drift()` does for the lines.
+
+**The two ways to be paid back cannot both happen (`SS059`).** A payment with a sale is refunded through the sale, never without it. A
+payment that is being refunded without one, **even as a draft**, cannot become a sale: `assert_sale_complete()` refuses it. Otherwise
+the customer would be given the money back and the goods too (`PY-37`). A withdrawn draft (§12) is no obstacle, and the same sale can
+then complete on the money that was taken. A sale made from the payment before any refund is drafted simply ends the matter: it has a sale.
+
+**In the application.** `POST /stores/:storeId/refunds` with no `saleId` takes `{ clientOperationId, method: 'OriginalTender',
+paymentId, amount, reasonCodeId }` and nothing else (a return, lines or any other field is refused). It is bounded as drafted by what is
+left (`SS058` names it), and the atomic bound is the hold. Paying it, at `POST …/refunds/:id/pay`, **gives its cart up** (the checkout
+is abandoned), because the money is going back; the same sale then answers `card_refunded`. The report (D4 §16) keeps a payment until
+it has all been given back, and shows what is held and what has been given back.
+
+**Read, not written, by the owner (raised for veto):** only a **card** payment is refunded this way (a cash payment exists only with
+its sale); the refund may be **partial**, in parts, up to what the payment took (`PY-24`); a reason is required; and a refund, even a
+draft, blocks the sale. Each follows from option 1 and from `PY-37`; none adds a key.
+
+**Not built:** a refund cap per tender for refunds *of sold lines* (`OQ-023` item 6); the failure notification (`SM-41`).
+
+| Code | Meaning | Raised by |
+|---|---|---|
+| `SS058` | A refund of a payment asks for more than the payment has left to give back; `DETAIL` is the remainder | `apply_refund_hold()` |
+| `SS059` | A payment with a sale is refunded through the sale; a payment being refunded cannot make one; only a card payment is taken back without its sale | `refund_before_write()`, `apply_refund_hold()`, `assert_sale_complete()` |

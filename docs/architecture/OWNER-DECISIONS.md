@@ -557,6 +557,33 @@ not asked for.
 
 ---
 
+## D-18 — The money of a payment that never became a sale (`OQ-036` item 2, part B)
+
+**Status:** DECIDED — 2026-10-02 (owner). Closes `OQ-036` item 2. Numbered 18: `D-15` is held by another session's uncommitted work.
+
+**Decision:**
+
+| Question | Decision |
+|---|---|
+| How does the money of a payment captured with no sale go back to the card? | **Option 1: a refund tied to a payment, not a sale.** The sale and the lines become optional on a refund that names a captured payment with no sale. The existing approval and audit flow is kept |
+| The keys | Issue the refund: `Sale.Refund`. Approve it: `Sale.Refund.Large.Approve`. Pay it: `Refund.Pay`. **No new key** |
+
+**What it extends.** `RR-01` and §22.7 describe a refund as money going back for one sale. After D-18 a refund names a sale, or a captured
+card payment that never became one. Nothing else about the refund machine changes.
+
+**What the owner did not spell out, and how it was read** (each follows from option 1 and from `PY-37`; raised for the owner's veto):
+- only a **card** payment is refunded this way: a cash payment exists only with its sale;
+- the refund may be **partial**, in parts, up to what the payment took less what is held back to it (`PY-24`, `PY-22`);
+- a **reason** is required (it is goodwill in the sense of `RR-35`), and there is no tax, because no sale charged any;
+- a payment with a sale is refunded through the sale, and a payment **being refunded cannot become a sale**, even while the refund is a
+  draft, or the customer would be given the money and the goods (`PY-37`); a withdrawn draft (D-17) is no obstacle;
+- paying it gives the **cart up**, so the same sale is no longer completed.
+
+**Applied (2026-10-02):** migration `20261002130000_d18_refund_of_a_payment.sql`; D5 §13; D4 §16; `state-machines.md` §22.7;
+CONVENTIONS (`SS058`, `SS059`); OPEN-QUESTIONS `OQ-036` closed, `OQ-038` new.
+
+---
+
 ## Decision log
 
 | ID | Question | Answer | Date |
@@ -577,3 +604,4 @@ not asked for.
 | D-14 | `Payment` `Failed` terminal (CON-03) | (PY-54) A customer `Payment` in `Failed` is terminal for that record; a retry is a new `Payment` against the same sale. `Declined` still retryable (PY-14). `SM-30` and `SM-41` unchanged. `SM-53` and `RT-420` reworded, all citations kept. Closes the last Phase 3 blocker | 2026-09-30 |
 | D-16 | Permission keys for the transitions and creations with none (`PERMISSION-KEY-PROPOSAL.md` Q1–Q14) | Reused: `Sale.Create` (card submit; reading a receipt at the till), `Employee.Edit` (back from leave), `Device.Disable` (till re-enable), `Sale.Refund` (refund retry and cancel), `Return.Create` (return cancel), `Config.Organization` (warehouses and storage locations), `Role.Create`/`Role.Edit` (`Config.Roles` authorizes nothing). New: `Payment.Capture`, `Payment.Void`, `Employee.Reactivate`, `Refund.Pay`, `Shift.Reopen` (catalogue 117 → 122). Closes OQ-018, OQ-026, OQ-028 and the key parts of OQ-014, OQ-023, OQ-025; narrows GAP-036 (27 → 20 rows). Documentation applied; implementation waits for the owner's go-ahead | 2026-10-02 |
 | D-17 | Reading returns and refunds; the payer at the till; withdrawing a draft refund (`OQ-035` items 4, 5, 7, 8) | The payer of a drawer refund is signed in at the refund's till. A draft refund may be withdrawn: `Draft → Cancelled` on `cancel`, under `Sale.Refund`, with a reason (read from D-16 Q9; raised for veto). New keys `Return.View` and `Refund.View` (catalogue 122 → 124) | 2026-10-02 |
+| D-18 | The money of a payment that never became a sale (`OQ-036` item 2, part B) | Option 1: a refund tied to a captured card payment, not a sale; the sale and lines are optional on it. Keys: `Sale.Refund` to issue, `Sale.Refund.Large.Approve` to approve, `Refund.Pay` to pay. No new key. Read from option 1, for veto: card payments only, partial, a reason, and a refund (even a draft) blocks the sale | 2026-10-02 |

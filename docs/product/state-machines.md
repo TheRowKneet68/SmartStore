@@ -1178,6 +1178,8 @@ The post-sale states are projections, not edges anyone fires (SM-35, SM-35a).
 | `Approved`/`Processing` → `Cancelled` | cancel | `Sale.Refund` (D-16) | Reason; nothing settled | The hold is released | `Refund.StateChange` | — |
 | `Draft` → `Cancelled` | cancel (withdraw) | `Sale.Refund` (D-17) | Reason. The refund was never submitted | None: a draft holds nothing (RR-24). Its lines stay as drafted (AP-03) | `Refund.StateChange` | — |
 
+**Owner decision D-18 (2026-10-02)** lets a refund name a captured card payment instead of a sale, when the payment never became one: the same machine, keys and audit, with no lines and no tax (D5 §13).
+
 **Owner decision D-17 (2026-10-02)** adds the last row: a draft refund may be withdrawn. It is the same `cancel` event and key as the
 other cancels. A refund past `Draft` cannot be withdrawn from `PendingApproval`: that edge is not contracted.
 

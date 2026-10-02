@@ -663,6 +663,13 @@ fallback is a design that holds either answer, not a guess at the answer.
      reference, that asks the provider to give the money back. It touches neither the sale nor the refund schema, and it is a
      second refund-like document with its own approval and audit.
 
+- **Closed by owner decision D-18, 2026-10-02.** Item 2, the money of a payment captured with no sale, is decided: option 1, a
+  refund tied to a payment, under the refund's own keys (`Sale.Refund`, `Sale.Refund.Large.Approve`, `Refund.Pay`), built (D5 §13).
+  The report and the void of part A stand (D4 §16). Items 3 to 8 are choices made inside the specification's room, recorded above, and
+  stand as built unless the owner objects. **Item 1 is not closed by this: a failed card refund still has no cancel edge.** It is moved
+  to `OQ-038` so that this entry can close.
+
+
 ### OQ-037 — How long a card payment may wait before it needs a person
 
 - **Unknown:** `PY-40`: "A payment that has been `Pending` for more than a configured window is escalated to a person." The
@@ -672,6 +679,16 @@ fallback is a design that holds either answer, not a guess at the answer.
   does for security policy. A store-level setting would be additive.
 - **Why not answerable from `/docs`:** a configured value is the owner's to set.
 - **Blocked:** a scheduled run (`BQ-02` too).
+
+### OQ-038 — A failed card refund cannot be cancelled (was `OQ-036` item 1)
+
+- **Unknown:** §22.7 contracts `Failed → Processing` (retry) and `Approved|Processing → Cancelled`, and no cancel from `Failed`.
+  `SM-41` and `RR-24` say only a cancellation releases the hold. A refund the provider keeps declining therefore keeps its hold until
+  a retry succeeds, on a sold line or, since D-18, on a payment, and nothing may release it.
+- **Why not answerable from `/docs`:** a missing edge is a contract change, and the owner's (as D-17 was for the draft). The key and
+  reason would be those of the other cancels (`Sale.Refund`, a reason), as D-17 read them.
+- **Blocked:** releasing the money of a refund that cannot be made to succeed.
+- *Meanwhile:* retry, and the provider's own recovery. Nothing is invented.
 
 ## How to use this file
 

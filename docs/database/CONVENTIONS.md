@@ -305,6 +305,8 @@ standard leaves to implementations and PostgreSQL does not use:
 | `SS055` | A transition whose contract needs a reason has none from its document or the audit context | `write_audit_event()` |
 | `SS056` | The application tried to record an event type the database writes itself | `record_audit_event()` |
 | `SS057` | An employee with a till shift that is not closed cannot be terminated | `forbid_termination_with_open_shift()` |
+| `SS058` | A refund of a payment asks for more than the payment has left to give back; `DETAIL` is the remainder (D-18) | `apply_refund_hold()` |
+| `SS059` | A payment with a sale is refunded through the sale; a payment being refunded cannot make one; only a card payment is taken back without its sale (D-18) | `refund_before_write()`, `apply_refund_hold()`, `assert_sale_complete()` |
 
 Where a refusal names a quantity, an amount or a date, the value is in the error's `DETAIL` field, so the application
 can show it without parsing the message.

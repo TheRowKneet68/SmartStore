@@ -538,3 +538,5 @@ all pages. **The window is required and never defaulted:** `PY-40` calls it "con
 
 **Not built:** the scheduler that would run the check (`BQ-02`); the provider comparison against a settlement file (`PY-40`); the
 notification when something needs a person; and part B.
+
+**Owner decision D-18 (2026-10-02) completes part B** (D5 §13). A refund may name a captured card payment instead of a sale, so the money of a `CapturedNoSale` payment goes back to the card under the refund's own keys. The report keeps a payment until it has all been given back, and shows `heldBack` and `givenBack`; paying such a refund gives its cart up, and the same sale answers `card_refunded`. A payment being refunded cannot become a sale (`SS059`).

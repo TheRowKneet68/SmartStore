@@ -351,9 +351,9 @@ Step 3 rules, given by the owner on 2026-10-01 with "start Step 3":
 - **Phase C is done:** the permission-key proposal waits for the owner's answer.
 - **2026-10-02: the owner answered it.** The answers are owner decision D-16. The owner said "go" after the report of
   affected files and rule IDs, and the keys are applied (Phase E, step 1: migration `20261002100000_d7_d16_permission_keys.sql`;
-  D7 §11, D4 §14). What Phase E still holds: the locations routes, reopening a shift (OQ-033), and part B of the orphaned-payment path
-  (OQ-036 item 2; part A is built, step 5). Domain 5's application layer (step 2), the card path through a simulated gateway
-  (step 3) and owner decision D-17 (step 4) are built.
+  D7 §11, D4 §14). What Phase E still holds: the locations routes, reopening a shift (OQ-033), and a failed card refund's cancel (OQ-038).
+  Domain 5's application layer (step 2), the card path through a simulated gateway (step 3), owner decision D-17 (step 4),
+  the void and the report of unsettled payments (step 5) and owner decision D-18 (step 6) are built.
 - **Phase D is under way.** The audit-log read is not built (OQ-024 item 2). The identity admin screens and the
   reference-data screen are written and tested in `web/`; they are committed with their server routes.
 - The UI steps below are the earlier part of this work. U5 is Phase B's fourth step.
@@ -522,8 +522,8 @@ sets the order. Phase A (housekeeping and the push) is done.
 
    **The keys are decided (D-16, 2026-10-02) and applied** (Phase E, step 1; see the log). Q8, a refund's retry under
    `Sale.Refund` while paying it is `Refund.Pay`, was raised back to the owner, who gave no change. **Still to build:**
-   routes for warehouses and storage locations (`Config.Organization`), and part B of the orphaned-payment path
-   (OQ-036 item 2: the owner decides how the money of a payment with no sale returns). **Domain 5's
+   routes for warehouses and storage locations (`Config.Organization`), and a failed card refund's cancel (`OQ-038`,
+   the owner's: it needs an edge). **Domain 5's
    application layer is built** (step 2 in the log; its focused mutation check is there too). **Not buildable yet:**
    reopening a shift (OQ-033).
 5. **Phase F:**
@@ -1453,3 +1453,21 @@ Append-only. One dated line per step, including failed and abandoned attempts.
   - **Mutation check:** `plan-void.mjs`, 18 mutations (the void and its guards, the report, its key, window, scope, age, order and counts). 13 were detected at once. Five survived. One was a real design flaw, found because a survivor asked why the filter existed: the report listed only payments on an open checkout, which would hide a pending payment on an abandoned one, so the filter was removed. Two needed tests (the void racing a capture, and oldest first), one became detectable once the filter was gone, and one (the simulated void's idempotency on the default path) cannot be observed and was dropped. **18 of 18**, restored byte for byte.
   - **Staging:** BUILD-STATUS and OPEN-QUESTIONS hold another session's uncommitted work, so their staged copies are the committed
     files plus this step's lines only.
+- 2026-10-02 — **Phase E, step 6: owner decision D-18, the refund of a payment that never became a sale (`OQ-036` item 2, part B).** D5 §13, OWNER-DECISIONS D-18.
+  - **The owner chose option 1 and confirmed the keys:** `Sale.Refund` to issue, `Sale.Refund.Large.Approve` to approve, `Refund.Pay` to pay. **No key is new.**
+  - **Migration `20261002130000_d18_refund_of_a_payment.sql`:** `refund.sale_id` is optional; a refund with no sale names a captured card
+    payment of its store and currency, an amount and a reason, with no return, tax or lines (`ck_refund_sale_or_payment`).
+    `payment.refunded_amount`, written only by the owner's hold trigger, never more than the payment took; entering `Processing` holds it
+    with one conditional increment, as a line is held (`PY-22`, `RR-24`), kept through `Failed` and `Completed`, released only by a
+    cancellation. `SS058` (more than is left), `SS059` (a payment with a sale is refunded through the sale; a payment being refunded
+    cannot become one, even as a draft: `assert_sale_complete()`). `payment_refund_drift()`. A captured payment stays frozen in every other
+    column (`PY-12`).
+  - **Application:** `POST /refunds` with no `saleId` takes `{ clientOperationId, method, paymentId, amount, reasonCodeId }`, strict. The
+    machine, approval, audit, pay and retry routes and the reads are unchanged. Paying one gives its cart up (`card_refunded`). The
+    report keeps a payment until all of it has been given back.
+  - **Read, not written, by the owner (raised for veto, in D-18):** card payments only; partial; a reason; a refund, even a draft, blocks the sale.
+  - **`OQ-036` is closed.** Its item 1, a failed card refund that cannot be cancelled, is not decided by D-18 and is moved to `OQ-038`.
+  - **Tests:** 9 new in `payments/card.test.ts`, including the concurrency proof (five refunds of 1,000 against 3,000: exactly three) and
+    the table's own refusals. Server: 502 pass; the server typechecks. Migrations: 16.
+  - **Mutation check:** `plan-d18.mjs`, 23 mutations: the table's shape (return, tax, reason, store and currency), the sale-or-payment exclusion in both directions, the hold and its release, the frozen payment, the counter's bounds, the drift check, the report, and the application. 22 were detected, the last of them after two tests were added (the table's own refusals, and a payment-bound refund with a stray return). One survived and is equivalent: the reason is required twice, by `ck_refund_sale_or_payment` and by the older `ck_refund_goodwill_reason`, so dropping the first changes nothing. **22 of 22 detectable**, restored byte for byte.
+  - **Staging:** BUILD-STATUS, OPEN-QUESTIONS and OWNER-DECISIONS hold another session's uncommitted work, so their staged copies are the committed files plus this step's lines only.

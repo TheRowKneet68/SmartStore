@@ -1693,3 +1693,9 @@ tests are 483. Still open in this area: the orphaned-payment path, `OQ-036` item
 ## 15. Update, 2026-10-02, orphaned payments (part A)
 
 Supersedes §13's "not built: voiding a payment and the reconciliation job" in part. **Built:** `POST /stores/:storeId/payments/:id/void` (`Payment.Void`) and `GET /stores/:storeId/payments/attention` (`Payment.View`), with `npm run payments:check`; D4 §16. **Not built:** the scheduler (`BQ-02`), the settlement-file comparison, the notification, and **part B**, what returns the money of a payment captured with no sale (`OQ-036` item 2: three options, the owner's to decide). `OQ-037`: the window a payment may wait is not given by the specification, so it is a required parameter. Tests: 493.
+
+---
+
+## 16. Update, 2026-10-02, owner decision D-18
+
+Supersedes §15's "part B". **Built:** a refund may name a captured card payment instead of a sale (`refund.sale_id` optional; `payment.refunded_amount`; one migration, `20261002130000`, so the count is 16; `SS058`, `SS059`). It reuses the refund machine, its keys (`Sale.Refund`, `Sale.Refund.Large.Approve`, `Refund.Pay`), the approval and the audit. A payment being refunded cannot become a sale. `OQ-036` is closed; a failed card refund's cancel is `OQ-038`. D5 §13. Tests: 502.
