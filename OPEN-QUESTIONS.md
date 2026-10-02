@@ -568,6 +568,33 @@ fallback is a design that holds either answer, not a guess at the answer.
 - **Blocked:** nothing in v1's built slice. Each item names what it blocks.
 - *Meanwhile:* the blueprint says "not built, and not decided" for each and invents no design.
 
+### OQ-035 — Returns and refunds in use: the keys that no edge names, and what the application had to choose
+
+- **Unknown:** Domain 5's application layer needed six things the specification does not settle. Each was built the
+  narrowest way, and none invents a key.
+  1. *Reading.* No catalogue key names reading a return or a refund, so there is no list or detail route. A write returns
+     the document it made or changed. A sale's detail (`Sale.View`) carries its lines' returned and refunded amounts and
+     its payments, which is what drafting needs. A returns screen and a refunds queue need a key: `Sale.View` ("see
+     sales"), or new ones.
+  2. *Creating.* A draft return and its lines are under `Return.Create` ("accept a customer return against a sale",
+     `actors-and-roles.md` §2.5), and a draft refund under `Sale.Refund` ("issue a refund"). Creation is not a transition,
+     so no §22 row names either key. Confirm.
+  3. *The late approval.* `RR-11` requires `Return.Approve` and a reason, and the database requires the approver to be
+     neither the opener nor the poster. Built as the approver's own act, in their own session, while the return is a draft.
+     Not specified: where the approval is given from (a second session, or at the till), and whether it may be given
+     while the window is still open. The act has no audit event of its own, because the vocabulary is closed (D-06) and
+     has no type for it; who approved and why are on the return from the moment it is posted.
+  4. *Who pays.* A drawer refund goes out of the drawer and shift it was drafted at, and is completed at once. The person
+     holding `Refund.Pay` need not be at that till. Whether they must be is not specified.
+  5. *A draft cannot be withdrawn.* No edge leaves `Draft` or `PendingApproval` but forward (OQ-023 item 1), so a refund
+     drafted wrongly stays a draft. Cancelling is from `Approved` and `Processing` only.
+  6. *The amount of a line.* The caller names it, bounded by what is left of the line's settled amount, because how much a
+     partial return makes refundable is not defined (OQ-023 item 2).
+- **Why not answerable from `/docs`:** the keys are the owner's to name, and the rest is silent.
+- **Blocked:** a returns screen's list and a refund queue (item 1). Nothing else.
+- *Meanwhile:* the writes above, as D5 §10 describes them. A card refund is refused because the payment provider is not
+  built, which is not a question for the owner.
+
 ## How to use this file
 
 - Add an entry the moment you hit something the specification does not answer. Then continue with a different task.

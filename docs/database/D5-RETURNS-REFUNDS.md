@@ -8,7 +8,8 @@
 | **DESIGNED** | Everything in this document |
 | **IMPLEMENTED** | The migration: tables, constraints, triggers, grants, the CustomerReturn and Refund machines as data |
 | **TESTED** | `server/test/d5-returns.test.ts` (38 tests) plus the schema-wide suites; 229 passing |
-| **Not built** | Everything in §9, and all application code, including the returns screen and the refund provider call |
+| **Application layer** | Built 2026-10-02: the return and refund routes and both machines on the transition endpoint (§10), tested through the routes (`server/src/modules/returns/returns.test.ts`, 19) |
+| **Not built** | Everything in §9, the returns screen, a read of returns and refunds (OQ-035), and the refund provider call |
 
 Sources: [returns-refunds-domain.md](../product/returns-refunds-domain.md) (`RR-*`),
 [payment-domain.md](../product/payment-domain.md) §6 (`PY-21`..`PY-28`), [cash-management.md](../product/cash-management.md)
@@ -291,3 +292,71 @@ Recorded in BUILD-STATUS with their rules:
 - The goodwill concentration report (`RR-37`, `RT-523`).
 - The customer-facing refusal text (`RT-524`, UX phase).
 - Restocking fees, which are out of scope per the domain itself.
+
+## 10. The application layer (2026-10-02)
+
+Code: `server/src/modules/returns/returns.ts` and `refunds.ts`; tests `returns.test.ts` (19). The database does the work
+(§1 to §5); the application chooses the order and says no early. Every key is one the specification names (D-16,
+`state-machines.md` §22.7, `actors-and-roles.md` §2.5).
+
+**Returns** (`/api/v1/stores/:storeId/...`)
+
+| Act | How | Key |
+|---|---|---|
+| Open a draft against a sale of this store | `POST /returns { clientOperationId, saleId }`; a repeat returns the return already opened (`RR-15`) | `Return.Create` |
+| Add a line | `POST /returns/:id/lines { clientOperationId, saleLineId, quantity, disposition, locationId }`. The variant comes from the sold line (`BI-16`). No default disposition (`RR-18`). The location must be the store's own (`MS-16`) | `Return.Create` |
+| Remove a draft line | `DELETE /returns/:id/lines/:lineId` | `Return.Create` |
+| Approve a late return | `POST /returns/:id/late-approval { reasonCodeId }`, by the approver, in their own session, while the return is a draft (`RR-11`) | `Return.Approve` |
+| Post | `POST /transitions` `CustomerReturn` `post`: stamps who posted, writes one `SALE_RETURN` per line into its dispositioned location in `(variant, location)` order, in the same transaction. An empty return is refused first | `Return.Create` (the edge) |
+| Cancel | `CustomerReturn` `cancel`, with `reasonCodeId` recorded in `cancel_reason_code_id` (`SM-42`) | `Return.Create` (D-16) |
+
+**Refunds**
+
+| Act | How | Key |
+|---|---|---|
+| Draft | `POST /refunds { clientOperationId, saleId, returnId?, method, paymentId?, reasonCodeId?, lines: [{ saleLineId, amount }] }`. The server derives the disbursement (§4.1), takes the till and open shift from the session for a drawer refund, and computes each line's tax as the cumulative proportion (`SS052`). The draft is bounded by what is left of each line (`SS049`) | `Sale.Refund` |
+| Submit, approve | `Refund` `submit`, `approve`: stamp who did it | `Sale.Refund`, `Sale.Refund.Large.Approve` |
+| Pay | `Refund` `submit to provider`: takes the hold, and for a **drawer** refund writes the `RefundFromDrawer` row and completes the refund in the same transaction (`PY-27`). The answer carries the state it is in then: `Completed` | `Refund.Pay` (D-16) |
+| Cancel | `Refund` `cancel`, with a reason, from `Approved` or `Processing` (`SM-40`) | `Sale.Refund` (D-16) |
+| Retry | `Refund` `retry` (`Failed → Processing`) | `Sale.Refund` (D-16) |
+
+**What the transition endpoint gained.** A machine may name `reasonColumnFor(to)`, the column that records why a subject
+entered a state; it is set in the same statement as the state, because the table's own check ties them together, and a
+request with no reason is refused first with `SS055`. The answer to a transition is the state read after the use case ran.
+
+**What a sale's detail gained** (`Sale.View`, as before): each line's id, returned quantity, settled amount and refunded
+amount; the sale's status; and its captured payments. A return or refund is drafted against these.
+
+**Refused, not built:**
+- **A refund to a card.** Paying one calls the payment provider, which does not exist (card payments through the simulated
+  gateway are the next piece of Phase E). `submit to provider` on a `Provider` refund answers `provider_not_available`
+  and changes nothing. `retry` is the same. `fail` and `complete` are system edges no person can fire, so a refund
+  cannot reach `Failed` until the gateway can.
+- **Reading returns and refunds.** No catalogue key names a read of them (OQ-035), so there is no list or detail route.
+  A write returns the document it made or changed, to someone who holds that write's key.
+- `Posted → Settled → Closed` (keys open, OQ-023 item 2), exchange, store credit, goodwill returns, batch attribution,
+  loyalty reversal and the notifications (§9).
+
+**Open, recorded in OQ-035:** the key for reading, the keys for creating (not edges), where a late approval is given
+from and its audit event, whether the person who pays must be at the refund's till, and a draft that cannot be withdrawn.
+
+**Proved by (`returns.test.ts`):**
+
+| Rule | Test |
+|---|---|
+| `RR-14`, `RR-15`, `RR-17`, `SP-66`, `SM-38` | A return is opened, filled and posted; the stock comes back; the sold line and the sale's status follow, through `Returned`; a repeat opens nothing; a posted return cannot be cancelled or changed; no drift |
+| `RR-14`, `RT-148` | Over-returning is refused as built and at posting, naming the remainder |
+| `RR-17`..`RR-19`, `BE-36`, `MS-16` | No default disposition; each disposition only to its kind of location; the movement names it; only the store's own locations |
+| `RR-08`, `RR-13`, `BI-16`, `MS-04` | Another store's sale, line or return does not exist to the caller |
+| `RR-16`, `SM-04` | A repeated line is added once; a draft line is removed only through its own return |
+| `SM-42`, `BI-40`, `D-16` | A cancel needs a live reason and moves nothing; an empty return cannot post |
+| `AC-01`, `D-16` | Each act needs its own key and no neighbour's; no session is `401` |
+| `RR-10`, `RR-11`, `AP-08` | Past the window: refused naming the day; posts with `Return.Approve` and a reason; the approver is neither opener nor poster; a window's last day is inside |
+| `RR-22`, `RR-24`, `PY-27`, `RT-156`, `RR-06` | A refund is drafted, submitted, approved by another and paid from the drawer; the line holds it; the tax adds to exactly what was charged (114 then 113 of 227) |
+| `RR-03`, `RR-24`, `PY-22`, `EC-02` | More than is left is refused as drafted and at the hold; two drafts of the same money cannot both be paid |
+| `RR-22`, `PY-25`, `BI-09` | Cash names no tender; a tender names a captured payment of this sale; a drawer refund needs a till and an open shift |
+| `RR-35`, `PY-26` | A refund with no return needs a reason; a repeat drafts nothing new; a line appears once and is of the sale |
+| `RR-01`, `SS051` | A refund for a return pays only the lines the posted return took back |
+| `BI-26`, `AP-08`, `AP-03`, `D-16` | The approver is not the submitter; paying is `Refund.Pay`; creating and cancelling are `Sale.Refund`; lines fixed after submission |
+| `PY-27`, `PT-03`, `SS025` | A drawer refund is refused whole at a till out of service |
+| `RR-23`, `PY-25` | A card refund is refused whole, holding nothing |
