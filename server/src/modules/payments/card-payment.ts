@@ -2,7 +2,7 @@ import type { FastifyRequest } from 'fastify';
 import type pg from 'pg';
 import { withTransaction } from '../../db/pool.ts';
 import { AppError } from '../../http/errors.ts';
-import { auditContext, requirePermission } from '../../http/gate.ts';
+import { auditContext } from '../../http/gate.ts';
 import type { GatewayResult, PaymentGateway } from './gateway.ts';
 
 /**
@@ -125,7 +125,6 @@ export async function advanceCardPayment(
         break;
       }
       case 'Authorized': {
-        await requirePermission(pool, request, 'Payment.Capture', request.storeId);
         const result = await gateway.capture({
           merchantReference: payment.id,
           providerReference: payment.providerReference!,

@@ -446,6 +446,15 @@ async function findCardCheckout(db: Queryable, terminalId: string, operationId: 
   );
 }
 
+/** The sale this request asked for already exists: another copy of it saved it. */
+class AlreadySaved extends Error {
+  readonly saleId: string;
+  constructor(saleId: string) {
+    super('This sale was already saved.');
+    this.saleId = saleId;
+  }
+}
+
 /**
  * A sale paid in part or whole by card (`PY-38`: authorize, capture, commit, print). It is resumable by the cart's
  * operation id: sending the same sale again picks the payment up where it stopped, whether that was a timeout, a failed
@@ -480,6 +489,10 @@ async function completeCardSale(
       amount: payment.amount,
     });
   } catch (error) {
+    // A concurrent copy of this request saved the sale first (the loser meets a closed checkout or the sale's key): the
+    // route answers with that sale, as it does for any repeat (SM-04).
+    const saved = await one<{ id: string }>(pool, 'SELECT id FROM sale WHERE pos_terminal_id = $1 AND client_operation_id = $2', [till.terminalId, body.clientOperationId]);
+    if (saved !== undefined) throw new AlreadySaved(saved.id);
     // PY-38: the money is taken and the sale is not saved. The payment stays captured on its open checkout, for the same
     // request to complete or for a person to refund (PY-40); say so, whatever the cause.
     const cause = toApiError(error);
@@ -518,8 +531,8 @@ export async function saleRoutes(
           : await completeCardSale(pool, request, till, body, options);
       return reply.status(201).send(await summary(pool, sale));
     } catch (error) {
-      const constraint = (error as { constraint?: string }).constraint;
-      const raced = constraint === 'uq_checkout_operation' || constraint === 'uq_sale_operation' ? await existing() : undefined;
+      if (error instanceof AlreadySaved) return reply.status(200).send(await summary(pool, error.saleId));
+      const raced = (error as { constraint?: string }).constraint === 'uq_checkout_operation' ? await existing() : undefined;
       if (raced !== undefined) return reply.status(200).send(await summary(pool, raced.id));
       throw error;
     }

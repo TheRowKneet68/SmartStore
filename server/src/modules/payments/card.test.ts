@@ -299,6 +299,20 @@ describe('a sale paid by card, through the simulated gateway (PY-07, PY-36..PY-3
   });
 });
 
+describe("resuming a card sale that two requests resume at once (PY-39, SM-04)", () => {
+  it("PY-11, PY-39: two resends of a payment left Authorized capture it once and make one sale", async () => {
+    const s = await shop();
+    const first = await pay(s, { card: { token: "TEST-CAPTURE-TIMEOUT" } });
+    expect(first.response.json().error.code).toBe("card_pending");
+    const send = () => pay(s, { card: { token: "TEST-CAPTURE-TIMEOUT" } }, first.operation);
+    const results = await Promise.all([send(), send()]);
+    const codes = results.map((r) => r.response.statusCode).sort();
+    expect(codes, results.map((r) => r.response.body).join(' | ')).toEqual([200, 201]);
+    expect(await salesWith(first.operation)).toBe(1);
+    expect(await payments(s.storeId, first.operation)).toMatchObject([{ status: "Captured", checkout: "Completed" }]);
+  });
+});
+
 /** A card sale of three things, paid by `token`, then its Bread line refunded (500) to the card, approved and ready to pay. */
 async function approvedCardRefund(s: Shop, token: string) {
   const sold = await pay(s, { card: { token } });
