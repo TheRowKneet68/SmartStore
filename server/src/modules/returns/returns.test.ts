@@ -4,14 +4,17 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { onboard } from '../../onboarding.ts';
 import { signedInAs, testApp } from '../../../test/app.ts';
 import { createTestDb, type TestDb } from '../../../test/db.ts';
-import { employeeWithAccess, insertLocation, onboardingAnswers } from '../../../test/fixtures.ts';
+import { employeeWithAccess, onboardingAnswers } from '../../../test/fixtures.ts';
+import { shopKit, type Headers, type Json, type Shop } from '../../../test/shop.ts';
 
 let db: TestDb;
 let app: FastifyInstance;
+let kit: ReturnType<typeof shopKit>;
 
 beforeAll(async () => {
   db = await createTestDb();
   app = await testApp(db);
+  kit = shopKit(db, app);
 });
 
 afterAll(async () => {
@@ -19,72 +22,9 @@ afterAll(async () => {
   await db.drop();
 });
 
-type Headers = Record<string, string>;
-type Json = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
-const call = (method: 'GET' | 'POST' | 'PUT' | 'DELETE', url: string, as: Headers, payload?: object) =>
-  app.inject({ method, url: `/api/v1${url}`, headers: as, ...(payload ? { payload } : {}) });
-
-async function ok(method: 'POST' | 'PUT', url: string, as: Headers, payload: object): Promise<Json> {
-  const response = await call(method, url, as, payload);
-  expect(response.statusCode, `${method} ${url}: ${response.body}`).toBeLessThan(300);
-  return response.json();
-}
-
-/**
- * A store that has sold something, built through the routes, in TEST-ONLY terms: an inclusive 10% tax, an active till, a
- * clerk at it who can sell, return and draft and pay refunds, a manager who approves, and a second location of each
- * kind a return can be sent to.
- */
-async function returnsShop() {
-  const o = await onboard(db.app, onboardingAnswers());
-  const owner = signedInAs(o.ownerEmployeeId, o.organizationId);
-  const unit = (await ok('POST', '/units', owner, { code: 'EA', name: 'Each', quantityKind: 'Countable', scale: 0 })).id as string;
-  const tax = (await ok('POST', '/tax-categories', owner, { code: 'STD', name: 'TEST-ONLY standard' })).id as string;
-  await ok('POST', `/tax-categories/${tax}/rates`, owner, { jurisdiction: 'TEST-ONLY', ratePercent: '10' });
-  const category = (await ok('POST', '/categories', owner, { name: 'Groceries', parentId: null, sortOrder: 1 })).id as string;
-  const item = async (name: string, amount: number, barcode: { value: string; kind: string }) => {
-    const product = (await ok('POST', '/products', owner, { categoryId: category, name })).id as string;
-    await ok('POST', `/products/${product}/variants`, owner, { baseUnitId: unit, taxCategoryId: tax, price: { amount }, barcodes: [barcode] });
-    await ok('POST', '/transitions', owner, { machine: 'Product', event: 'activate', subject: product });
-  };
-  await item('Oat milk', 1_250, { value: '012345678905', kind: 'UPC_A' });
-  await item('Bread', 500, { value: '4006381333931', kind: 'EAN13' });
-  const cash = (await ok('POST', '/payment-methods', owner, { code: 'CASH', name: 'Cash', methodType: 'Cash' })).id as string;
-  await ok('PUT', `/stores/${o.storeId}/payment-methods/${cash}`, owner, { enabled: true });
-  const till = (await ok('POST', `/stores/${o.storeId}/terminals`, owner, { code: 'T1', label: 'Till 1' })).id as string;
-  await ok('POST', '/transitions', owner, { machine: 'Device', event: 'activate', subject: till });
-  const staff = (keys: string[], at?: string) =>
-    employeeWithAccess(db.app, o.organizationId, keys, { assignedStore: o.storeId, accessStores: [o.storeId] }).then((id) => signedInAs(id, o.organizationId, at));
-  const clerk = await staff(['Sale.Create', 'Sale.View', 'Shift.Open', 'Return.Create', 'Sale.Refund', 'Refund.Pay'], till);
-  const manager = await staff(['Return.Approve', 'Sale.Refund.Large.Approve', 'Return.Create', 'Sale.Refund']);
-  const manager2 = await staff(['Return.Approve', 'Sale.Refund.Large.Approve']);
-  const reason = (await ok('POST', '/reason-codes', owner, { code: 'WHY', name: 'Because' })).id as string;
-
-  const where = await db.app.query<{ warehouse_id: string; id: string }>(
-    `SELECT l.id, l.warehouse_id FROM storage_location l JOIN warehouse w ON w.id = l.warehouse_id WHERE w.store_id = $1 AND l.is_sellable`,
-    [o.storeId],
-  );
-  const sellable = where.rows[0]!.id;
-  const quarantine = await insertLocation(db.app, o.organizationId, where.rows[0]!.warehouse_id, 'StoreAttached', 'Quarantine', false);
-
-  await ok('POST', `/stores/${o.storeId}/shift`, clerk, { openingFloat: 10_000 });
-  const quote = async (code: string) => (await call('GET', `/stores/${o.storeId}/scan/${code}`, clerk)).json().quote as string;
-  const sale = (await ok('POST', `/stores/${o.storeId}/sales`, clerk, {
-    clientOperationId: randomUUID(),
-    lines: [
-      { quote: await quote('012345678905'), quantity: 2 },
-      { quote: await quote('4006381333931'), quantity: 1 },
-    ],
-    cash: { tendered: 5_000 },
-  })) as Json;
-  const milk = sale.lines.find((l: Json) => l.description === 'Oat milk') as Json;
-  const bread = sale.lines.find((l: Json) => l.description === 'Bread') as Json;
-  const store = `/stores/${o.storeId}`;
-  const go = (as: Headers, machine: string, event: string, subject: string, extra: object = {}) =>
-    call('POST', '/transitions', as, { machine, event, subject, ...extra });
-  return { ...o, owner, clerk, manager, manager2, reason, sellable, quarantine, sale, milk, bread, store, go, till };
-}
-type ReturnsShop = Awaited<ReturnType<typeof returnsShop>>;
+const call: ReturnType<typeof shopKit>['call'] = (...args) => kit.call(...args);
+const returnsShop = () => kit.shop();
+type ReturnsShop = Shop;
 
 const open = (s: ReturnsShop, as: Headers = s.clerk, saleId = s.sale.saleId as string, operation = randomUUID()) =>
   call('POST', `${s.store}/returns`, as, { clientOperationId: operation, saleId });
@@ -478,7 +418,7 @@ describe('refunds: money back for a sale (RR-01, RR-03, RR-22, RR-24, PY-25, PY-
     expect((await s.go(s.clerk, 'Refund', 'submit to provider', id)).json().state).toBe('Completed');
   });
 
-  it('RR-23, PY-25: a refund to a card goes to the provider, which is not available yet, so it is refused whole and nothing is held', async () => {
+  it('RR-23, PY-25, PY-36: a card refund is not paid on the transition endpoint, where the provider cannot be asked outside the transaction, so it is refused whole and nothing is held', async () => {
     const s = await returnsShop();
     const id = await approved(s, { lines: [{ saleLineId: s.bread.saleLineId, amount: 500 }], reasonCodeId: s.reason });
     // There is no card payment in the slice, so the refund is re-routed as one to a card tender would be.
@@ -488,7 +428,7 @@ describe('refunds: money back for a sale (RR-01, RR-03, RR-22, RR-24, PY-25, PY-
     );
     const refused = await s.go(s.clerk, 'Refund', 'submit to provider', id);
     expect(refused.statusCode).toBe(409);
-    expect(refused.json().error.code).toBe('provider_not_available');
+    expect(refused.json().error.code).toBe('use_pay_route');
     expect(await stateOf(id)).toBe('Approved');
     expect(await refundedOf(s.bread.saleLineId)).toBe(0);
   });

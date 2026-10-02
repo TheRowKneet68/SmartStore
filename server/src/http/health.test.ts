@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../app.ts';
 import { createPool } from '../db/pool.ts';
+import { SimulatedGateway } from '../modules/payments/simulated-gateway.ts';
 import { TEST_LOCK_TIMEOUT_MS, TEST_QUOTE_MAX_AGE_MINUTES, TEST_SESSION_POLICY, testApp } from '../../test/app.ts';
 import { createTestDb, type TestDb } from '../../test/db.ts';
 
@@ -16,7 +17,7 @@ afterAll(async () => {
 
 /** The server on a pool of its own, which a test may then break. */
 const onPool = (pool: ReturnType<typeof createPool>) =>
-  buildApp({ pool, session: TEST_SESSION_POLICY, quoteMaxAgeMinutes: TEST_QUOTE_MAX_AGE_MINUTES, lockTimeoutMs: TEST_LOCK_TIMEOUT_MS });
+  buildApp({ pool, gateway: new SimulatedGateway(), session: TEST_SESSION_POLICY, quoteMaxAgeMinutes: TEST_QUOTE_MAX_AGE_MINUTES, lockTimeoutMs: TEST_LOCK_TIMEOUT_MS });
 
 describe("liveness and readiness (the owner's brief, Phase D; architecture s24.3, s25.4)", () => {
   it('liveness and readiness answer without a session, outside the versioned API', async () => {
