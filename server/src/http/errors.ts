@@ -26,7 +26,7 @@ interface PgError {
 }
 
 /** What a refusal's DETAIL means to the client, so it can show it (`RT-148`: the refusal names the remainder). */
-const DETAIL_NAME: Record<string, string> = { SS046: 'remaining', SS048: 'windowClosedOn', SS049: 'remaining' };
+const DETAIL_NAME: Record<string, string> = { SS046: 'remaining', SS048: 'windowClosedOn', SS049: 'remaining', SS058: 'remaining' };
 
 /**
  * Messages for the business-rule refusals the database raises (CONVENTIONS §15). A domain adds its own when its routes
@@ -70,6 +70,8 @@ const BUSINESS_RULES: Record<string, string> = {
   SS052: 'The tax on that refund is not in proportion to the line. Draft it again.',
   SS053: 'The refund did not add up, so nothing was saved.',
   SS055: 'This needs a reason. Choose one and try again.',
+  SS058: 'That is more than is still left to give back to that payment.',
+  SS059: 'A payment is refunded without its sale only while it has none, and a sale cannot be made from a payment that is being refunded.',
   SS057: 'This employee has a till shift that is not closed. Close it first.',
 };
 
@@ -94,6 +96,7 @@ const CHECKS: Record<string, string> = {
   ck_customer_return_late_separation: 'The approver must be someone other than the person who opened the return or posts it.',
   ck_refund_separation: 'The approver must be someone other than the person who drafted or submitted the refund.',
   ck_refund_goodwill_reason: 'A refund with no return needs a reason.',
+  ck_refund_sale_or_payment: 'A refund is of a sale, or of a card payment that never became one, and then it needs a reason.',
 };
 
 /** Uniqueness a client can run into, by constraint or index, with what it means. */

@@ -496,6 +496,8 @@ async function completeCardSale(
     // PY-38: the money is taken and the sale is not saved. The payment stays captured on its open checkout, for the same
     // request to complete or for a person to refund (PY-40); say so, whatever the cause.
     const cause = toApiError(error);
+    // D-18: the payment is being given back, so there is nothing to send again.
+    if (cause.code === 'SS059') throw cause;
     throw new AppError(
       cause.status,
       cause.code,

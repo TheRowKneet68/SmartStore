@@ -28,16 +28,19 @@ export interface CardPayment {
   providerReference: string | null;
   /** What the provider last said, `Timeout` or `Pending` meaning it has not been settled (`PY-11`). */
   providerOutcome: string | null;
+  /** What refunds with no sale hold back to the card (D-18). A payment being given back does not pay for goods. */
+  refundedAmount: number;
 }
 
 export type CardResult = { kind: 'captured' } | { kind: 'refused'; error: AppError };
 
 export const PAYMENT_COLUMNS = `p.id, p.checkout_id AS "checkoutId", p.status, p.amount, p.currency_code AS "currencyCode",
-  p.provider_transaction_reference AS "providerReference", p.provider_outcome AS "providerOutcome"`;
+  p.provider_transaction_reference AS "providerReference", p.provider_outcome AS "providerOutcome", p.refunded_amount AS "refundedAmount"`;
 
 const refusals = {
   declined: () => new AppError(409, 'card_declined', 'The card was declined. Try another card or another way to pay. The cart is kept.'),
   failed: () => new AppError(409, 'card_failed', 'The card could not be charged because of a technical failure. Nothing was taken. The cart is kept.'),
+  refunded: () => new AppError(409, 'card_refunded', 'This card payment is being given back, so the sale was not made. Start the sale again.'),
   voided: () => new AppError(409, 'card_voided', 'This card payment was cancelled, so the sale was not made. Start the sale again.'),
   pending: () =>
     new AppError(
@@ -99,7 +102,7 @@ export async function advanceCardPayment(
   for (let step = 0; step < 4; step++) {
     switch (payment.status) {
       case 'Captured':
-        return { kind: 'captured' };
+        return payment.refundedAmount > 0 ? { kind: 'refused', error: refusals.refunded() } : { kind: 'captured' };
       case 'Declined':
         return { kind: 'refused', error: refusals.declined() };
       case 'Failed':

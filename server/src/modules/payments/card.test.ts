@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { testApp } from '../../../test/app.ts';
-import { createTestDb, type TestDb } from '../../../test/db.ts';
+import { createTestDb, sqlState, type TestDb } from '../../../test/db.ts';
 import { insertSettings } from '../../../test/fixtures.ts';
 import { shopKit, type Json, type Shop } from '../../../test/shop.ts';
 import type { GatewayResult } from './gateway.ts';
@@ -678,5 +678,198 @@ describe('npm run payments:check (PY-40)', () => {
     expect(none.stdout).toContain('No card payment needs a person.');
     expect(run().status, 'no window given').not.toBe(0);
     expect(run().stderr).toContain('Say how long a payment may wait');
+  });
+});
+
+/** A card payment captured with no sale: the card was charged, and the sale could not be saved (`PY-37`). Returns its ids. */
+async function orphan(s: Shop, token = 'TEST-APPROVE') {
+  await insertSettings(db.app, s.storeId, 'BlockNegative');
+  const taken = await pay(s, { card: { token } });
+  expect(taken.response.json().error.code).toBe('SS011');
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  await insertSettings(db.app, s.storeId, 'AllowNegative');
+  return { operation: taken.operation, paymentId: await paymentIdOf(s, taken.operation) };
+}
+const refundOf = (s: Shop, paymentId: string, amount: number, as: Record<string, string> = s.clerk, extra: Json = {}) =>
+  call('POST', `${s.store}/refunds`, as, { clientOperationId: randomUUID(), method: 'OriginalTender', paymentId, amount, reasonCodeId: s.reason, ...extra });
+async function approvedRefundOf(s: Shop, paymentId: string, amount: number): Promise<string> {
+  const made = await refundOf(s, paymentId, amount);
+  expect(made.statusCode, made.body).toBe(201);
+  const id = made.json().id as string;
+  expect((await s.go(s.clerk, 'Refund', 'submit', id)).json().state).toBe('PendingApproval');
+  expect((await s.go(s.manager2, 'Refund', 'approve', id)).json().state).toBe('Approved');
+  return id;
+}
+const payRefund = (s: Shop, id: string) => call('POST', `${s.store}/refunds/${id}/pay`, s.clerk);
+const heldOn = async (paymentId: string): Promise<number> =>
+  Number((await db.app.query<{ n: string }>('SELECT refunded_amount AS n FROM payment WHERE id = $1', [paymentId])).rows[0]!.n);
+
+describe('owner decision D-18: the money of a payment that never became a sale goes back to the card (OQ-036 item 2, PY-21, PY-22, PY-37)', () => {
+  it('PY-37, PY-25, RR-35, BI-26: a captured payment with no sale is refunded through the same machine, approved by another, paid at the provider; the payment is then settled and its sale cannot be made', async () => {
+    const s = await shop();
+    const { operation, paymentId } = await orphan(s);
+    const viewer = await s.staff(['Payment.View']);
+    expect((await call('GET', `${s.store}/payments/attention?olderThanMinutes=0`, viewer)).json().summary.CapturedNoSale).toBe(1);
+
+    const made = await refundOf(s, paymentId, 3_000);
+    expect(made.statusCode, made.body).toBe(201);
+    expect(made.json()).toMatchObject({ saleId: null, returnId: null, paymentId, method: 'OriginalTender', disbursement: 'Provider', amount: 3_000, taxAmount: 0, status: 'Draft', lines: [] });
+    const id = made.json().id as string;
+    expect((await s.go(s.clerk, 'Refund', 'submit', id)).json().state).toBe('PendingApproval');
+    expect((await s.go(s.clerk, 'Refund', 'approve', id)).statusCode, 'the clerk holds no approval key').toBe(403);
+    expect((await s.go(s.manager2, 'Refund', 'approve', id)).json().state).toBe('Approved');
+    expect(await heldOn(paymentId), 'nothing is held until it is paid').toBe(0);
+
+    gateway.calls = [];
+    const paid = await payRefund(s, id);
+    expect(paid.statusCode, paid.body).toBe(200);
+    expect(paid.json()).toMatchObject({ status: 'Completed', saleId: null, simulated: true, providerOutcome: 'Approved' });
+    expect(gateway.calls).toEqual(['refund']);
+    expect(await heldOn(paymentId)).toBe(3_000);
+    expect((await payments(s.storeId, operation))[0]).toMatchObject({ status: 'Captured', checkout: 'Abandoned' });
+    const drawer = await db.app.query(`SELECT count(*)::int AS n FROM cash_transaction WHERE refund_id = $1`, [id]);
+    expect(drawer.rows[0].n, 'a card refund never touches the drawer').toBe(0);
+    const events = await db.app.query(`SELECT event_type FROM audit_event WHERE entity_id = $1`, [id]);
+    expect(events.rows.map((r: Json) => r.event_type)).toEqual(expect.arrayContaining(['Approval.Decided', 'Payment.Refund']));
+
+    // Given back in full, it is settled: it leaves the report, and the same sale cannot be made from it.
+    const after = (await call('GET', `${s.store}/payments/attention?olderThanMinutes=0`, viewer)).json();
+    expect(after.summary.CapturedNoSale).toBe(0);
+    const again = await pay(s, { card: { token: 'TEST-APPROVE' } }, operation);
+    expect(again.response.json().error.code).toBe('card_refunded');
+    expect(await salesWith(operation)).toBe(0);
+    expect((await db.app.query('SELECT count(*)::int AS n FROM payment_refund_drift()')).rows[0].n).toBe(0);
+  });
+
+  it('PY-22, PY-24, SS058: a payment gives back no more than it took, in parts; more is refused as drafted, naming what is left, and at the hold', async () => {
+    const s = await shop();
+    const { paymentId } = await orphan(s);
+    const over = await refundOf(s, paymentId, 3_001);
+    expect(over.statusCode).toBe(409);
+    expect(over.json().error).toMatchObject({ code: 'SS058', remaining: '3000' });
+    const first = await approvedRefundOf(s, paymentId, 2_000);
+    const second = await approvedRefundOf(s, paymentId, 2_000);
+    expect((await payRefund(s, first)).json().status).toBe('Completed');
+    expect(await heldOn(paymentId)).toBe(2_000);
+    const blocked = await payRefund(s, second);
+    expect(blocked.statusCode).toBe(409);
+    expect(blocked.json().error).toMatchObject({ code: 'SS058', remaining: '1000' });
+    expect((await db.app.query(`SELECT status FROM refund WHERE id = $1`, [second])).rows[0].status, 'refused whole, still approved').toBe('Approved');
+    expect((await refundOf(s, paymentId, 1_001)).json().error.remaining).toBe('1000');
+    // What is left can still be given back, and the report keeps the payment until all of it is.
+    const viewer = await s.staff(['Payment.View']);
+    const listed = (await call('GET', `${s.store}/payments/attention?olderThanMinutes=0`, viewer)).json();
+    expect(listed.items).toMatchObject([{ kind: 'CapturedNoSale', heldBack: 2_000, givenBack: 2_000 }]);
+    const rest = await approvedRefundOf(s, paymentId, 1_000);
+    expect((await payRefund(s, rest)).json().status).toBe('Completed');
+    expect((await call('GET', `${s.store}/payments/attention?olderThanMinutes=0`, viewer)).json().summary.CapturedNoSale).toBe(0);
+  });
+
+  it('PY-22, RR-24, EC-02: five approved refunds of 1,000 against a payment of 3,000, paid at once, make exactly three', async () => {
+    const s = await shop();
+    const { paymentId } = await orphan(s);
+    const ids: string[] = [];
+    for (let i = 0; i < 5; i++) ids.push(await approvedRefundOf(s, paymentId, 1_000));
+    const results = await Promise.all(ids.map((id) => payRefund(s, id)));
+    expect(results.filter((r) => r.statusCode === 200)).toHaveLength(3);
+    expect(results.filter((r) => r.statusCode !== 200).map((r) => r.json().error.code)).toEqual(['SS058', 'SS058']);
+    expect(await heldOn(paymentId)).toBe(3_000);
+    expect((await db.app.query('SELECT count(*)::int AS n FROM payment_refund_drift()')).rows[0].n).toBe(0);
+  });
+
+  it('SM-40, SM-41, RR-24, D-17: the hold is kept through a failure and released only by a cancellation; the payment stays on the report until it has been given back', async () => {
+    const s = await shop();
+    const declining = await orphan(s, 'TEST-REFUND-DECLINE');
+    const id = await approvedRefundOf(s, declining.paymentId, 3_000);
+    const failed = await payRefund(s, id);
+    expect(failed.json().error).toMatchObject({ code: 'refund_failed', state: 'Failed' });
+    expect(await heldOn(declining.paymentId), 'held through the failure').toBe(3_000);
+    const viewer = await s.staff(['Payment.View']);
+    expect((await call('GET', `${s.store}/payments/attention?olderThanMinutes=0`, viewer)).json().items).toMatchObject([{ kind: 'CapturedNoSale', heldBack: 3_000, givenBack: 0 }]);
+
+    const slow = await orphan(s, 'TEST-REFUND-TIMEOUT');
+    const pending = await approvedRefundOf(s, slow.paymentId, 3_000);
+    expect((await payRefund(s, pending)).json().error.code).toBe('refund_pending');
+    expect(await heldOn(slow.paymentId)).toBe(3_000);
+    expect((await s.go(s.manager, 'Refund', 'cancel', pending, { reasonCodeId: s.reason })).json().state).toBe('Cancelled');
+    expect(await heldOn(slow.paymentId), 'released by the cancellation').toBe(0);
+    expect((await db.app.query('SELECT count(*)::int AS n FROM payment_refund_drift()')).rows[0].n).toBe(0);
+  });
+
+  it('PY-37, D-17, SS059: a payment being refunded does not pay for goods, and one that has become a sale is refunded through the sale', async () => {
+    const s = await shop();
+    const { operation, paymentId } = await orphan(s);
+    const draft = await refundOf(s, paymentId, 3_000);
+    expect(draft.statusCode).toBe(201);
+    // While a refund of the payment is open, even as a draft, the sale cannot be made from it.
+    const blocked = await pay(s, { card: { token: 'TEST-APPROVE' } }, operation);
+    expect(blocked.response.statusCode).toBe(409);
+    expect(blocked.response.json().error.code).toBe('SS059');
+    expect(blocked.response.json().error.message).not.toMatch(/send this same sale again/);
+    expect(await salesWith(operation)).toBe(0);
+    // Withdrawn (D-17), the refund is no obstacle, and the sale completes on the money that was taken.
+    expect((await s.go(s.clerk, 'Refund', 'cancel', draft.json().id, { reasonCodeId: s.reason })).json().state).toBe('Cancelled');
+    gateway.calls = [];
+    const done = await pay(s, { card: { token: 'TEST-APPROVE' } }, operation);
+    expect(done.response.statusCode, done.response.body).toBe(201);
+    expect(gateway.calls, 'the card was not charged again').toEqual([]);
+    // Now it has a sale: refunded through the sale, never without it.
+    const sale = done.response.json();
+    const without = await refundOf(s, sale.payments[0].paymentId, 100);
+    expect(without.statusCode).toBe(409);
+    expect(without.json().error.code).toBe('SS059');
+  });
+
+  it('PY-25, PY-37, RR-22, SS050, SS059: only a captured card payment of this store, with no sale, is refunded this way, and it needs a reason and nothing else', async () => {
+    const s = await shop();
+    const { operation, paymentId } = await orphan(s);
+    const pendingOp = await pay(s, { card: { token: 'TEST-TIMEOUT' } });
+    const pendingId = await paymentIdOf(s, pendingOp.operation);
+    expect((await refundOf(s, pendingId, 100)).json().error.code, 'not captured').toBe('SS050');
+    expect((await refundOf(s, s.sale.payments[0].paymentId, 100)).json().error.code, 'a cash payment, which has a sale').toBe('SS059');
+    expect((await refundOf(s, randomUUID(), 100)).statusCode, 'no such payment').toBe(404);
+    const other = await shop();
+    expect((await refundOf(other, paymentId, 100, other.clerk)).statusCode, "another store's payment").toBe(404);
+    const noReason = await call('POST', `${s.store}/refunds`, s.clerk, { clientOperationId: randomUUID(), method: 'OriginalTender', paymentId, amount: 100 });
+    expect(noReason.statusCode, 'a reason is required').toBe(400);
+    for (const extra of [{ returnId: randomUUID() }, { lines: [{ saleLineId: randomUUID(), amount: 100 }] }, { method: 'Cash' }]) {
+      const bad = await refundOf(s, paymentId, 100, s.clerk, extra);
+      expect(bad.statusCode, JSON.stringify(extra)).toBeGreaterThanOrEqual(400);
+    }
+    expect((await refundOf(s, paymentId, 0)).statusCode).toBe(400);
+    // A repeat of the operation id drafts nothing new.
+    const op = randomUUID();
+    const first = await refundOf(s, paymentId, 100, s.clerk, { clientOperationId: op });
+    const second = await refundOf(s, paymentId, 100, s.clerk, { clientOperationId: op });
+    expect([first.statusCode, second.statusCode]).toEqual([201, 200]);
+    expect(second.json().id).toBe(first.json().id);
+    // Keys: Sale.Refund drafts, Refund.Pay pays, and no one else does either.
+    expect((await refundOf(s, paymentId, 100, await s.staff(['Refund.Pay']))).statusCode).toBe(403);
+    const id = await approvedRefundOf(s, paymentId, 100);
+    expect((await call('POST', `${s.store}/refunds/${id}/pay`, await s.staff(['Sale.Refund']))).statusCode).toBe(403);
+    expect(operation).toBeDefined();
+  });
+
+  it('PY-12, SM-04, SP-66: the payment counter is the database’s alone, a captured payment is changed in nothing else, and the drift check proves it', async () => {
+    const s = await shop();
+    const { paymentId } = await orphan(s);
+    expect(await sqlState(db.app.query(`UPDATE payment SET refunded_amount = 1 WHERE id = $1`, [paymentId])), 'the application cannot write it').toBe('42501');
+    expect(await sqlState(db.owner.query(`UPDATE payment SET amount = amount + 1 WHERE id = $1`, [paymentId])), 'a captured payment is never edited').toBe('SS035');
+    expect(await sqlState(db.owner.query(`UPDATE payment SET refunded_amount = amount + 1 WHERE id = $1`, [paymentId])), 'never more than it took').toBe('23514');
+    await db.owner.query(`UPDATE payment SET refunded_amount = 5 WHERE id = $1`, [paymentId]);
+    const drift = await db.app.query(`SELECT payment_id, problem, recorded::int, expected::int FROM payment_refund_drift() WHERE payment_id = $1`, [paymentId]);
+    expect(drift.rows).toEqual([{ payment_id: paymentId, problem: 'refunded amount differs from the refunds holding it', recorded: 5, expected: 0 }]);
+    await db.owner.query(`UPDATE payment SET refunded_amount = 0 WHERE id = $1`, [paymentId]);
+    expect((await db.app.query(`SELECT 1 FROM payment_refund_drift() WHERE payment_id = $1`, [paymentId])).rows).toEqual([]);
+  });
+
+  it('MS-02, D-17: a refund of a payment is read with Refund.View like any other, with no sale number', async () => {
+    const s = await shop();
+    const { paymentId } = await orphan(s);
+    const made = await refundOf(s, paymentId, 500);
+    const viewer = await s.staff(['Refund.View']);
+    const listed = await call('GET', `${s.store}/refunds`, viewer);
+    expect(listed.json().items).toMatchObject([{ id: made.json().id, paymentId, saleDocumentNumber: null, status: 'Draft', amount: 500, disbursement: 'Provider' }]);
+    expect((await call('GET', `${s.store}/refunds/${made.json().id}`, viewer)).json()).toMatchObject({ saleId: null, paymentId, lines: [] });
   });
 });

@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type pg from 'pg';
 import { z } from 'zod';
 import { withTransaction, type Queryable } from '../../db/pool.ts';
@@ -40,6 +40,21 @@ const NewRefund = z
     message: 'A refund has one amount per sold line.',
     path: ['lines'],
   });
+
+/**
+ * The refund of a payment that never became a sale (owner decision D-18, OQ-036 item 2): money taken for nothing, given back
+ * to the card it came from (`PY-37`). It names the captured card payment and the amount, and a reason (it is goodwill in the
+ * sense of `RR-35`). It has no sale, no return, no lines and no tax. It is bounded by what the payment took less what has been
+ * held back to it, as a line is bounded by its settled amount (`PY-22`).
+ */
+const NewPaymentRefund = z.object({
+  clientOperationId: z.uuid(),
+  method: z.literal('OriginalTender'),
+  paymentId: z.uuid(),
+  amount: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+  reasonCodeId: z.uuid(),
+  // Strict: a return, a sale or lines would be silently dropped otherwise, and this refund has none of them.
+}).strict();
 
 /**
  * Cash leaves the drawer as one `RefundFromDrawer` row in the refund's own shift, and the refund completes in the same
@@ -140,8 +155,10 @@ async function payByProvider(
         currencyCode: string;
         providerOutcome: string | null;
         capturedReference: string | null;
+        saleId: string | null;
+        checkoutId: string | null;
       }>(
-        `SELECT r.status, r.disbursement, r.amount, r.currency_code AS "currencyCode", r.provider_outcome AS "providerOutcome",
+        `SELECT r.status, r.disbursement, r.amount, r.sale_id AS "saleId", p.checkout_id AS "checkoutId", r.currency_code AS "currencyCode", r.provider_outcome AS "providerOutcome",
                 p.provider_transaction_reference AS "capturedReference"
          FROM refund r LEFT JOIN payment p ON p.id = r.payment_id WHERE r.id = $1 AND r.store_id = $2 FOR UPDATE OF r`,
         [refundId, request.storeId],
@@ -152,6 +169,10 @@ async function payByProvider(
       const from = mode === 'pay' ? 'Approved' : 'Failed';
       if (refund.status === from) {
         await c.query(`UPDATE refund SET status = 'Processing', status_changed_by = $2 WHERE id = $1`, [refundId, request.principal!.employeeId]);
+        // D-18: the money of a payment with no sale is going back, so its cart is given up and cannot be sold on.
+        if (refund.saleId === null && refund.checkoutId !== null) {
+          await c.query(`UPDATE checkout SET status = 'Abandoned' WHERE id = $1 AND status = 'Open'`, [refund.checkoutId]);
+        }
       } else if (refund.status !== 'Processing' && refund.status !== 'Completed') {
         throw new AppError(409, 'illegal_transition', `This refund is ${refund.status}, so it cannot be ${mode === 'pay' ? 'paid' : 'retried'}.`);
       }
@@ -210,6 +231,7 @@ export async function refundRoutes(app: FastifyInstance, options: { pool: pg.Poo
    * operation id returns the refund already drafted (`SM-04`).
    */
   app.post('/stores/:storeId/refunds', inStore('Sale.Refund'), async (request, reply) => {
+    if ((request.body as { saleId?: unknown } | null)?.saleId === undefined) return draftPaymentRefund(request, reply);
     const body = NewRefund.parse(request.body);
     const principal = request.principal!;
     const existing = async () =>
@@ -298,9 +320,9 @@ export async function refundRoutes(app: FastifyInstance, options: { pool: pg.Poo
     const q = Listing.parse(request.query);
     const { rows } = await pool.query<{ documentNumber: number }>(
       `SELECT r.id, r.document_number AS "documentNumber", r.sale_id AS "saleId", s.document_number AS "saleDocumentNumber",
-              r.customer_return_id AS "returnId", r.status, r.method, r.disbursement, r.amount, r.currency_code AS "currencyCode",
+              r.customer_return_id AS "returnId", r.payment_id AS "paymentId", r.status, r.method, r.disbursement, r.amount, r.currency_code AS "currencyCode",
               coalesce(r.provider_transaction_reference LIKE 'SIM-%', false) AS simulated, r.created_at AS "createdAt"
-       FROM refund r JOIN sale s ON s.id = r.sale_id
+       FROM refund r LEFT JOIN sale s ON s.id = r.sale_id
        WHERE r.store_id = $1 AND ($2::text IS NULL OR r.status = $2) AND ($3::uuid IS NULL OR r.sale_id = $3)
          AND ($4::bigint IS NULL OR r.document_number < $4)
        ORDER BY r.document_number DESC LIMIT $5`,
@@ -325,4 +347,43 @@ export async function refundRoutes(app: FastifyInstance, options: { pool: pg.Poo
     const { id } = Ref.parse(request.params);
     return payByProvider(pool, request, gateway, id, 'retry', options.lockTimeoutMs);
   });
+
+  /**
+   * A draft refund of a captured card payment that has no sale (D-18). The same refund machine follows: submitted by
+   * `Sale.Refund`, approved by someone else under `Sale.Refund.Large.Approve`, paid under `Refund.Pay` at its own route. The
+   * payment must be captured, of this store, with no sale; the database refuses anything else (`SS050`, `SS059`), and the
+   * amount is checked here against what is left as it is drafted. The atomic bound is the hold, taken when it is paid.
+   */
+  async function draftPaymentRefund(request: FastifyRequest, reply: FastifyReply) {
+    const body = NewPaymentRefund.parse(request.body);
+    const principal = request.principal!;
+    const existing = async () =>
+      (await pool.query<{ id: string }>('SELECT id FROM refund WHERE store_id = $1 AND client_operation_id = $2', [request.storeId, body.clientOperationId])).rows[0];
+    const before = await existing();
+    if (before !== undefined) return reply.status(200).send(await readRefund(pool, before.id));
+    try {
+      const id = await withTransaction(pool, auditContext(request, { clientOperationId: body.clientOperationId }), async (c) => {
+        const found = await c.query<{ amount: number; refunded: number; currency: string }>(
+          'SELECT amount, refunded_amount AS refunded, currency_code AS currency FROM payment WHERE id = $1 AND store_id = $2',
+          [body.paymentId, request.storeId],
+        );
+        const payment = found.rows[0];
+        if (payment === undefined) throw new AppError(404, 'not_found', 'There is no such payment in this store.');
+        const left = payment.amount - payment.refunded;
+        if (body.amount > left) throw new AppError(409, 'SS058', 'That is more than is still left to give back to that payment.', { remaining: String(left) });
+        const { rows } = await c.query<{ id: string }>(
+          `INSERT INTO refund (store_id, organization_id, sale_id, customer_return_id, client_operation_id, method, payment_id, amount,
+                               tax_amount, currency_code, reason_code_id, created_by, status_changed_by, correlation_id)
+           VALUES ($1, $2, NULL, NULL, $3, 'OriginalTender', $4, $5, 0, $6, $7, $8, $8, $9) RETURNING id`,
+          [request.storeId, principal.organizationId, body.clientOperationId, body.paymentId, body.amount, payment.currency, body.reasonCodeId, principal.employeeId, request.id],
+        );
+        return rows[0]!.id;
+      });
+      return reply.status(201).send(await readRefund(pool, id));
+    } catch (error) {
+      const raced = (error as { constraint?: string }).constraint === 'uq_refund_operation' ? await existing() : undefined;
+      if (raced !== undefined) return reply.status(200).send(await readRefund(pool, raced.id));
+      throw error;
+    }
+  }
 }

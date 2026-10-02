@@ -9,9 +9,10 @@ import type { Queryable } from '../../db/pool.ts';
  * |---|---|---|
  * | `PendingTooLong` | The provider has not said yes or no (`PY-11`, `PY-41`) | Send the sale again to ask, or void it |
  * | `AuthorizedNotCaptured` | Funds reserved and never taken | Send the sale again to capture, or void it |
- * | `CapturedNoSale` | Money taken, and the checkout never became a sale (`PY-37`) | Send the sale again to finish it; otherwise the owner's decision (OQ-036 item 2) |
+ * | `CapturedNoSale` | Money taken, and the checkout never became a sale (`PY-37`) | Send the sale again to finish it, or give the money back with a refund of the payment (D-18) |
  *
- * A declined, failed or voided payment is over, and a captured one with a sale is settled, so neither is listed. How long is "too long" is a number the specification calls configured and does not give, so the caller supplies it
+ * A declined, failed or voided payment is over, a captured one with a sale is settled, and one that has been given back in
+ * full is settled too, so none is listed. How long is "too long" is a number the specification calls configured and does not give, so the caller supplies it
  * (OQ-037). It is measured from when the payment entered its present state.
  */
 export type AttentionKind = 'PendingTooLong' | 'AuthorizedNotCaptured' | 'CapturedNoSale';
@@ -28,6 +29,9 @@ export interface AttentionItem {
   /** True when the gateway that took it moves no money (ADR-31 §13 item 4). Null while the provider has given no reference. */
   simulated: boolean | null;
   checkoutId: string;
+  /** What refunds with no sale hold back to the card, and what has been given back (D-18). Both are 0 until one is drafted and paid. */
+  heldBack: number;
+  givenBack: number;
   /** The cart's operation id: sending the same sale again resumes the payment (`PY-39`). */
   operationId: string;
   storeId: string;
@@ -47,7 +51,10 @@ const NEEDS_A_PERSON = `
   AND now() - p.status_changed_at >= make_interval(mins => $2::int)
   AND ($1::uuid IS NULL OR p.store_id = $1)
   AND (p.status IN ('Pending', 'Authorized')
-       OR (p.status = 'Captured' AND NOT EXISTS (SELECT 1 FROM sale s WHERE s.checkout_id = k.id)))`;
+       OR (p.status = 'Captured' AND NOT EXISTS (SELECT 1 FROM sale s WHERE s.checkout_id = k.id)
+           -- Settled when it has all been given back (D-18). A refund that is held, failed or pending is not given back yet.
+           AND p.amount > coalesce((SELECT sum(r.amount) FROM refund r
+                                    WHERE r.payment_id = p.id AND r.sale_id IS NULL AND r.status = 'Completed'), 0)))`;
 
 export async function paymentsNeedingAttention(
   db: Queryable,
@@ -62,7 +69,8 @@ export async function paymentsNeedingAttention(
             p.provider_transaction_reference LIKE 'SIM-%' AS simulated,
             k.id AS "checkoutId", k.client_operation_id AS "operationId", p.store_id AS "storeId",
             k.pos_terminal_id AS "terminalId", k.cash_shift_id AS "shiftId", p.created_by AS "createdBy",
-            p.status_changed_at AS since
+            p.status_changed_at AS since, p.refunded_amount AS "heldBack",
+            coalesce((SELECT sum(r.amount) FROM refund r WHERE r.payment_id = p.id AND r.sale_id IS NULL AND r.status = 'Completed'), 0)::bigint AS "givenBack"
      FROM payment p JOIN checkout k ON k.id = p.checkout_id
      WHERE ${NEEDS_A_PERSON}
      ORDER BY p.status_changed_at, p.id LIMIT $3 OFFSET $4`,
