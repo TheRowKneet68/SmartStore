@@ -31,6 +31,14 @@ employee without deactivating their account) and produces an empty workspace, pe
 
 The complete set of atomic permissions. Domains are grouped; the key is `<Domain>.<Resource>.<Action>`.
 
+**Owner decision D-16 (2026-10-02).** Five keys were added, so the catalogue now holds 122:
+- `Payment.Capture` and `Payment.Void` (§2.11);
+- `Employee.Reactivate` (§2.8);
+- `Refund.Pay` (§2.4);
+- `Shift.Reopen` (§2.10).
+
+The transitions that some existing keys now authorize are named in their rows. `Config.Roles` authorizes nothing.
+
 ### 2.1 Catalog and pricing
 
 | Permission | Grants |
@@ -81,20 +89,21 @@ The complete set of atomic permissions. Domains are grouped; the key is `<Domain
 | Permission | Grants |
 |---|---|
 | `Sale.View` | See sales, own store |
-| `Sale.Create` | Ring up a sale and complete it |
+| `Sale.Create` | Ring up a sale and complete it. Also starts a card tender (state-machines §22.10, submit), and reads the receipt at the till (D-16) |
 | `Sale.Discount` | Apply a permitted discount |
 | `Sale.Suspend` / `Sale.Resume` | Park and resume a cart |
 | `Sale.Void` | Void a sale that has not yet been finalized |
 | `Sale.Void.Posted.Approve` | Approve voiding an already-finalized sale. **A compensating document is created, never a delete** |
-| `Sale.Refund` | Issue a refund within the permitted amount |
+| `Sale.Refund` | Issue a refund within the permitted amount. Also retries a failed refund and cancels an unpaid one (§22.7, D-16) |
 | `Sale.Refund.Large.Approve` | Approve a refund beyond the store threshold |
+| `Refund.Pay` | Submit an approved refund for payment, from the drawer or to the provider (§22.7, "submit to provider"). **Separate from `Sale.Refund`** (D-16) |
 | `Sale.OfflineQueue.Manage` | Inspect and reconcile a terminal's offline queue |
 
 ### 2.5 Returns
 
 | Permission | Grants |
 |---|---|
-| `Return.Create` | Accept a customer return against a sale |
+| `Return.Create` | Accept a customer return against a sale, and cancel it before it posts (§22.7, D-16) |
 | `Return.Approve` | Approve a return beyond the permitted value |
 | `Return.Dispose` | Decide quarantine/damaged/sellable disposition |
 
@@ -123,8 +132,9 @@ The complete set of atomic permissions. Domains are grouped; the key is `<Domain
 
 | Permission | Grants |
 |---|---|
-| `Employee.View` / `Employee.Create` / `Employee.Edit` | Manage employee records |
+| `Employee.View` / `Employee.Create` / `Employee.Edit` | Manage employee records. `Employee.Edit` also brings an employee back from leave (§22.9, D-16) |
 | `Employee.Terminate` | Terminate employment. Irreversible |
+| `Employee.Reactivate` | Restore a suspended employee's access (§22.9, `Suspended` → `Active`), with a reason, audited (`SM-50`). **Separate from `Employee.Edit`** (D-16) |
 | `Employee.StoreAccess.Grant` | Give an employee access to a store. **A high-value grant** |
 | `Employee.Password.Reset` | Reset another employee's password |
 | `Role.View` / `Role.Create` / `Role.Edit` | Manage role definitions |
@@ -143,13 +153,14 @@ The complete set of atomic permissions. Domains are grouped; the key is `<Domain
 | `Rfid.Credential.Issue` | Bind a tag to an employee |
 | `Rfid.Credential.Revoke` | Revoke or report a tag lost |
 | `Rfid.Event.View` | See raw read events |
-| `Device.View` / `Device.Register` / `Device.Edit` / `Device.Disable` | Manage devices |
+| `Device.View` / `Device.Register` / `Device.Edit` / `Device.Disable` | Manage devices. `Device.Disable` also puts a disabled device back into service (§22.12, `HD-32`, D-16) |
 
 ### 2.10 Cash and shift
 
 | Permission | Grants |
 |---|---|
 | `Shift.Open` / `Shift.Close` | Open and close a drawer shift |
+| `Shift.Reopen` | Reopen a closed shift for investigation: always with a reason, audited, and on the reopened-shifts report (`CD-26`). **Separate from `Cash.Variance.Acknowledge`** (D-16) |
 | `Cash.In` / `Cash.Out` | Pay money into or out of a drawer |
 | `Cash.Out.Approve` | Approve a cash withdrawal beyond the store threshold |
 | `Cash.Variance.Acknowledge` | Accept and explain a closing variance |
@@ -162,6 +173,8 @@ The complete set of atomic permissions. Domains are grouped; the key is `<Domain
 | `Payment.View` | See payments and refunds |
 | `Payment.Method.Configure` | Enable and configure payment methods |
 | `Payment.Provider.Configure` | Configure a payment provider. **Highest-privilege operational permission** |
+| `Payment.Capture` | Capture an authorized card payment: the funds are taken (§22.10). Not to be held with `Payment.Provider.Configure` (`SEP-06`) (D-16) |
+| `Payment.Void` | Void a card authorization before capture (§22.10, `PY-13`). **Separate from `Sale.Void`** (D-16) |
 
 ### 2.12 Reporting and configuration
 
@@ -174,8 +187,8 @@ The complete set of atomic permissions. Domains are grouped; the key is `<Domain
 | `Audit.View` | Read audit entries |
 | `Audit.View.Sensitive` | Read audit entries for security events: authentication, permission change, export |
 | `Config.Store` | Change store settings |
-| `Config.Organization` | Change organization settings, tax, reason codes, approval thresholds |
-| `Config.Roles` | Change role definitions and assignments |
+| `Config.Organization` | Change organization settings, tax, reason codes, approval thresholds. Also warehouses and storage locations: create, rename, mark sellable (`WH-03`, D-16) |
+| `Config.Roles` | Change role definitions and assignments. **Authorizes nothing** (D-16): roles are defined with `Role.Create`/`Role.Edit` and assigned with `Role.Assign` |
 | `Config.Backup` / `Backup.Restore` | Manage backups. `Backup.Restore` is the most dangerous permission in the product — see AU-14 |
 | `Config.NotificationRule` | Manage notification routing |
 
@@ -271,7 +284,7 @@ Day-to-day technical administrator. Distinct from the Owner: the Owner decides *
 | **Should not access** | Routine cashiering; nothing is *hidden* from them, but they hold **no transaction-approval** permissions by default |
 
 **Decision (with a real trade-off).** Super Admin does **not** hold `Sale.Create`, `Discount.Large.Approve`,
-`Refund.Large.Approve`, or `Cash.Variance.Acknowledge`. Keeping administration and transaction approval apart
+`Sale.Refund.Large.Approve`, or `Cash.Variance.Acknowledge`. Keeping administration and transaction approval apart
 means the person who configures the system is not the person who can quietly move money through it.
 
 **The trade-off, stated honestly:** in a one-person store the Owner must also be the Super Admin, and may also
@@ -290,7 +303,7 @@ Accountable for one store's trading day.
 | **Purpose** | Run the store: stock, staff, cash, service level |
 | **Responsibilities** | Stock accuracy, receiving, transfers, staff scheduling and attendance, cash reconciliation, customer service escalations, day-end close |
 | **Typical actions** | Approve discounts, refunds, adjustments and cash movements above cashier limits; receive deliveries; run stock counts; close the day; review their store's reports |
-| **Sensitive actions** | `Discount.Large.Approve`, `Refund.Large.Approve`, `Inventory.Adjust.Large.Approve`, `Cash.Out.Approve`, `Cash.Variance.Acknowledge`, `Return.Approve`, `Purchase.Receive`, terminating staff at their store |
+| **Sensitive actions** | `Discount.Large.Approve`, `Sale.Refund.Large.Approve`, `Inventory.Adjust.Large.Approve`, `Cash.Out.Approve`, `Cash.Variance.Acknowledge`, `Return.Approve`, `Purchase.Receive`, terminating staff at their store |
 | **Should access** | Their store's sales, stock, cash, customers, staff attendance, and all reports for their store including financial |
 | **Should not access** | Another store's operational data; **other employees' credentials**; supplier bank details beyond what payment requires; organization-wide settings |
 
@@ -387,7 +400,7 @@ Experienced cashier with a higher limit and some supervisory duties.
 | **Typical actions** | Complete sales, apply small discounts, take returns within limit, suspend and resume carts, void an unfinalized sale, open/close the drawer |
 | **Sensitive actions** | `Return.Create` within limit, `Sale.Void` (unfinalized only), `Shift.Open`/`Shift.Close`, `Cash.In`/`Cash.Out` within limit |
 | **Should access** | Own transactions, own shift, product and price data, customer records for their transactions |
-| **Should not access** | `Discount.Large.Approve`, `Refund.Large.Approve`, `Cash.Variance.Acknowledge`, cost and margin, stock adjustments, other cashiers' activity beyond reconciliation needs, `Audit.View` |
+| **Should not access** | `Discount.Large.Approve`, `Sale.Refund.Large.Approve`, `Cash.Variance.Acknowledge`, cost and margin, stock adjustments, other cashiers' activity beyond reconciliation needs, `Audit.View` |
 
 **Decision.** A Senior Cashier can **void an unfinalized sale** but not void a posted one — that requires
 `Sale.Void.Posted.Approve`, which is a manager permission. The distinction is in the permission, not in the UI
@@ -595,8 +608,8 @@ constraint.
 | Template | Core permissions | Explicitly excluded |
 |---|---|---|
 | **Owner** | Everything in the organization, including `Audit.View.Sensitive`, `Report.OrganizationWide`, `Config.Organization`, `Config.Roles`, `Backup.Restore`, `Employee.StoreAccess.Grant` | Platform access. Bypasses nothing — holds explicit permissions like everyone else |
-| **Super Administrator** | `Config.*`, `Device.*`, `Employee.*`, `Role.*`, `Report.View`, `Audit.View`, `Import.*`, `Product.*`, `Price.*` | **`Sale.Create`, `Discount.Large.Approve`, `Refund.Large.Approve`, `Cash.Variance.Acknowledge`, `Purchase.Pay`, `Customer.Credit.Approve`** — administration is separated from money approval (SEP-02, §3.3) |
-| **Store Manager** | Full `Store` operational set for their store: `Sales.*`, `Discount.Large.Approve`, `Refund.Large.Approve`, `Return.*`, `Inventory.*`, `Purchase.View`+`.Receive`, `Shift.*`, `Cash.*`, `Customer.*`, `Employee.View`, `Attendance.*`, `Report.*` (store scope), `Audit.View` | Other stores, `Config.Organization`, `Config.Roles`, `Backup.*`, `Purchase.Pay`, `Purchase.Order.Approve` above their limit |
+| **Super Administrator** | `Config.*`, `Device.*`, `Employee.*`, `Role.*`, `Report.View`, `Audit.View`, `Import.*`, `Product.*`, `Price.*` | **`Sale.Create`, `Discount.Large.Approve`, `Sale.Refund.Large.Approve`, `Cash.Variance.Acknowledge`, `Purchase.Pay`, `Customer.Credit.Approve`** — administration is separated from money approval (SEP-02, §3.3) |
+| **Store Manager** | Full `Store` operational set for their store: `Sales.*`, `Discount.Large.Approve`, `Sale.Refund.Large.Approve`, `Return.*`, `Inventory.*`, `Purchase.View`+`.Receive`, `Shift.*`, `Cash.*`, `Customer.*`, `Employee.View`, `Attendance.*`, `Report.*` (store scope), `Audit.View` | Other stores, `Config.Organization`, `Config.Roles`, `Backup.*`, `Purchase.Pay`, `Purchase.Order.Approve` above their limit |
 | **Assistant Manager** | As Store Manager, with independently configured lower thresholds; includes `Shift.*`, `Cash.*` | `Config.*`, `Backup.*`, `Purchase.Pay` |
 | **Inventory Manager** | `Inventory.*`, `Product.View`, `Product.Cost.View`, `Purchase.View`/`.Receive`, `Report.View` | `Sales.*`, `Payment.*`, `Customer.*`, `Report.Financial` |
 | **Warehouse Manager** | `Inventory.*`, `Purchase.Receive`, `Return.Dispose`, `Report.View` | `Sales.*`, `Customer.*`, `Report.Financial` |

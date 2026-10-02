@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SaleScreen } from './Sale.tsx';
 
@@ -159,5 +159,44 @@ describe('the till knows the cart (UX-57, BI-30)', () => {
     pay();
     expect(await screen.findByText('Change £7.00')).toBeTruthy();
     expect(screen.getByText('Total £13.00, cash £20.00')).toBeTruthy();
+  });
+});
+
+describe('finding an item by name (UX-48, UX-49, UX-11, RT-379)', () => {
+  const byName = { ...milk, barcode: null, quote: 'quote-by-name' };
+  const find = (name: string) => {
+    fireEvent.change(screen.getByLabelText('Or find an item by name'), { target: { value: name } });
+    fireEvent.submit(screen.getByRole('search', { name: 'Find an item by name' }));
+  };
+
+  it('UX-48, RT-379: a name is looked up by name, never as a barcode; the item chosen joins the cart, and the sale carries its own quote', async () => {
+    const calls = serve({
+      'GET /api/v1/stores/s1/items?name=oat': {
+        body: { items: [byName, { ...byName, variantId: 'v2', description: 'Oat bar', price: { ...byName.price, amount: 150 }, quote: 'quote-2' }] },
+      },
+      [SALES]: { status: 201, body: { saleId: 'sa1', documentNumber: 1, currencyCode: 'GBP', totalDue: 1_250, tendered: 1_250, change: 0 } },
+    });
+    till();
+    find('oat');
+    const choices = await screen.findByRole('list', { name: 'Items found' });
+    expect(within(choices).getAllByRole('button').map((b) => b.textContent)).toEqual(['Oat milk — £12.50', 'Oat bar — £1.50']);
+    expect(calls.some((c) => c.key.includes('/scan/')), 'never as a barcode').toBe(false);
+    fireEvent.click(within(choices).getByRole('button', { name: 'Oat milk — £12.50' }));
+    expect(await screen.findByTestId('cart-line')).toBeTruthy();
+    expect(screen.queryByRole('list', { name: 'Items found' }), 'the list closes').toBeNull();
+    await vi.waitFor(() => expect(document.activeElement, 'back to the scan field').toBe(screen.getByLabelText('Scan or type a barcode, then Enter')));
+    pay();
+    await screen.findByText('Sale 1 completed');
+    expect(calls.find((c) => c.key === SALES)?.body).toMatchObject({ lines: [{ quote: 'quote-by-name', quantity: 1 }] });
+  });
+
+  it('UX-11, UX-49: a name that finds nothing says so, and the cart is untouched', async () => {
+    serve({ [SCAN]: { body: milk }, 'GET /api/v1/stores/s1/items?name=tea': { body: { items: [] } } });
+    till();
+    await scan();
+    await screen.findByTestId('cart-line');
+    find('tea');
+    expect(await screen.findByText('Nothing on sale here has that in its name.')).toBeTruthy();
+    expect(screen.getAllByTestId('cart-line')).toHaveLength(1);
   });
 });

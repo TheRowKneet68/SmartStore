@@ -316,3 +316,53 @@ Planning found nine guards no test reached, and a test was added for each:
 - Discontinued still selling.
 
 One more survived the first run: a variant's first barcode added on its own. It now has a test too.
+
+## 10. Phase D: editing reference data (2026-10-01)
+
+| Route | Permission | Changes |
+|---|---|---|
+| `PATCH /units/:id` | `Product.Edit` | `code`, `name`, `pluralName`, `quantityKind`, `scale` |
+| `PATCH /tax-categories/:id` | `Tax.Edit` | `code`, `name` |
+| `PATCH /brands/:id` | `Product.Edit` | `name` |
+
+- Each writes only the fields sent, which are the columns §4 lets the runtime role update. A request that changes
+  nothing is refused by name. Another organization's row is not found (architecture §24.3).
+- **The database keeps each rule an edit could break:**
+  - a used unit's kind (`RT-491`, `SS021`, now with a message of its own);
+  - a countable unit's decimal places (`PR-15`);
+  - the uniqueness of codes, and of brand names whatever the case.
+- **A tax rate is never edited.** A rate is not a field of its category. A change of rate is a new version
+  (`RT-047`), through the existing `POST /tax-categories/:id/rates`.
+- **Not built: archiving a brand, a unit or a tax category.** `/docs` gives none of them an archive, and the schema
+  has no column for one (OQ-031).
+- The web screen is `web/src/back/Reference.tsx`. It sends only what changed, and says a countable unit's decimal
+  places, a malformed rate and an unchanged form before the server does.
+
+**Decision, stated so it can be reversed:** units and brands are changed with `Product.Edit`, as categories are.
+The catalogue's `Product.*` keys cover "catalog entries", and no key names reference data.
+
+**Mutation check:** 11 mutations, all detected, including D7 §10's two:
+- writing only the fields sent;
+- refusing a change of nothing;
+- the organization's row only, and not found otherwise;
+- the plural name's own column;
+- each route's key, against someone holding every other manager key;
+- `SS021`'s message.
+
+## 11. Phase D: price history (2026-10-01)
+
+`GET /variants/:id/prices` (`Price.View`) now also answers who set each version (`setByName`), and the currency's
+decimal places (`minorUnitExponent`). The web's price history uses both.
+
+- **The web screen** is "Prices" (`web/src/back/Prices.tsx`), shown with `Product.View` and `Price.View` held
+  organization-wide.
+  - It finds a product by name, a page at a time.
+  - It shows each live variant's versions newest first: scheduled, in force, or replaced (`PR-32`, `RT-041`).
+  - With `Price.Edit`, a new price is set from now or a later time. The server's refusals (zero, the past, below
+    cost: `PR-33`) are shown in its words.
+- **Not shown:** a store's own prices, `PR-30`'s store tier. No route reads them yet.
+- **Limit:** the read answers the 50 newest versions. Paging it belongs to Phase D's "consistent paging on every
+  list".
+- **Mutation check:** the setter's join, 1 of 1 detected; it fails if the reader is named instead.
+  - The decimal places come from the currency row. The test fixtures have one currency, with two places, so a
+    mutant fixing the value at 2 would survive. No check of it is claimed.

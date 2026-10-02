@@ -42,6 +42,7 @@ const BUSINESS_RULES: Record<string, string> = {
   SS014: 'This store may not move stock at that location.',
   SS016: 'That document is not in a state that moves stock.',
   SS018: 'Lines change only while the document is a draft.',
+  SS021: 'This unit has already been used, so its kind cannot change.',
   SS022: 'The document did not write exactly its stock movements, so nothing was saved.',
   SS024: 'That reason code is archived. Choose a live one.',
   SS025: 'This till is not in service, or is in training mode, so it cannot make a real sale.',

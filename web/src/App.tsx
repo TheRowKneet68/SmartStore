@@ -2,6 +2,10 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { api, ApiError, type Workspace } from './lib/api.ts';
 import { parseMoney, type Currency } from './lib/money.ts';
 import { check, problemOf, ProblemNotice, type Problem } from './lib/Problem.tsx';
+import { People } from './back/People.tsx';
+import { Prices } from './back/Prices.tsx';
+import { ReferenceData } from './back/Reference.tsx';
+import { Roles } from './back/Roles.tsx';
 import { ShiftReview } from './back/Shifts.tsx';
 import { SaleScreen } from './pos/Sale.tsx';
 import { BeginCount, CountDrawer } from './pos/ShiftClose.tsx';
@@ -121,7 +125,7 @@ function SignedIn({ workspace, onSignedOut }: { workspace: Workspace; onSignedOu
             <p>You have no access to a store yet. Ask the owner or a manager to give you access.</p>
           </section>
         ) : workspace.terminal === null ? (
-          <BackOffice store={store} onTillSet={signOut} />
+          <BackOffice store={store} organization={workspace.organization.permissions} stores={workspace.stores} onTillSet={signOut} />
         ) : (
           <ShiftGate
             storeId={store.id}
@@ -164,13 +168,18 @@ function DrawerState({ shift }: { shift: TillShift | null | undefined }) {
 type Store = Workspace['stores'][number];
 
 /**
- * Away from a till: only the work this person may do in the store is offered, and nothing they may not (UX-05, UX-08).
- * Reviewing shifts needs Cash.Count.View; setting up a till needs Device.View. With neither, the page says so.
+ * Away from a till: only the work this person may do is offered, and nothing they may not (UX-05, UX-08). Reviewing
+ * shifts needs Cash.Count.View and setting up a till Device.View, in the store. People and roles are the
+ * organization's, so they need Employee.View and Role.View held organization-wide. With none, the page says so.
  */
-function BackOffice({ store, onTillSet }: { store: Store; onTillSet: () => void }) {
+function BackOffice({ store, organization, stores, onTillSet }: { store: Store; organization: string[]; stores: Store[]; onTillSet: () => void }) {
   const sections = [
     ...(store.permissions.includes('Cash.Count.View') ? [['shifts', 'Shifts'] as const] : []),
     ...(store.permissions.includes('Device.View') ? [['till', 'Till set-up'] as const] : []),
+    ...(organization.includes('Employee.View') ? [['people', 'People'] as const] : []),
+    ...(organization.includes('Role.View') ? [['roles', 'Roles'] as const] : []),
+    ...(organization.includes('Product.View') || organization.includes('Tax.View') ? [['reference', 'Units, tax and brands'] as const] : []),
+    ...(organization.includes('Product.View') && organization.includes('Price.View') ? [['prices', 'Prices'] as const] : []),
   ];
   const [section, setSection] = useState<string>(sections[0]?.[0] ?? 'till');
   const currency = { code: store.currencyCode, exponent: store.minorUnitExponent };
@@ -187,6 +196,14 @@ function BackOffice({ store, onTillSet }: { store: Store; onTillSet: () => void 
       )}
       {section === 'shifts' ? (
         <ShiftReview storeId={store.id} currency={currency} canAcknowledge={store.permissions.includes('Cash.Variance.Acknowledge')} />
+      ) : section === 'people' ? (
+        <People permissions={organization} stores={stores} />
+      ) : section === 'roles' ? (
+        <Roles permissions={organization} />
+      ) : section === 'reference' ? (
+        <ReferenceData permissions={organization} />
+      ) : section === 'prices' ? (
+        <Prices permissions={organization} currency={currency} />
       ) : (
         <TillSetup storeId={store.id} canSetUp={store.permissions.includes('Device.View')} onDone={onTillSet} />
       )}

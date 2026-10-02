@@ -67,6 +67,17 @@ const holds = async (employee: string, store: string | null, key: string) =>
   (await db.app.query<{ ok: boolean }>('SELECT employee_holds_permission($1, $2, $3) AS ok', [employee, store, key])).rows[0]!.ok;
 
 describe('roles and their grants (AC-01, AC-02, AC-04, PC-01..PC-03)', () => {
+  it('AC-02, D-01: the catalogue a role is made from is read whole, with Role.View', async () => {
+    const o = await organization();
+    const catalogue = (await db.app.query<{ key: string }>('SELECT key FROM permission ORDER BY key')).rows.map((r) => r.key);
+    const listed = await call('GET', '/permissions', o.as);
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json().items).toEqual(catalogue);
+    expect(catalogue).toHaveLength(117);
+    const viewer = await employeeWithAccess(db.app, o.org, ['Employee.View'], { assignedStore: null, accessStores: [o.store] });
+    expect((await call('GET', '/permissions', signedInAs(viewer, o.org))).statusCode, 'Employee.View is not Role.View').toBe(403);
+  });
+
   it('AC-02, D-01: a role is made from catalogue keys only, and lists its keys', async () => {
     const o = await organization();
     const refused = await call('POST', '/roles', o.as, { name: 'Bad', keys: ['Sale.View', 'Sale.*', 'Refund.Large.Approve'] });

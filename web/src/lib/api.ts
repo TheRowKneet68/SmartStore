@@ -13,7 +13,7 @@ export class ApiError extends Error {
 }
 
 /** One call to the versioned API, same origin, with the session cookie (architecture §7.1). */
-export async function api<T>(method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: string, body?: unknown): Promise<T> {
+export async function api<T>(method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', path: string, body?: unknown): Promise<T> {
   let response: Response;
   try {
     response = await fetch(`/api/v1${path}`, {
@@ -44,7 +44,8 @@ export interface Workspace {
 export interface Scanned {
   variantId: string;
   description: string;
-  barcode: string;
+  /** Null for an item found by name, not scanned. */
+  barcode: string | null;
   price: { amount: number; currencyCode: string; minorUnitExponent: number };
   quote: string;
 }

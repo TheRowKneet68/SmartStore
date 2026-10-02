@@ -177,7 +177,7 @@ describe('a cash sale at the till (s22.6, SP-01, SP-02, PY-38, RT-119)', () => {
     expect((await db.app.query('SELECT 1 FROM checkout WHERE store_id = $1', [s.storeId])).rows).toEqual([]);
   });
 
-  it('PR-15, IV-15: a service is sold without moving stock; the stocked line beside it moves', async () => {
+  it("PR-15, IV-15, PR-14, RT-491: a service is sold without moving stock, the stocked line beside it moves, and the sale freezes the service unit's kind", async () => {
     const s = await shop();
     await openShift(s);
     const service = (await ok('POST', '/units', s.owner, { code: 'SVC', name: 'Service', quantityKind: 'Service', scale: 0 })).id as string;
@@ -187,6 +187,9 @@ describe('a cash sale at the till (s22.6, SP-01, SP-02, PY-38, RT-119)', () => {
     expect(response.statusCode, response.body).toBe(201);
     const moved = await db.app.query('SELECT variant_id FROM inventory_movement WHERE sale_id = $1', [response.json().saleId]);
     expect(moved.rows).toEqual([{ variant_id: s.bread }]);
+    // The sale line is the service unit's only use: no movement or adjustment line names it.
+    const changed = await db.app.query("UPDATE unit SET quantity_kind = 'Countable' WHERE id = $1", [service]).then(() => 'changed', (e: { code?: string }) => e.code);
+    expect(changed, 'sold once, so its kind cannot change').toBe('SS021');
   });
 
   it('RT-124, EC-07: a line keeps the price it was quoted, though the price changes before the sale is saved', async () => {
@@ -222,6 +225,17 @@ describe('a cash sale at the till (s22.6, SP-01, SP-02, PY-38, RT-119)', () => {
     const expired = await sell(s, [{ quote: stale, quantity: 1 }], 500, randomUUID(), brief);
     expect(expired.json().error).toEqual({ code: 'quote_expired', message: 'A price on this cart is too old. Scan the items again.' });
     await brief.close();
+  });
+
+  it('RT-489, UX-48: an item found by name is sold as selected, with no barcode on its line', async () => {
+    const s = await shop();
+    await openShift(s);
+    const found = (await call('GET', `/stores/${s.storeId}/items?name=bread`, s.at)).json().items;
+    expect(found.map((i: { description: string }) => i.description)).toEqual(['Bread']);
+    const sale = await sell(s, [{ quote: found[0].quote, quantity: 1 }], 500);
+    expect(sale.statusCode, sale.body).toBe(201);
+    const entries = await db.app.query('SELECT entry_method, scanned_barcode FROM sale_line WHERE sale_id = $1', [sale.json().saleId]);
+    expect(entries.rows).toEqual([{ entry_method: 'Selected', scanned_barcode: null }]);
   });
 
   it('UX-17, RT-119: an underpayment is named, and nothing is saved', async () => {
@@ -346,10 +360,12 @@ describe('reading sales (MS-02, SP-58, RT-140, architecture s18.5)', () => {
     expect((await call('GET', `/stores/${s.storeId}/sales/${third.saleId}`, s.owner)).json(), 'one sale').toMatchObject({ saleId: third.saleId, documentNumber: 3, totalDue: 1_250 });
     const first = await list('?limit=2');
     expect(numbers(first)).toEqual([3, 2]);
-    expect(first.before, 'a cursor while the page is full').toBe(2);
-    const second = await list(`?limit=2&before=${first.before}`);
+    expect(first.next, 's18.5: a cursor while the page is full, as on every list').toBe('2');
+    const second = await list(`?limit=2&after=${first.next}`);
     expect(numbers(second)).toEqual([1]);
-    expect(second.before).toBeNull();
+    expect(second.next).toBeNull();
+    expect(first.before, "the cursor's first name, kept for the screens written against it").toBe(2);
+    expect(numbers(await list(`?limit=2&before=${first.before}`))).toEqual([1]);
     expect(numbers(await list(`?terminalId=${two.till}`))).toEqual([3]);
     expect(numbers(await list(`?employeeId=${s.cashier}`))).toEqual([2, 1]);
     const today = all.items[0].businessDate as string;

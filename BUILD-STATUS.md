@@ -1,6 +1,6 @@
 # Build Status
 
-**Last updated:** 2026-10-01
+**Last updated:** 2026-10-02
 
 ## Phase
 
@@ -346,8 +346,13 @@ Step 3 rules, given by the owner on 2026-10-01 with "start Step 3":
 
 **Finishing v1, on the owner's brief of 2026-10-01** (phases A to F; see Next).
 - **Phase A is done.** `*.zip` is ignored, and `v1-build` is pushed (`83e752b`).
-- **Phase B, finishing Domain 4, is next.** Migrations are authorized for it: forward-only, each with `Cites:`
-  comments.
+- **Phase B, finishing Domain 4, is done.** Domain 4's full mutation check detected 126 of 126. A gap found
+  afterwards, a sold service's unit kind, is closed by a forward-only migration (Next, item 1.7; D4 §12).
+- **Phase C is done:** the permission-key proposal waits for the owner's answer.
+- **2026-10-02: the owner answered it.** The answers are recorded as owner decision D-16 and applied to the
+  documentation only. Implementation waits for the owner's go-ahead, after the report of affected files and rule IDs.
+- **Phase D is under way.** The audit-log read is not built (OQ-024 item 2). The identity admin screens and the
+  reference-data screen are written and tested in `web/`; they are committed with their server routes.
 - The UI steps below are the earlier part of this work. U5 is Phase B's fourth step.
 
 **The till's UI**, on the owner's instruction of 2026-10-01 ("make UI also good ui FOR CONSUMER").
@@ -383,7 +388,8 @@ Earlier note, still true: Domain 3 is finished and committed.
 
 The slice's Domain 4 code is **mutation-checked: 36 of 36**, after 15 tests were added (2026-10-01, see the log). The
 files are `server/src/modules/sales/sales.ts`, `till.ts`, `payment-methods.ts` and `quotes.ts`, and
-`server/src/modules/catalog/scan.ts` as rewritten for the slice. Domain 4's full check follows: see Next.
+`server/src/modules/catalog/scan.ts` as rewritten for the slice. **Domain 4's full check, run once at the end of the
+domain, detected 126 of 126** (D4 §11).
 
 ## Owner actions pending
 
@@ -410,14 +416,16 @@ files are `server/src/modules/sales/sales.ts`, `till.ts`, `payment-methods.ts` a
 | 1 | The five numbers `/docs` does not give: session lifetime, sign-in failure limit and window, quote age, lock timeout | OQ-027, `.env.example` | Starting the server (`npm start`), not the tests |
 | 2 | The sale-save budget: p95 ≤ 100 ms is proposed (measured p95 27 ms) | ADR-31 §16 | Nothing |
 | 3 | Accept or veto the reading that a cash tender is captured as part of completing the sale, under `Sale.Create` (§22.6) | OQ-018 "Step 3 reading" | Nothing now; cash sales rely on it |
-| 4 | Name the keys for card submit, capture and void | OQ-018 | Card payments in Domain 4 |
-| 5 | The permission-key list, presented before Domain 5 (working agreement 8): refund submit and cancel, reversal edges, location management, `Config.Roles` | OQ-023, OQ-025, OQ-026, OQ-028 | Domain 5, and the till re-enable and refund retry edges |
+| 4 | ~~Name the keys for card submit, capture and void~~ **Decided, D-16:** `Sale.Create`, `Payment.Capture`, `Payment.Void` | OQ-018 | Nothing; implementation waits for the owner's go-ahead |
+| 5 | ~~The permission-key list~~ **Decided, D-16** (2026-10-02). Applied to the documentation only | OQ-014, OQ-023, OQ-025, OQ-026, OQ-028 | Nothing; implementation waits for the owner's go-ahead |
 | 6 | The route permissions chosen where the catalogue was not explicit, listed for veto | D1 §9, D7 §9, D2 §9, D3 §9 | Nothing |
 | 7 | ~~What to do with the untracked `SmartStore.zip`~~ **Resolved:** `*.zip` is ignored (owner, 2026-10-01) | Item 4 above | Nothing |
 | 8 | Whether a shift count records a denomination breakdown. `RT-526` (`CD-20`) says "the denomination total is derived from the breakdown", but D4 deferred `CD-27`..`CD-29`, so the schema has no denomination tables and the count is a total. Building it needs a migration | `RT-526`, D4 | Nothing; counts are totals until decided |
 | 9 | The variance tolerance and the higher threshold that needs a different approver. Interim: the tolerance is zero, so every non-zero variance needs an acknowledgement with a reason, and no second approver is required. "Closes automatically within tolerance" and the second-approver gate are unbuilt, because the numbers do not exist | OQ-020, `CD-23` | Those two behaviours only |
 | 10 | Whether the declared closing float may exceed the counted amount. Interim: recorded as declared; it feeds no expected amount | OQ-029, `CD-20` | Nothing |
-| 11 | Veto, or accept, two choices for receipts. (a) Recording a print's outcome and reprinting need `Sale.Create`: the catalogue has no reprint key, and receipt issuance is the cashier's work (actors-and-roles §4). (b) A reprint has no audit event: AU-12 has no type for one, and the `receipt_reprint` row is the record. The reprint's mandatory reason is your instruction of 2026-10-01; `/docs` asks for none | D4 §10 | Nothing |
+| 11 | Veto, or accept, two choices for receipts. (a) Recording a print's outcome and reprinting need `Sale.Create`: the catalogue has no reprint key, and receipt issuance is the cashier's work (actors-and-roles §4). (b) A reprint has no audit event: AU-12 has no type for one, and the `receipt_reprint` row is the record. The reprint's mandatory reason is your instruction of 2026-10-01; `/docs` asks for none. **Reading a receipt at the till is decided by D-16 (Q13): `Sale.Create`.** (a) and (b) stay for veto | D4 §10 | Nothing |
+| 12 | Authorize one forward-only migration for manual weigh entry: the sale line's weight source (`PR-27`) and its reason code (`PR-28`), and a per-store threshold. Also give the threshold: the interim proposed is zero, so every manual weight needs a reason | OQ-032 | Manual weigh entry at the till |
+| 13 | Archiving brands, units and tax categories: whether they can be archived, and what an archive stops | OQ-031 | Archiving those three only; editing them is built |
 
 Until then, tests run on a scratch PostgreSQL 17.11 cluster and a portable Node 26 in the session scratch directory
 (ADR-31 §14). Nothing on the owner's PostgreSQL service is touched.
@@ -456,9 +464,15 @@ sets the order. Phase A (housekeeping and the push) is done.
       - Drop `.safe()` in `products.ts`, `till.ts` and `sales.ts` first. In zod 4.6.5 `int()` and `safe()` are one
         check, so removing either is an equivalent mutant.
 
-      **The slice's check is done: 36 of 36** (see the log). **Domain 4's full check is next**, once: `plan-d4-app`,
-      `plan-shift-close`, `plan-u2`, `plan-u4`, `plan-b1`, `plan-b3` and `plan-d4-edges`, 126 mutations in all.
-   6. **BUILD-STATUS**, and the 5-line summary.
+      **The slice's check is done: 36 of 36** (see the log). **Domain 4's full check is done: 126 of 126**, once,
+      over `plan-d4-app`, `plan-shift-close`, `plan-u2`, `plan-u4`, `plan-b1`, `plan-b3` and `plan-d4-edges`
+      (D4 §11).
+   6. **BUILD-STATUS**, and the 5-line summary. **Done.**
+   7. **Found after the check, while preparing Phase D:** a unit's kind is frozen once a movement or a stock
+      adjustment line uses it, but not once a sale line does (`PR-14`, `RT-491`: "any movement or document"). A
+      service moves no stock, so a sold service's unit can still change kind. **Done:** migration
+      `20261001140000_d4_unit_kind_sale_lines.sql` adds the sale line to `freeze_used_quantity_kind()`, with a test,
+      and its mutant is detected (D4 §12).
 
    Card payments wait for OQ-018's keys. Until then they are refused.
 2. **Phase C:** write `docs/architecture/PERMISSION-KEY-PROPOSAL.md` (working agreement 8).
@@ -473,25 +487,45 @@ sets the order. Phase A (housekeeping and the push) is done.
    keys that could be reused, a proposed name where none fits, a recommendation and tick boxes, and the blocking open
    questions. Every reused key was checked against the catalogue migration, and every proposed name is absent from it.
 3. **Phase D, while waiting.** Only unblocked work, in this order:
-   - the audit-log read, if OQ-024 allows it; otherwise record why not;
-   - the identity admin screens;
-   - reference-data edit and archive;
-   - price history;
-   - selling by name;
-   - manual weigh entry;
-   - the onboarding wrapper;
-   - health and readiness endpoints;
-   - consistent paging on every list;
-   - housekeeping jobs, only if no new dependency is needed.
+   - the audit-log read, if OQ-024 allows it; otherwise record why not. **Not built:** `AU-25` and `RT-300` require
+     every read of the log to be audited, and the closed `AU-12` vocabulary has no event type for a read (OQ-024 item
+     2; the proposal's last table);
+   - the identity admin screens. **Done:** People and Roles in the back office, with `GET /permissions` (D7 §10);
+   - reference-data edit and archive. **Edit done** (D2 §10). Archive is not specified for brands, units or tax
+     categories (OQ-031);
+   - price history. **Done** (D2 §11);
+   - selling by name. **Done** (D4 §13);
+   - manual weigh entry. **Blocked** (OQ-032): it needs a forward-only migration for the line's weight source
+     (`PR-27`) and its reason (`PR-28`), which Phase D is not authorized for, and the store's threshold, a number
+     `/docs` does not give;
+   - the onboarding wrapper. **Waiting** (2026-10-02): another session has uncommitted changes in
+     `server/src/onboarding.ts`, `cli/onboard.ts` (D-15) and `web/src/App.tsx`, which this would touch. It resumes
+     once that work is committed;
+   - health and readiness endpoints. **Done:** `GET /health` and `GET /ready`;
+   - consistent paging on every list. **Done** (CONVENTIONS §18);
+   - housekeeping jobs, only if no new dependency is needed. **Not built** (OQ-024 item 8): scheduling would need no
+     new dependency, but `AU-16` makes a scheduled job record each run, and `AU-12` has no type for one.
+
+   **Phase D stands at:** built, the identity screens, reference-data edits, price history, selling by name, the
+   probes and paging. Blocked: the audit-log read (OQ-024 item 2), manual weigh entry (OQ-032), reference-data archive
+   (OQ-031) and housekeeping jobs (OQ-024 item 8). Waiting on the other session's uncommitted work: the onboarding
+   wrapper.
 4. **Phase E, after the key list is approved:**
    - the keys applied, never renamed without asking;
    - Domain 5: returns, then refunds;
    - card payments through the simulated gateway;
    - Domain 5's mutation check.
+
+   **The keys are decided: D-16, 2026-10-02.** They are recorded in the documentation only. The owner asked for the
+   affected files and rule IDs first, so **implementation starts on the owner's go-ahead.** Q8, a refund's retry under
+   `Sale.Refund` while paying it is `Refund.Pay`, was raised back to the owner.
 5. **Phase F:**
    - typecheck, tests, perf, ledger check and audit check, measured against the p95 ≤ 100 ms budget;
    - a "what is left before a real store can use this" list. It names GAP-044, GATE-Q2-LICENCE and GAP-038 as release
      blockers, not engineering ones.
+
+   **Run 2026-10-02, before Phase E,** because Phase E waits for the owner. The list is
+   `notes/WHAT-IS-LEFT.md`, and the numbers are appended to ADR-31. Run it again after Phase E.
 
 Step 3 builds the one authorization gate (architecture §8.2). Two guards moved there from the database: it sets the
 audit context, and it binds every `*_by` column to the signed-in employee (CONVENTIONS §12).
@@ -1122,3 +1156,189 @@ Append-only. One dated line per step, including failed and abandoned attempts.
       (`RT-042`, `SS008`): `resolve_price()` gives none at a store whose currency differs from the price's.
   - **The second run detected 15 of 15**, and every file was restored byte for byte. The slice's total is 36 of 36.
   - 423 server and 55 web tests pass, and both workspaces typecheck. Next: Domain 4's full check, once.
+- 2026-10-01 — **Phase B, steps 5b and 6: Domain 4's full mutation check, once, at the end of the domain.**
+  - Seven plans, 126 mutations: `plan-d4-app` 36, `plan-shift-close` 45, `plan-u2` 5, `plan-u4` 7, `plan-b1` 5,
+    `plan-b3` 24, `plan-d4-edges` 4. **All 126 detected**, and every plan restored its files byte for byte. The run
+    took about 70 minutes, mostly in `shift-close.test.ts`.
+  - D4 §11 records both runs, and what each plan mutates.
+  - Nothing in `server/` or `db/` changed during the run. Phase D's web screens were written meanwhile, and the
+    server's tests were not run, so that no test run could overlap the harness.
+  - **A gap found afterwards**, while reading the unit rules for Phase D: `freeze_used_quantity_kind()` (domain 3)
+    checks movements and stock adjustment lines, but not sale lines. `PR-14` and `RT-491` freeze a unit's kind once
+    "any movement or document" uses it, and a sold service moves no stock. It is Next item 1.7: a forward-only
+    migration, under Phase B's authorization.
+  - **OQ-031 raised:** `/docs` gives no archive to brands, units or tax categories, which the brief's Phase D lists
+    to "edit/archive". Editing is unblocked.
+  - Phase C is done: the permission-key proposal is committed (`776d318`) and waits for the owner.
+- 2026-10-01 — **Phase B, step 7: a sale line freezes its unit's kind** (`PR-14`, `RT-491`). D4 §12.
+  - Migration `20261001140000_d4_unit_kind_sale_lines.sql` replaces `freeze_used_quantity_kind()` with a third
+    branch, for sale lines. Return and refund lines always follow a sale line of the same variant, so they need none.
+    `npm run db:migrate` applied it and rewrote `db/schema.sql`.
+  - The service-sale test now proves the sold service's unit cannot change kind (`SS021`). Its mutant, the branch
+    switched off, is detected (`plan-b7.mjs`), and the file was restored byte for byte.
+- 2026-10-01 — **Phase D: the identity admin screens.** D7 §10.
+  - **Audit-log read: not built**, as the brief allows. `AU-25` and `RT-300` require every read of the log to be
+    audited, and `AU-12` has no event type for a read (OQ-024 item 2; the permission-key proposal's last table).
+  - **People** (`Employee.View`):
+    - the organization's people a page at a time, with each status in words beside a symbol;
+    - adding a person, giving a sign-in or a new password, giving a role in all stores or one and removing it, and
+      giving and taking away access to a store;
+    - each change is offered only with its key, and says that the person was signed out (`EM-16`).
+  - **Roles** (`Role.View`):
+    - each role's permissions;
+    - making a role from catalogue keys grouped by area;
+    - adding a key, and archiving after a question;
+    - removing a key shows the server's count of employees who lose it, and is sent again with that number
+      (`PC-02`).
+  - **Server:** `GET /permissions` (`Role.View`), the catalogue the roles screen offers.
+  - **Shared pieces:** `web/src/lib/Chip.tsx`, the status chip (the shift screen now uses it), and
+    `web/src/test/serve.ts`, the fetch stub for new tests. The four older copies in existing tests are left as they
+    are.
+  - The tabs wrap, and permission boxes are full-row targets (`UX-53`).
+  - Keys held organization-wide show the tabs, because the gate checks these routes organization-wide.
+  - **Coordination:** the web agent's tests of `api.ts` have still not landed. The next commit adds `PATCH` to
+    `api.ts`'s method list, an additive one-word change, because the brief's reference-data edits need it.
+  - Tests: 1 server (the catalogue, its key) and 12 web (5 People, 6 Roles, 1 App). `plan-d-server.mjs` detected
+    both of the route's mutants.
+  - Not built: an employee's status changes from the People screen (suspend, leave, terminate). The transition
+    endpoint has them; reactivation waits for the owner's keys (OQ-025).
+- 2026-10-01 — **Phase D: editing reference data.** D2 §10.
+  - **Server:** `PATCH /units/:id` and `PATCH /brands/:id` (`Product.Edit`), and `PATCH /tax-categories/:id`
+    (`Tax.Edit`). One helper writes only the fields sent, and only on a row of the caller's organization. The
+    database keeps the rules an edit could break: a used unit's kind (`SS021`, which now has its own message), a
+    countable unit's decimal places, and the codes' and names' uniqueness. A rate is never edited: a new rate is a
+    new version (`RT-047`).
+  - **Web:** "Units, tax and brands" in the back office, shown with `Product.View` or `Tax.View` held
+    organization-wide. Units, tax categories with their rates in force, and brands can be listed, added and changed.
+    A new rate can be added from now or from a later time.
+    - An edit sends only what changed.
+    - The screen says three things before the server does: a countable unit's decimal places, a malformed rate,
+      and a form with nothing changed.
+  - **Coordination:** `api.ts` gains `PATCH` in its method list, as the previous entry said it would.
+  - **Archive is not built** for these three: OQ-031.
+  - **Decision for veto:** units and brands are changed with `Product.Edit`, as categories are (D2 §10).
+  - Tests: 3 server and 7 web (6 for the screen, 1 App). `plan-d-server.mjs`: 11 of 11 detected over both Phase D
+    server steps, restored byte for byte.
+- 2026-10-01 — **Phase D: price history.** D2 §11.
+  - **Server:** the existing `GET /variants/:id/prices` also answers who set each version, and the currency's
+    decimal places.
+  - **Web:** "Prices" in the back office, with `Product.View` and `Price.View` held organization-wide.
+    - It finds a product by name, a page at a time.
+    - It shows each live variant's versions newest first: scheduled, in force, or replaced (`PR-32`, `RT-041`).
+    - With `Price.Edit`, a new price is set from now or later. The server's refusals are shown in its words.
+  - **Not shown:** a store's own prices. No route reads them yet.
+  - Tests: the server's price test now lists the whole history, set by two differently named people. 2 web tests.
+    `plan-d-prices.mjs` detected the setter's join, 1 of 1.
+  - **A mutant left unclaimed:** fixing the decimal places at 2 would survive, because the fixtures have one
+    currency, with two places. D2 §11 says so.
+- 2026-10-01 — **Phase D: selling by name at the till.** D4 §13.
+  - **Server:** `GET /stores/:storeId/items?name=` (`Sale.Create`). A name is looked up by name only, never as a
+    barcode (`UX-48`, `RT-379`).
+    - It returns only what this store can sell (`UX-47`, `UX-49`): released, live, classified, priced here, and at
+      most 20.
+    - Each item carries a signed quote with no barcode, so its line is recorded as `Selected` (`RT-489`).
+    - The scan and the lookup now share one row mapping and one quote signer.
+  - **Web:** "Or find an item by name" under the scan field. The item chosen joins the cart, and focus goes back to
+    the scan field. Nothing found is said, and the cart is untouched (`UX-11`). `api.ts`'s `Scanned.barcode` may be
+    null.
+  - Tests: 2 server (catalog: what a name finds and does not; sales: a found item is sold as `Selected`) and 2 web.
+  - **Mutation check:** `plan-d-name.mjs`, 10 of 10. The scan's 9 mutants were re-run after the refactor, and all 9
+    are detected.
+    - Two of `plan-d4-app`'s search texts changed with the code: C08, the quote's store, and C09, the scan's key,
+      which now matched the new route too. Both were updated, re-run and detected.
+- 2026-10-01 — **Phase D: manual weigh entry, not built.** OQ-032 (committed as `bc1d782` by the owner's session).
+  - `PR-27` and `SP-16` store a weight with its source, and `PR-28` and `SP-18` need a reason for a manual weight
+    above a per-store threshold.
+  - `sale_line` has no column for either, and `/docs` gives no threshold. The migration that would add them is not
+    authorized for Phase D.
+  - A typed decimal quantity would be exactly that unrecorded manual weight, so a sale still takes whole quantities.
+- 2026-10-02 — **A second session works in this tree.** At session start the tree held commits under the owner's git
+  identity:
+  - `8448a7c` merges the web agent's `api.ts` and `Sale.tsx` tests, so the coordination hold on those two files is
+    over;
+  - `6eafe76` fixes a key name in the role templates;
+  - `bc1d782` commits OQ-032.
+  - **Uncommitted work by that session:** D-15 (the deployment currency is NPR with exponent 2) in
+    `OWNER-DECISIONS.md`, OQ-006, `tax-and-currency.md` and onboarding; a new `AGENTS.md`; and a back office in
+    `web/` (products, sales, stock, tills, adjustments, setup).
+  - This session does not stage, revert or edit those files. Its commits stage explicit paths only.
+  - **The shared tree's web suite is red, from that work:** `web/src/back/Products.test.tsx` fails 7 tests, and it
+    and `Setup.test.tsx` do not typecheck. Both files are that session's, uncommitted. Until they land, this session's
+    server-only commits are checked with the server suite and the server typecheck. The web suite is run to show
+    that its only failures are in those files.
+- 2026-10-02 — **Phase D: liveness and readiness.**
+  - `GET /health` answers while the process runs, and touches nothing else.
+  - `GET /ready` answers once the database replies within a second. Otherwise it gives 503 and `{ status:
+    'not_ready' }`, with nothing about why (architecture §24.3, §25.4).
+  - Both are public and outside `/api/v1`, because they are not part of the API. They are not the §25 signals
+    (ledger, auth, invariants, jobs); `ledger:check` and `audit:check` remain those.
+  - `/docs` has no requirement row for a server probe. The owner's brief is the justification.
+  - Tests: 3, including a database that refuses, and one that does not answer: the pool's only connection is held,
+    and the probe still says not ready in about a second. `plan-d-health.mjs`: 4 of 4 detected.
+- 2026-10-02 — **Phase D: consistent paging on every list** (architecture §18.5). CONVENTIONS §18.
+  - **One way for every list:** `limit` (1 to 200) and `after`, answered with `{ items, next }`.
+  - **Bounded and paged for the first time:** units, tax categories, categories, brands, roles, an employee's roles
+    and stores, reason codes, payment methods, tills and locations.
+  - **Bounded before, now paged:** price versions (it was 50), shifts and stock (both were up to 500).
+  - **Short configuration lists default to the full 200,** because screens, including the other session's
+    uncommitted ones, read them whole. They page by position, through one helper (`http/paging.ts`).
+  - **The sales list and the movement ledger** answer `next` and take `after`, and still answer and take `before`.
+    The other session's uncommitted sales and stock screens use `before`, so dropping it waits for them.
+  - **Not paged, by design:** the permission catalogue (117 keys, fixed by migration) and the till's name lookup (at
+    most 20, `UX-49`).
+  - `storeLocations()` was folded into its one route; `STORE_LOCATIONS` stays, because adjustments use it.
+  - **Tests:** one table-driven test pages 15 lists two at a time, and checks that the pages, joined, are the whole
+    list in its order. It also walks the ledger by `before`, and checks the 200 cap, the 200 default (60 units come
+    whole) and a bad cursor. The sales reading test now pages by `after` and by `before`.
+  - **Mutation check:** `plan-d-paging.mjs`, 24 of 24. Each route's offset is neutralized, keeping its parameter
+    bound so that the failure is the paging and not SQL. The shift-close plan's R12 search text moved with the code;
+    it was updated, re-run and detected.
+  - 435 server tests pass, and the server typechecks. The web suite fails only in the other session's uncommitted
+    `Products.test.tsx`.
+- 2026-10-02 — **Phase D: housekeeping jobs, not built.** OQ-024 item 8.
+  - `/docs` names reconciliation, outbox delivery, Pending-payment resolution, report jobs and batch-expiry proposals.
+    Only the ledger reconciliation exists to schedule; it, and the audit-chain check, run as commands on demand.
+  - Scheduling needs no new dependency. `AU-16`, though, makes a scheduled job record what it did and changed, in
+    the `AU-12` vocabulary, and no type there records a job's run. Adding one is a reviewed change for the owner
+    (`AU-13`), as for the audit-log read.
+  - `OPEN-QUESTIONS.md` held the other session's uncommitted OQ-006 resolution, which rests on its uncommitted D-15.
+    Only item 8 was staged: the staged copy is the committed file plus the new item, built with
+    `git hash-object` and `git update-index`. The working file keeps both changes.
+- 2026-10-02 — **Phase F, run before Phase E**, because Phase E waits for the owner. `notes/WHAT-IS-LEFT.md`.
+  - **Typecheck:** the server passes. The web fails only in the other session's uncommitted `Products.test.tsx` and
+    `Setup.test.tsx`.
+  - **Tests:** server 435 of 435. Web 143 of 150; all 7 failures are in the other session's uncommitted
+    `Products.test.tsx`.
+  - **`ledger:check`:** every balance agrees with its ledger. **`audit:check`:** the chain is intact. Both ran on the
+    deployment database, which holds little data.
+  - **Perf** (100,000 variants; `PERF_CHROMIUM` named the machine's Chromium 1234; nothing was downloaded):
+    - scan-to-cart, HTTP: p95 5.1 ms;
+    - scan-to-cart in the browser: p95 24.1 ms;
+    - both meet p95 ≤ 100 ms;
+    - sale-save, 10 lines, cash: p95 69.1 ms (max 190.8 ms). That meets the proposed 100 ms, but is 2.5 times the
+      first run's 27.1 ms.
+  - **On the sale-save rise:** nothing in its path changed, and the environment did. The Node on the path is now
+    v26.7.0, where the first run used a portable 26.10.0, and seeding took 12.6 minutes. A re-run on the first setup
+    comes before calling it a regression. Appended to ADR-31 as a dated re-measurement.
+  - **The list** names the release blockers (`GAP-044`, `GATE-Q2-LICENCE`, `GAP-038`) and the owner answers that
+    unblock building. It also lists the engineering left, and what v1 leaves out by decision.
+- 2026-10-02 — **Owner decision D-16: the permission keys, recorded in the documentation only.**
+  - The owner answered `PERMISSION-KEY-PROPOSAL.md` Q1–Q14, and asked for three things in order: record the answers,
+    update the catalogue, state-machine and actor-role documents, then report the affected files and rule IDs before
+    any implementation.
+  - **Recorded:**
+    - `OWNER-DECISIONS.md` D-16, with the owner's reasons for Q3, Q5, Q7 and Q14. It is numbered 16 because the other
+      session's uncommitted D-15 (the NPR currency) holds 15.
+    - `PERMISSION-KEY-PROPOSAL.md`: the answers, appended.
+  - **Applied to the documentation:**
+    - actors-and-roles §2: five new keys. The rows of the reused keys name what they now cover. `Config.Roles`
+      authorizes nothing.
+    - state-machines §22: seven permission cells and four reversal cells. §22.0's census goes from 27 rows with no key
+      to 20, and from 117 keys to 122.
+    - OPEN-QUESTIONS: OQ-014, OQ-018, OQ-023, OQ-025, OQ-026 and OQ-028.
+    - The gap register, §7.8: GAP-036 narrowed.
+  - **Not touched:** migrations, code and tests, nor the design documents that describe the built schema (D4, D7). They
+    change with the implementation.
+  - **Raised back to the owner:** Q8, a refund's retry under `Sale.Refund` while paying it is `Refund.Pay`.
+  - **Staging:** OWNER-DECISIONS, OPEN-QUESTIONS and BUILD-STATUS hold other sessions' uncommitted work. Their staged
+    copies are the working files with those blocks taken back out.

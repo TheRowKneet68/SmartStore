@@ -187,3 +187,33 @@ Each has an interim in place. Answer when you can:
 | OQ-029 | May the declared closing float exceed the counted amount? | Recorded as declared | Refuse a float above the latest count |
 | OQ-030 | The minimum touch-target size and text contrast ratio (`UX-53`, `UX-54`, `RT-380`) | WCAG 2.2 AAA (7:1), controls ≥ 3rem | Adopt the interim as the standard |
 | OQ-024, item 2 | `AU-25` and `RT-300` require every read of the audit log to be audited itself, but the closed `AU-12` vocabulary has no event type for a read. Adding one is your reviewed change (`AU-12c`, `AU-13`) | **The audit-log read surface is not built.** It would break `AU-25`. | Add an event type for reading the log, for example `Audit.Read` (a proposal, not in `AU-12`) |
+
+## Answered 2026-10-02 — recorded as owner decision D-16
+
+**Status:** ANSWERED. The boxes above are left as written; the answers are here, and the decision of record is D-16 in
+[OWNER-DECISIONS.md](OWNER-DECISIONS.md).
+
+| Q | Answer | Key |
+|---|---|---|
+| 1 | A | `Sale.Create` |
+| 2 | B | add `Payment.Capture` |
+| 3 | B | new key `Payment.Void` |
+| 4 | A | `Employee.Edit` |
+| 5 | B | new key `Employee.Reactivate` |
+| 6 | A | `Device.Disable` |
+| 7 | B | new key `Refund.Pay` |
+| 8 | A | `Sale.Refund` |
+| 9 | A | `Sale.Refund` |
+| 10 | A | `Return.Create` |
+| 11 | A | `Config.Organization` |
+| 12 | A | keep `Role.Create`/`Role.Edit`; `Config.Roles` authorizes nothing |
+| 13 | B | `Sale.Create` |
+| 14 | B | add `Shift.Reopen` |
+
+Four answers differ from the recommendation: Q3, Q5, Q7 and Q14. D-16 records the owner's reasons for each.
+
+The owner said nothing about "Edges that are not key questions" or "Other open questions that block building". Those
+edges stay as built, which means refused, and their questions stay open.
+
+The owner's instruction: record the decisions and update the documentation, then report the affected files and rule
+IDs **before** any implementation.

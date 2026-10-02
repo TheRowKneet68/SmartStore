@@ -350,3 +350,20 @@ The same run, in the browser: signed in at the till, scanned 10 items, paid in c
 **Proposed for the owner's approval: a sale-save budget of p95 ≤ 100 ms on the local setup.** That is about four times
 the first measurement. The one 107 ms sample of 200 shows how much a single save can vary. As §8 says, a cloud round
 trip adds latency the server cannot remove. A budget that must hold in the cloud would be measured there.
+
+### Re-measured 2026-10-02 (Phase F of the brief of 2026-10-01)
+
+Appended; the table above stands as the first measurement. Same machine, same catalogue size, same test. The Node on
+the machine's path answered **v26.7.0**, where the first run used a portable 26.10.0. Seeding the catalogue took 12.6
+minutes.
+
+| Measure | n | p50 | p95 | max | Budget |
+|---|---|---|---|---|---|
+| scan-to-cart (HTTP) | 1000 | 3.0 ms | 5.1 ms | 8.0 ms | p95 ≤ 100 ms: **met** |
+| scan-to-cart in the browser (Enter to line drawn) | 200 | 12.9 ms | 24.1 ms | 30.2 ms | p95 ≤ 100 ms: **met** |
+| sale-save, 10 lines, cash | 200 | 55.7 ms | 69.1 ms | 190.8 ms | proposed p95 ≤ 100 ms: met |
+
+Sale-save's p95 is 2.5 times the first. Nothing in its path changed between the two runs: the migrations since touch
+shift actors, count reasons, reprints and unit kinds, none of which a cash sale writes. Re-run it on the first setup
+before reading this as a regression. If it holds there, profile the sale's transaction. The proposed budget is still
+met, with less room than the first run suggested.

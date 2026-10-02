@@ -936,16 +936,17 @@ not determine it**, and per SM-02c it blocks Phase 2 only where it sits in the *
 **Rule SM-02d applies here.** This section records what was verified about the Permission column, including what
 failed.
 
-Checked mechanically against the [permission catalogue](actors-and-roles.md) §2 (**117 atomic permissions**,
-2.1–2.12). A previous revision of this section claimed that only catalogue keys appeared in a Permission cell.
+Checked mechanically against the [permission catalogue](actors-and-roles.md) §2 (**117 atomic permissions** when
+the census was taken, 2.1–2.12; **122** since owner decision D-16).
+A previous revision of this section claimed that only catalogue keys appeared in a Permission cell.
 **That claim was false and has been withdrawn.** The verified position, over all **118** transition rows in
 §22.1–§22.20 (see the note below the table):
 
 | Permission cell | Rows | Status |
 |---|---|---|
-| Names only keys defined in catalogue §2 | 38 | usable |
+| Names only keys defined in catalogue §2 | 45 | usable |
 | Names a key reachable only through a §4 wildcard template grant | 29 | **resolved (D-01)** — every one of these keys is defined in §2; see §22.0.1 |
-| `OPEN DECISION`, no key at all | 27 | open — blocks those transitions' features per SM-02c; see §22.0.2 |
+| `OPEN DECISION`, no key at all | 20 | open — blocks those transitions' features per SM-02c; see §22.0.2 |
 | System edge, no permission | 23 | correct; not user-actionable |
 | **Total transition rows** | **118** | the buckets now sum to **117**, one short of the 118-row body. The earlier census read `38+29+29+23 = 119` against the same 118 rows, i.e. one **over**. Correcting `29 → 27` moved the discrepancy from one over to one under, which means one row sits in no bucket. The discrepancy is recorded here rather than closed by adjusting a count to make the arithmetic balance |
 
@@ -956,6 +957,17 @@ Checked mechanically against the [permission catalogue](actors-and-roles.md) §2
 > in `actors-and-roles.md` §2 (at lines 39, 59, 61, 72, 105, 126, 146, 152) and resolve through the existing
 > wildcard template grants; the 29 `‡` markers have been removed from the transition rows. The `OPEN DECISION` count
 > was 27, not 29, when counted mechanically over the §22 tables. Neither original count is deleted from this record.
+
+> **Update, 2026-10-02 (owner decision D-16).** The owner named keys for seven of the 27 `OPEN DECISION` rows, which
+> therefore moved from that bucket (27 → 20) to the first (38 → 45):
+> - §22.10's submit, capture and void;
+> - §22.7's return cancel, refund `submit to provider`, and refund cancel;
+> - §22.11's reopen.
+>
+> Five of the keys are new, so the catalogue holds 122 atomic permissions, not 117. D-16 also named keys in four
+> Reversal cells: §22.7's refund retry, §22.9's return from leave and reactivation, and §22.12's re-enable. This census
+> of Permission cells does not count those. The buckets still sum to 117 against 118 rows, and that discrepancy stands
+> as recorded above.
 
 **Actor.** Actor is not given as a per-row column, and that is deliberate. The catalogue maps **role templates to
 permission sets** (§4), not permissions to a single role: `Inventory.Adjust` is held by Store Manager, Assistant
@@ -1004,7 +1016,7 @@ separation-of-duty conditions to the `Purchase.Order.*` group. 8 of the 13 machi
 of the affected edges are lifecycle edges — activate, hide, suspend, archive, post, receive, close, register,
 retire. These are not exotic edges, and the effective access model now authorizes all of them.
 
-### 22.0.2 The 27 transitions that name **no** permission key
+### 22.0.2 The 27 transitions that name **no** permission key — **20 since D-16**
 
 *This population was never registered anywhere before 2026-09-29. It is distinct from the 13 keys above, and
 tracking it as GAP-002 alone left it invisible.*
@@ -1015,11 +1027,11 @@ tracking it as GAP-002 alone left it invisible.*
 | §22.3 `PurchaseOrder` | 7 |
 | §22.4 `PurchaseReceipt` | 1 |
 | §22.5 `SupplierInvoice` | 5 |
-| §22.7 `Return` / `Refund` | 5 |
-| §22.10 `Payment` | 3 |
-| §22.11 `Shift` | 1 |
+| §22.7 `Return` / `Refund` | 2 (5 before D-16) |
+| §22.10 `Payment` | 0 (3 before D-16) |
+| §22.11 `Shift` | 0 (1 before D-16) |
 | §22.18 `StockTransfer` | 3 |
-| **Total** | **27** |
+| **Total** | **20** (27 before D-16) |
 
 Each of these rows is complete in every other respect — source, destination, trigger, precondition, side effect, and
 audit all populated. Only the permission is undecided, so the architecture's specified fallback applies: the
@@ -1029,6 +1041,19 @@ supplier invoice, cancelling a return, issuing a refund, and reversing a payment
 (`SM-02d` forbids deriving them from a near neighbour). One of them, the `→ ApprovedForPayment` edge, is already
 flagged inside D-02 as "**Not assumed**", because using `Purchase.Invoice.Record` would let the person who typed
 the invoice also approve it. Tracked as `GAP-036`.
+
+> **Update, 2026-10-02 (owner decision D-16).** Seven of the 27 rows now carry keys:
+> - the return's cancel: `Return.Create`;
+> - the refund's `submit to provider`: `Refund.Pay`;
+> - the refund's cancel: `Sale.Refund`;
+> - the payment's submit, capture and void: `Sale.Create`, `Payment.Capture` and `Payment.Void`;
+> - the shift's reopen: `Shift.Reopen`.
+>
+> The 20 left are §22.2 (2), §22.3 (7), §22.4 (1), §22.5 (5), §22.7's return settle and close (2), and §22.18 (3).
+> Still blocked: a batch's quarantine and withholding; cancelling or closing a purchase order; cancelling a goods
+> receipt; resolving a dispute on, approving, scheduling, rejecting or cancelling a supplier invoice; settling or
+> closing a return; and a transfer's approval, rejection and close. Cancelling a return, paying or cancelling a
+> refund, and a card payment's submit, capture and void are no longer blocked on a key.
 
 `Purchase.Order.Send` is the one key of the 13 whose external consequence is strongest — it is the moment a
 commitment becomes real for a supplier — which is why D-01 made its separation-of-duty condition binding rather
@@ -1137,7 +1162,7 @@ The post-sale states are projections, not edges anyone fires (SM-35, SM-35a).
 | From → To | Event | Permission | Precondition | Side effect | Audit | Reversal |
 |---|---|---|---|---|---|---|
 | `Draft` → `Posted` | post | `Return.Create` | Lines bounded by the sold quantity (RR-14); the return is still in its window | **Stock moves here** (RR-17, IV-14). Nothing moves before this (BI-27) | `Inventory.Movement` | **None.** A posted return has goods in the building; the correction is a further reason-bearing movement (SM-38) |
-| `Draft` → `Cancelled` | cancel | `OPEN DECISION` | Reason; **no goods accepted, no money moved** | None | `Return.StateChange` | — |
+| `Draft` → `Cancelled` | cancel | `Return.Create` (D-16) | Reason; **no goods accepted, no money moved** | None | `Return.StateChange` | — |
 | `Posted` → `Settled` | settle | `OPEN DECISION` | Refundable amount is zero, or the remainder is written off with a reason | The return stops accruing refundable value | `Return.StateChange` | — |
 | `Settled` → `Closed` | close | `OPEN DECISION` | — | None. Terminal | `Return.StateChange` | — |
 
@@ -1147,10 +1172,10 @@ The post-sale states are projections, not edges anyone fires (SM-35, SM-35a).
 |---|---|---|---|---|---|---|
 | `Draft` → `PendingApproval` | submit | `Sale.Refund` | Within the permitted amount, or a large refund awaits approval (RR-35) | No money effect (BI-27) | `Approval.Decided` on exit | — |
 | `PendingApproval` → `Approved` | approve | `Sale.Refund.Large.Approve` | Approver ≠ issuer | Cleared to pay | `Approval.Decided` | — |
-| `Approved` → `Processing` | submit to provider | `OPEN DECISION` | The bound permits it (RR-24) | **The amount is held for the whole state** (SM-40) | `Payment.Refund` on exit | — |
+| `Approved` → `Processing` | submit to provider | `Refund.Pay` (D-16) | The bound permits it (RR-24) | **The amount is held for the whole state** (SM-40) | `Payment.Refund` on exit | — |
 | `Processing` → `Completed` | complete | *none — provider* | The provider confirmed | The customer has the money | `Payment.Refund` | **None.** A completed refund is corrected by a further **linked** refund with a reason (BI-09) |
-| `Processing` → `Failed` | fail | *none — provider* | A technical failure | The amount stays held; **retryable, and notified** (SM-41) | `Payment.Refund` | Retry to `Processing` |
-| `Approved`/`Processing` → `Cancelled` | cancel | `OPEN DECISION` | Reason; nothing settled | The hold is released | `Refund.StateChange` | — |
+| `Processing` → `Failed` | fail | *none — provider* | A technical failure | The amount stays held; **retryable, and notified** (SM-41) | `Payment.Refund` | Retry to `Processing`, under `Sale.Refund` (D-16) |
+| `Approved`/`Processing` → `Cancelled` | cancel | `Sale.Refund` (D-16) | Reason; nothing settled | The hold is released | `Refund.StateChange` | — |
 
 ### 22.8 `CustomerAccount` **status** (not the balance — SM-44)
 
@@ -1168,8 +1193,8 @@ The post-sale states are projections, not edges anyone fires (SM-35, SM-35a).
 | From → To | Event | Permission | Precondition | Side effect | Audit | Reversal |
 |---|---|---|---|---|---|---|
 | *(creation)* → `Active` | create | `Employee.Create` | The employee record is valid | May sign in and transact. **There is no `Invited` step** (SM-48a) | `Employee.StateChange` | — |
-| `Active` → `OnLeave` | leave | `Employee.Edit` | Reason; approved leave | Read-only sign-in; may not transact | `Employee.StateChange` | `OnLeave` → `Active` |
-| `Active` → `Suspended` | suspend | `Employee.Edit` | Reason. Access control, not a judgement (EM-09) | **Blocked at authentication; live sessions revoked immediately** (SM-47) | `Security.SessionEnded` per revoked session | `Suspended` → `Active`, audited and reason-bearing (SM-50) |
+| `Active` → `OnLeave` | leave | `Employee.Edit` | Reason; approved leave | Read-only sign-in; may not transact | `Employee.StateChange` | `OnLeave` → `Active`, under `Employee.Edit` (D-16) |
+| `Active` → `Suspended` | suspend | `Employee.Edit` | Reason. Access control, not a judgement (EM-09) | **Blocked at authentication; live sessions revoked immediately** (SM-47) | `Security.SessionEnded` per revoked session | `Suspended` → `Active`, under `Employee.Reactivate`, audited and reason-bearing (SM-50, D-16) |
 | `Active`/`OnLeave` → `Terminated` | terminate | `Employee.Terminate` | **Blocked while an open shift exists** (EM-10). **The only irreversible employee operation** (EM-08) | Authentication permanently refused; documents immutable (EM-11) | `Employee.Terminate` | **None.** Re-hiring is a **new record** (EM-08) |
 | `Terminated` → `Archived` | archive | `Employee.Edit` | Reason. Never a delete (BI-40) | Historical only | `Employee.StateChange` | **None** |
 
@@ -1177,10 +1202,10 @@ The post-sale states are projections, not edges anyone fires (SM-35, SM-35a).
 
 | From → To | Event | Permission | Precondition | Side effect | Audit | Reversal |
 |---|---|---|---|---|---|---|
-| *(creation)* → `Pending` | submit | `OPEN DECISION` | The provider accepts the request | Submitted; no response yet | `Payment.StateChange` | — |
+| *(creation)* → `Pending` | submit | `Sale.Create` (D-16) | The provider accepts the request | Submitted; no response yet | `Payment.StateChange` | — |
 | `Pending` → `Authorized` | authorize | *none — provider* | The provider reserved funds | Funds reserved, not taken | `Payment.StateChange` | `→ Voided` |
-| `Authorized` → `Captured` | capture | `OPEN DECISION` | The provider confirmed | **Funds taken. Money has moved** | `Payment.Capture` | **A linked `Refund` only** (SM-51, PY-12) |
-| `Pending`/`Authorized` → `Voided` | void | `OPEN DECISION` | Before capture. Requires a permissioned action (PY-13) | No money moved | `Payment.StateChange` | **None.** A new attempt is a new `Payment` (PY-54) |
+| `Authorized` → `Captured` | capture | `Payment.Capture` (D-16) | The provider confirmed | **Funds taken. Money has moved** | `Payment.Capture` | **A linked `Refund` only** (SM-51, PY-12) |
+| `Pending`/`Authorized` → `Voided` | void | `Payment.Void` (D-16) | Before capture. Requires a permissioned action (PY-13) | No money moved | `Payment.StateChange` | **None.** A new attempt is a new `Payment` (PY-54) |
 | `Pending` → `Declined` | decline | *none — provider* | The provider refused | No money moved | `Payment.StateChange` | **Retry as a new `Payment`**, never a reopen (PY-54) |
 | `Pending` → `Failed` | fail | *none — provider* | A technical failure, **not** a decline | No money moved | `Payment.StateChange` | **None.** Terminal for this `Payment` (PY-54) |
 | `Captured` → `Refunded` | *(not an edge)* | — | Reached only via a linked `Refund` (BI-09) | Money out | `Payment.Refund` | — |
@@ -1189,6 +1214,10 @@ The post-sale states are projections, not edges anyone fires (SM-35, SM-35a).
 reconciliation of provider events and the local record** (SM-54, PY-15) — a local transition alone does not
 capture a payment.
 
+**Keys named by owner decision D-16 (2026-10-02)** for a card tender's own transitions: submit, capture and void. A
+cash tender is created, authorized and captured inside the sale's completion, under `Sale.Create` (§22.6). That is
+OQ-018's reading, which stands for the owner's veto.
+
 ### 22.11 `Shift`
 
 | From → To | Event | Permission | Precondition | Side effect | Audit | Reversal |
@@ -1196,7 +1225,7 @@ capture a payment.
 | *(creation)* → `Open` | open | `Shift.Open` | The opening float is counted (CD-11); **at most one open shift per drawer and per employee per store** (CD-03) | An `OpeningFloat` `Cash.In` is written | `Cash.In` | — |
 | `Open` → `Reconciling` | begin count | `Shift.Close` | The drawer is opened for counting; the expected amount is hidden (CD-21) | Nothing yet; the count is in progress | `Shift.StateChange` | — |
 | `Reconciling` → `Closed` | close | `Shift.Close` | Counted, and any variance is balanced or **acknowledged** (CD-23) | A `ClosingFloat` is written; the shift is immutable (SM-57) | `Shift.Close` | — |
-| `Closed` → `Reopened` | reopen | `OPEN DECISION` | **Reason, always** (CD-26). Exceptional, audited, standing-reported | None. Revisits a closed money record | `Shift.Reopened` | `Reopened` → `Reconciling` |
+| `Closed` → `Reopened` | reopen | `Shift.Reopen` (D-16) | **Reason, always** (CD-26). Exceptional, audited, standing-reported | None. Revisits a closed money record | `Shift.Reopened` | `Reopened` → `Reconciling` |
 | `Reopened` → `Reconciling` | recount | `Shift.Close` | A **new** count pass with its own count | The original count stands as history (SM-57) | `Shift.Close` | — |
 
 **There is no void state** (SM-58). A shift is reconciled, never voided.
@@ -1219,7 +1248,7 @@ capture a payment.
 | `Registered` → `Active` | activate | `Device.Edit` | — | In service | `Device.StateChange` | — |
 | `Active` → `Degraded` | degrade | *none — telemetry* | Errors reported. **Still usable** (HD-07) | A feature degrades; the transaction does not (SM-61) | `—` — health telemetry, no business fact (SM-61, D-06) | `Degraded` → `Active` |
 | any → `Offline` | heartbeat lost | *none — derived* | No heartbeat within the configured interval (PT-04) | **Not a fault and not `Disabled`** — a store whose power is off is not broken (SM-60b) | `—` — derived telemetry (SM-61, D-06) | Clears when the heartbeat resumes |
-| `Active`/`Degraded` → `Disabled` | disable | `Device.Disable` | Reason | Turned off by an administrator | `Device.StateChange` | `Disabled` → `Active`, reason |
+| `Active`/`Degraded` → `Disabled` | disable | `Device.Disable` | Reason | Turned off by an administrator | `Device.StateChange` | `Disabled` → `Active`, under `Device.Disable`, reason (D-16) |
 | any → `Retired` | retire | `Device.Edit` | Reason. **Never a delete** (HD-08, BI-40) | Permanently out of service; full event history remains | `Device.StateChange` | **None** |
 
 ### 22.13 `ReadEvent` and `RfidSession`

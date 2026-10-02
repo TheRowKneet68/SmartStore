@@ -351,3 +351,79 @@ and batch and expiry on the receipt (`BE-49`; batches are deferred).
 - a reprint by someone other than the seller is recorded in the reprinter's name.
 
 The 2 migration mutants are included: the reason's liveness, and the append-only trigger at owner privilege.
+
+## 11. Domain 4's mutation check (Step 3, 2026-10-01)
+
+**The slice's code** (`sales.ts`, `quotes.ts`, `till.ts`, `payment-methods.ts`, `catalog/scan.ts`): 36 mutations, one
+per guard.
+- `.safe()` was dropped first from three money schemas. In zod 4.6.5 it is the same check as `int()`, so removing
+  either is an equivalent mutant (§9).
+- **The first run detected 21 of 36.** Each of the 15 survivors was a guard no test reached, so a test was added for
+  each. No check was weakened.
+  - A quote with a part appended, a tax category with no rate in force yet, a tax-exclusive store, and a service line,
+    which moves no stock.
+  - **A repeat gets its sale even after the store stops taking cash** (`SM-04`). The early answer to a repeat looked
+    redundant, because the database's key catches a repeat too. It is not: without it, a repeat is checked again and
+    refused.
+  - **A true race** (`BI-28`). The old concurrent test never raced: the second request always found the first's sale
+    before it reached the key. The test now holds the `checkout` table until both repeats wait at the key, so the loser
+    must answer with the winner's sale.
+  - `Sale.Create` to sell, and another store's sale is not found.
+  - A session at another store's till, the till list, and a second sellable location, which must then be named
+    (OQ-019).
+  - The payment methods' list, another organization's method, and an unknown one.
+  - **No price at a store is reachable**, though an active variant always has a price (`RT-042`). `resolve_price()`
+    gives none at a store whose currency differs from the price's.
+- **The second run detected all 15.**
+
+**Domain 4's full check, run once at the end of the domain:** 126 mutations in seven plans. All were detected, and
+every file was restored byte for byte.
+
+| Plan | What it mutates | Mutations |
+|---|---|---|
+| `plan-d4-app` | The slice: the sale's completion, quotes, the till, payment methods, the scan | 36 |
+| `plan-shift-close` | The transition endpoint's two options, the close, counting and acknowledging, the shift screen, and each route's key (§9) | 45 |
+| `plan-u2` | A count's threshold, and the till finding a shift being counted | 5 |
+| `plan-u4` | Who the shift screen names: opener, closer, counter, approver | 7 |
+| `plan-b1` | The two Phase B migrations (fixed shift actors; a live reason on an acknowledgement), and the route's organization check | 5 |
+| `plan-b3` | Reading sales, the receipt, its print outcome, and reprints (§10) | 24 |
+| `plan-d4-edges` | The Device machine's edges as migration data: keys, reasons, and retiring a till never activated | 4 |
+
+The plans and their harness, `mutate-app.mjs`, are in the session's scratch directory. The harness restores each file
+byte for byte. Each run rebuilds the test database from the migrations, so a migration's mutants are real.
+
+## 12. A sale line freezes its unit's kind (2026-10-01)
+
+`PR-14` and `RT-491` freeze a unit's quantity kind once "any movement or document" uses it. Domain 3's
+`freeze_used_quantity_kind()` checked only movements and stock adjustment lines.
+- A stocked sale writes a movement, so it was covered.
+- A service writes none. A sold service's unit could therefore still change kind, and its sale lines would then read
+  as a different kind of quantity.
+
+Migration `20261001140000_d4_unit_kind_sale_lines.sql` gives the function a third branch, for sale lines. A return
+line or a refund line always follows a sale line of the same variant, so no other document table needs a branch. The
+refusal is still `SS021`, and names the first use.
+
+- **Test:** `sales.test.ts`. A service is sold once, and its unit then cannot change kind.
+- **Mutation check:** 1 of 1 detected (`plan-b7.mjs`). Without the branch, the change goes through.
+
+## 13. Phase D: selling by name at the till (2026-10-01)
+
+| Route | Permission |
+|---|---|
+| `GET /stores/:storeId/items?name=` | `Sale.Create`, in the store |
+
+- **A name is looked up by name only** (`UX-48`, `RT-379`). It is a case-blind contains match on the product's or
+  the variant's name, with its wildcards escaped, as the catalogue's search is (D2 §9). A barcode typed as a name
+  finds nothing.
+- **Only what this store can sell is returned, before anything is returned** (`UX-47`, `UX-49`): a released product
+  (`SM-11`), a live variant, a tax category (`RT-493`), and a price at this store (`PR-30`). At most 20 items.
+- **Each item carries its own signed quote, with no barcode.** The sale therefore records its line as `Selected`,
+  with no barcode (`RT-489`). The sale checks such a quote exactly as it checks a scanned one (§3).
+- **The till:** "Or find an item by name" sits under the scan field (`web/src/pos/Sale.tsx`). The item chosen joins
+  the cart, and focus goes back to the scan field. A name that finds nothing says so, and the cart is untouched
+  (`UX-11`).
+- **Shared with the scan:** one mapping from a row to what the till is told, and one quote signer.
+- **Mutation check:** the route's 10 mutants are all detected (`plan-d-name.mjs`): the wildcard, the organization,
+  an archived variant, a product not released, an unclassified variant, no price at the store, the variant's name,
+  the limit, the barcode, and the key. The scan's 9 mutants were run again after the refactor, and all are detected.

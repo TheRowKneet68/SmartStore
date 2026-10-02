@@ -8,7 +8,8 @@ export interface ScannedItem {
   variantId: string;
   productId: string;
   description: string;
-  barcode: string;
+  /** The barcode scanned; null for an item found by name, whose line is then recorded as selected (`RT-489`). */
+  barcode: string | null;
   unit: { code: string; quantityKind: string; scale: number };
   price: { amount: number; currencyCode: string; minorUnitExponent: number };
   /** The server's quote time: the sale must carry it, and the price in force then is checked again at save (`RT-124`). */
@@ -23,7 +24,7 @@ interface Row {
   product_name: string;
   variant_name: string | null;
   status: string;
-  barcode: string;
+  barcode: string | null;
   unit_code: string;
   quantity_kind: string;
   scale: number;
@@ -66,7 +67,7 @@ export async function scan(
   if (row === undefined) {
     throw new AppError(404, 'unknown_barcode', `Nothing has the barcode ${code}. Check it, or find the item by name.`);
   }
-  const description = row.variant_name === null ? row.product_name : `${row.product_name} — ${row.variant_name}`;
+  const description = describe(row);
   // SM-11, RT-031: only Active and Discontinued products are sold; Discontinued sells from held stock.
   if (row.status !== 'Active' && row.status !== 'Discontinued') {
     throw new AppError(409, 'not_for_sale', `${description} is not for sale (it is ${row.status}).`);
@@ -78,19 +79,57 @@ export async function scan(
   if (row.amount === null) {
     throw new AppError(409, 'no_price', `${description} has no price in force here, so it cannot be sold yet.`);
   }
+  return itemOf(row);
+}
+
+const describe = (row: Row) => (row.variant_name === null ? row.product_name : `${row.product_name} — ${row.variant_name}`);
+
+/** What the till is told about a sellable item, whether scanned or found by name. */
+function itemOf(row: Row): Omit<ScannedItem, 'quote'> & { quotedAtExact: string } {
   return {
     variantId: row.variant_id,
     productId: row.product_id,
-    description,
+    description: describe(row),
     barcode: row.barcode,
     unit: { code: row.unit_code, quantityKind: row.quantity_kind, scale: row.scale },
-    price: { amount: row.amount, currencyCode: row.currency_code, minorUnitExponent: row.minor_unit_exponent },
+    price: { amount: row.amount!, currencyCode: row.currency_code, minorUnitExponent: row.minor_unit_exponent },
     quotedAt: row.quoted_at,
     quotedAtExact: row.quoted_at_exact,
   };
 }
 
+/** UX-49: what a name finds at the till is limited. */
+const FOUND_LIMIT = 20;
+
+/**
+ * The till's lookup by name (`UX-48`, `RT-379`: a name is fuzzy and a barcode exact, and the two never mix). It is a
+ * case-blind contains match on the product's or the variant's name, with its wildcards escaped (D2 §9). It returns
+ * only what this store can sell, before anything is returned (`UX-47`, `UX-49`): released (`SM-11`), live, classified
+ * (`RT-493`) and priced here (`PR-30`), and at most `FOUND_LIMIT`. No barcode is involved.
+ */
+export async function findByName(pool: pg.Pool, organizationId: string, storeId: string, name: string) {
+  const pattern = `%${name.replace(/[\\%_]/g, '\\$&')}%`;
+  const { rows } = await pool.query<Row>(
+    `SELECT v.id AS variant_id, p.id AS product_id, p.name AS product_name, v.name AS variant_name, p.status,
+            NULL AS barcode, u.code AS unit_code, u.quantity_kind, u.scale, v.tax_category_id,
+            resolve_price(s.id, v.id, now()) AS amount, s.currency_code, c.minor_unit_exponent, now() AS quoted_at,
+            to_json(now()) #>> '{}' AS quoted_at_exact
+     FROM product_variant v
+     JOIN product p ON p.id = v.product_id
+     JOIN unit u ON u.id = v.base_unit_id
+     JOIN store s ON s.id = $2
+     JOIN currency c ON c.code = s.currency_code
+     WHERE v.organization_id = $1 AND v.archived_at IS NULL AND p.status IN ('Active', 'Discontinued')
+       AND v.tax_category_id IS NOT NULL AND resolve_price(s.id, v.id, now()) IS NOT NULL
+       AND (p.name ILIKE $3 OR v.name ILIKE $3)
+     ORDER BY lower(p.name), lower(coalesce(v.name, '')), v.id LIMIT ${FOUND_LIMIT}`,
+    [organizationId, storeId, pattern],
+  );
+  return rows.map(itemOf);
+}
+
 const Scan = z.object({ storeId: z.uuid(), code: z.string().trim().min(1).max(200) });
+const ByName = z.object({ name: z.string().trim().min(1).max(200) });
 
 /**
  * `GET /stores/:storeId/scan/:code`. Scanning is how a sale is rung up (`UX-09`), so it needs `Sale.Create` in the store.
@@ -98,17 +137,31 @@ const Scan = z.object({ storeId: z.uuid(), code: z.string().trim().min(1).max(20
  * answer carries a signed quote of the price, which the sale must bring back (D4 §3).
  */
 export async function scanRoutes(app: FastifyInstance, options: { pool: pg.Pool; quotes: QuoteSigner }): Promise<void> {
-  app.get('/stores/:storeId/scan/:code', { config: { access: { kind: 'permission', key: 'Sale.Create', scope: 'store' } } }, async (request) => {
-    const { code } = Scan.parse(request.params);
-    const { quotedAtExact, ...item } = await scan(options.pool, request.principal!.organizationId, request.storeId!, code);
-    const quote = options.quotes.sign({
-      storeId: request.storeId!,
+  const quoted = (storeId: string, { quotedAtExact, ...item }: Omit<ScannedItem, 'quote'> & { quotedAtExact: string }): ScannedItem => ({
+    ...item,
+    quote: options.quotes.sign({
+      storeId,
       variantId: item.variantId,
       unitPrice: item.price.amount,
       currencyCode: item.price.currencyCode,
       quotedAt: quotedAtExact,
       barcode: item.barcode,
-    });
-    return { ...item, quote };
+    }),
+  });
+
+  app.get('/stores/:storeId/scan/:code', { config: { access: { kind: 'permission', key: 'Sale.Create', scope: 'store' } } }, async (request) => {
+    const { code } = Scan.parse(request.params);
+    return quoted(request.storeId!, await scan(options.pool, request.principal!.organizationId, request.storeId!, code));
+  });
+
+  /**
+   * `GET /stores/:storeId/items?name=`: finding an item by name at the till, the route forward `UX-11` names after an
+   * unknown barcode. It is how a sale is rung up too, so it needs `Sale.Create` in the store. Each answer carries a
+   * signed quote with no barcode, so the sale records its line as selected, not scanned (`RT-489`).
+   */
+  app.get('/stores/:storeId/items', { config: { access: { kind: 'permission', key: 'Sale.Create', scope: 'store' } } }, async (request) => {
+    const { name } = ByName.parse(request.query);
+    const found = await findByName(options.pool, request.principal!.organizationId, request.storeId!, name);
+    return { items: found.map((item) => quoted(request.storeId!, item)) };
   });
 }

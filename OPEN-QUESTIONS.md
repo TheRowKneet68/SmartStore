@@ -194,6 +194,10 @@ fallback is a design that holds either answer, not a guess at the answer.
   list, and the contract's `Closed → Reopened` edge has an `OPEN DECISION` permission (`GAP-036`).
 - **Blocked:** abandoning a count back to trading, and reopening a closed shift (`CD-26`).
 - **Meanwhile:** both are refused (`SS004`); the architecture's fallback for an unkeyed transition is to refuse.
+- **Answered in part, 2026-10-02 (D-16):**
+  - Reopening a closed shift takes `Shift.Reopen`, a new key. The edge is not built yet; it waits for the owner's
+    go-ahead.
+  - Abandoning a count (`Reconciling → Open`) is still undecided, and refused.
 
 ### OQ-015 — Cash drawer arithmetic: change and cash refunds
 
@@ -244,6 +248,11 @@ fallback is a design that holds either answer, not a guess at the answer.
   sale's completion transaction, and its creation, authorization and capture there are that transition's side effects,
   authorized by `Sale.Create`. No cash payment is ever submitted or captured on its own. Card submit, capture and void
   remain separate transitions with `OPEN DECISION` permissions, and the gate refuses them.
+- **RESOLVED 2026-10-02 (D-16):**
+  - Submit takes `Sale.Create`, capture takes `Payment.Capture`, and void takes `Payment.Void`. The last two are new
+    keys.
+  - Card payments can be built once the owner gives the go-ahead.
+  - The Step 3 reading for cash still stands for the owner's veto: D-16 answered questions about card payments.
 
 ### OQ-019 — Which location a till sells from
 
@@ -307,6 +316,11 @@ fallback is a design that holds either answer, not a guess at the answer.
      to the card. *Meanwhile:* no such cap; the per-line and per-sale bounds hold.
 - **Why not answerable from `/docs`:** permission keys are the owner's to name; the rest is silent or contradictory.
 - **Blocked:** paying any refund in Step 3 (the first point). Nothing else.
+- **Answered in part, 2026-10-02 (D-16):**
+  - Paying a refund (`submit to provider`) takes `Refund.Pay`, a new key.
+  - Cancelling a refund takes `Sale.Refund`, and cancelling a return takes `Return.Create`.
+  - So the first point no longer blocks paying a refund.
+  - A return's `settle` and `close`, and items 1 to 6, stay open.
 
 ### OQ-024 — Audit: vocabulary gaps and two contradictions
 
@@ -332,6 +346,12 @@ fallback is a design that holds either answer, not a guess at the answer.
   7. *"Twenty categories".* `RT-292`'s acceptance speaks of "the twenty listed categories"; `AU-03` lists about twelve.
      *Meanwhile:* every `AU-03` category that v1 builds is recorded and tested; permission changes, provider
      configuration and sign-in events arrive with domain 7 and the application.
+  8. *A scheduled job's own record* (added 2026-10-02). `AU-16` requires a scheduled job to record what it did and what
+     it changed, in the same vocabulary. No type in `AU-12` records a job's run, such as a ledger reconciliation that
+     found no drift. *Meanwhile:* the ledger check (`npm run ledger:check`) and the audit-chain check
+     (`npm run audit:check`) run on demand, and nothing runs them on a schedule. Scheduling them would need no new
+     dependency; recording each run needs a type, which is a reviewed change (`AU-13`). Blocked: the brief's
+     housekeeping jobs.
 - **Why not answerable from `/docs`:** the documents are silent (2, 4) or disagree (1, 3, 5, 6, 7), and a new event type
   is a reviewed change for the owner (`AU-13`).
 - **Blocked:** nothing in the schema; auditing reads of the log waits for a type.
@@ -376,6 +396,13 @@ fallback is a design that holds either answer, not a guess at the answer.
 - **Why not answerable from `/docs`:** naming permission keys is the owner's (`SM-02d`, as OQ-018 and OQ-023); the
   rest is silent or contradictory.
 - **Blocked:** item 1's features in Step 3. Nothing else.
+- **Item 1 answered, 2026-10-02 (D-16):**
+  - returning from leave takes `Employee.Edit`;
+  - reactivating after suspension takes `Employee.Reactivate`, a new key;
+  - re-enabling a till takes `Device.Disable`;
+  - retrying a failed refund takes `Sale.Refund`.
+
+  In item 5, `Payment.Capture` is now a catalogue key. Items 2 to 7 stay open.
 
 ### OQ-026 — Which permission authorizes managing warehouses and storage locations
 
@@ -393,6 +420,8 @@ fallback is a design that holds either answer, not a guess at the answer.
 - **Blocked:** any location beyond the Default, including the Quarantine, Damaged and ExpiredHold locations that a
   return's non-sellable dispositions need (D5). Put to the owner with the key list before Domain 5 (working
   agreement 8). Nothing else.
+- **RESOLVED 2026-10-02 (D-16):** `Config.Organization`, because locations are organization-global (`D-03`). The routes
+  wait for the owner's go-ahead.
 
 ### OQ-027 — How long a session lasts, and how many failed sign-ins throttle a credential
 
@@ -434,6 +463,8 @@ fallback is a design that holds either answer, not a guess at the answer.
   it is the owner's (`SM-02d`).
 - *Meanwhile:* the routes ask for the narrower `Role.*` keys (D7 §9). `Config.Roles` authorizes nothing yet.
 - **Blocked:** nothing. Put to the owner with the key list before Domain 5 (working agreement 8).
+- **RESOLVED 2026-10-02 (D-16):** as built. `Role.Create` and `Role.Edit` define roles, `Role.Assign` assigns them,
+  and `Config.Roles` authorizes nothing.
 
 ### OQ-029 — May the declared closing float exceed what was counted?
 
@@ -460,6 +491,35 @@ fallback is a design that holds either answer, not a guess at the answer.
 - *Meanwhile:* the web UI uses the strictest published levels, each one variable in `web/src/styles.css`:
   - every text colour pair meets WCAG 2.2 level AAA, 7:1 or more. The lowest pair measures 7.29:1;
   - every control is at least 3rem tall, 54 CSS px at the 18 px base.
+
+### OQ-031 — Archiving a brand, a unit or a tax category
+
+- **Unknown:** whether a brand, a unit or a tax category can be archived, and what archiving one would stop.
+  - The owner's brief of 2026-10-01 lists "reference-data edit/archive (brands, units, tax categories)".
+  - `/docs` gives archival to categories (`PR-05`, `RT-027`), variants (`PR-48`, `RT-495`) and barcodes (`PR-09`),
+    and deactivation to a unit conversion that has been used (`PR-18`). It gives none to a brand, a unit or a tax
+    category, and the schema has no archive column for them (D2 §3, §4).
+- **Why not answerable from `/docs`:** an archive must say what it blocks. For example, does it stop new variants on
+  a unit, or in a tax category, while the old ones go on selling? No rule says.
+- **Blocked:** archiving those three only. Editing them is not blocked. The schema lets a unit's code, names, kind
+  and decimal places change, and a tax category's code and name, and a brand's name (D2 §4). A unit's kind is frozen
+  once anything uses it (`PR-14`, `RT-491`), and a tax rate changes only by a new version (`RT-047`).
+- *Meanwhile:* none of the three can be archived.
+
+### OQ-032 — The manual-weight threshold per store, and the line's weight source
+
+- **Unknown:** the number above which a hand-entered weight needs a reason code and is reported (`PR-28`, `SP-18`:
+  "the threshold is per store"). No document gives it, or a default.
+- **Also missing, and not a question:** the schema has nowhere to keep what `/docs` requires.
+  - `PR-27` and `SP-16` store a weight with its source (`Scale`, `Manual`, `BarcodeEmbedded`).
+  - `PR-28` requires a reason code on a manual weight above the threshold.
+  - `sale_line` has neither column, and the store settings have no threshold. Adding them is a forward-only
+    migration. The owner authorized migrations for Phase B only, so this one waits for the owner.
+- **Why not answerable from `/docs`:** the threshold is a configured value with no stated default.
+- **Blocked:** manual weigh entry at the till, the brief's Phase D item. A sale still takes whole quantities only.
+  A typed decimal weight would be a manual weight with no recorded source or reason, against `PR-27` and `PR-28`.
+- *Suggested interim, once the migration is authorized:* a threshold of zero, so that every manual weight needs a
+  reason, as OQ-020 does for the shift variance.
 
 ## How to use this file
 

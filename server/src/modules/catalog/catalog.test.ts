@@ -3,7 +3,15 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { signedInAs, testApp } from '../../../test/app.ts';
 import { createTestDb, type TestDb } from '../../../test/db.ts';
-import { employeeWithAccess, insertOrganization, insertReasonCode, insertStore } from '../../../test/fixtures.ts';
+import {
+  draftAdjustment,
+  employeeWithAccess,
+  insertOrganization,
+  insertReasonCode,
+  insertSellableVariant,
+  insertStore,
+  insertWarehouse,
+} from '../../../test/fixtures.ts';
 
 let db: TestDb;
 let app: FastifyInstance;
@@ -86,6 +94,63 @@ describe('reference data (PR-04..PR-06, PR-14, PR-15, PR-37, PR-40, RT-026, RT-0
     const past = await call('POST', `/tax-categories/${tax}/rates`, c.as, { jurisdiction: 'TEST-ONLY', ratePercent: '7', effectiveFrom: new Date(Date.now() - 60_000).toISOString() });
     expect(past.json().error.code).toBe('invalid_value');
     expect((await call('POST', `/tax-categories/${tax}/rates`, c.as, { jurisdiction: 'X', ratePercent: '-1' })).statusCode, 'never a negative rate').toBe(400);
+  });
+
+  /** Someone of `c`'s organization holding every manager key but `key`. */
+  const allBut = async (c: Catalogue, key: string) =>
+    signedInAs(await employeeWithAccess(db.app, c.org, MANAGER_KEYS.filter((k) => k !== key), { assignedStore: null, accessStores: [c.store] }), c.org);
+
+  it("PR-14, PR-15, RT-491, D2 s4: a unit's code, names, kind and decimal places change, only as sent; a used unit's kind does not", async () => {
+    const c = await catalogue();
+    const r = await reference(c);
+    const box = await created('POST', '/units', c.as, { code: 'BX', name: 'Box', quantityKind: 'Countable', scale: 0 });
+    await created('POST', '/units', c.as, { code: 'KG', name: 'Kilogram', quantityKind: 'Measurable', scale: 3 });
+    const change = (body: object, as: Headers = c.as) => call('PATCH', `/units/${box}`, as, body);
+    expect((await change({})).json().error).toEqual({ code: 'invalid_request', message: 'The request changes nothing.' });
+    expect((await change({ name: 'Crate', pluralName: 'Crates' })).json()).toEqual({ id: box });
+    expect((await change({ scale: 2 })).json().error, 'PR-15').toEqual({ code: 'invalid_value', message: 'A countable unit has no decimal places.' });
+    expect((await change({ quantityKind: 'Measurable', scale: 2 })).statusCode, 'unused, so its kind may change').toBe(200);
+    expect((await change({ code: 'KG' })).json().error.message).toBe('That unit code is already in use.');
+    const units = (await call('GET', '/units', c.as)).json().items;
+    expect(units.find((u: { id: string }) => u.id === box)).toEqual({ id: box, code: 'BX', name: 'Crate', pluralName: 'Crates', quantityKind: 'Measurable', scale: 2 });
+
+    // Used: a draft stock adjustment line names a variant on it.
+    const product = await created('POST', '/products', c.as, { categoryId: r.category, name: 'Apples' });
+    const variant = await created('POST', `/products/${product}/variants`, c.as, { baseUnitId: box, taxCategoryId: r.tax, price: { amount: 100 } });
+    const { defaultLocationId } = await insertWarehouse(db.app, c.org, c.store);
+    await draftAdjustment(db.app, { org: c.org, store: c.store, reason: await insertReasonCode(db.app, c.org) }, [{ variant, location: defaultLocationId, type: 'FOUND', quantity: '1.5' }]);
+    expect((await change({ quantityKind: 'Countable', scale: 0 })).json().error, 'RT-491').toEqual({ code: 'SS021', message: 'This unit has already been used, so its kind cannot change.' });
+    expect((await change({ name: 'Bushel' })).statusCode, 'its name still can').toBe(200);
+
+    expect((await change({ name: 'Theirs' }, (await catalogue()).as)).statusCode, "another organization's unit").toBe(404);
+    expect((await change({ name: 'Nope' }, await allBut(c, 'Product.Edit'))).statusCode, 'Product.Edit').toBe(403);
+  });
+
+  it("PR-37, RT-047, D2 s4: a tax category's code and name change; its rates are never edited; a code is used once", async () => {
+    const c = await catalogue();
+    const tax = await created('POST', '/tax-categories', c.as, { code: 'STD', name: 'TEST-ONLY standard' });
+    await created('POST', `/tax-categories/${tax}/rates`, c.as, { jurisdiction: 'TEST-ONLY', ratePercent: '10' });
+    await created('POST', '/tax-categories', c.as, { code: 'ZERO', name: 'TEST-ONLY zero' });
+    const change = (body: object, as: Headers = c.as) => call('PATCH', `/tax-categories/${tax}`, as, body);
+    expect((await change({ code: 'MAIN', name: 'TEST-ONLY main' })).json()).toEqual({ id: tax });
+    expect((await change({ code: 'ZERO' })).json().error.message).toBe('That tax category code is already in use.');
+    expect((await change({ ratePercent: '5' })).json().error, 'a rate is not a field of the category').toEqual({ code: 'invalid_request', message: 'The request changes nothing.' });
+    const listed = (await call('GET', '/tax-categories', c.as)).json().items.find((t: { id: string }) => t.id === tax);
+    expect(listed).toEqual({ id: tax, code: 'MAIN', name: 'TEST-ONLY main', ratesInForce: [{ jurisdiction: 'TEST-ONLY', ratePercent: '10.0000', effectiveFrom: expect.any(String) }] });
+    expect((await change({ name: 'Theirs' }, (await catalogue()).as)).statusCode, "another organization's category").toBe(404);
+    expect((await change({ name: 'Nope' }, await allBut(c, 'Tax.Edit'))).statusCode, 'Tax.Edit').toBe(403);
+  });
+
+  it('product-domain s3, D2 s4: a brand is renamed, and stays unique by name whatever the case', async () => {
+    const c = await catalogue();
+    const acme = await created('POST', '/brands', c.as, { name: 'Acme' });
+    await created('POST', '/brands', c.as, { name: 'Zeta' });
+    const change = (body: object, as: Headers = c.as) => call('PATCH', `/brands/${acme}`, as, body);
+    expect((await change({ name: 'Acme Foods' })).json()).toEqual({ id: acme });
+    expect((await change({ name: 'ZETA' })).json().error.message).toBe('That brand already exists.');
+    expect((await call('GET', '/brands', c.as)).json().items.map((b: { name: string }) => b.name)).toEqual(['Acme Foods', 'Zeta']);
+    expect((await change({ name: 'Theirs' }, (await catalogue()).as)).statusCode, "another organization's brand").toBe(404);
+    expect((await change({ name: 'Nope' }, await allBut(c, 'Product.Edit'))).statusCode, 'Product.Edit').toBe(403);
   });
 
   it('PR-04, PR-05, RT-026, EC-42, SM-04: categories form a tree, a cycle is refused, archival is once and repeats change nothing', async () => {
@@ -201,8 +266,16 @@ describe('prices and costs (PR-30, PR-32, PR-33, PR-35, PR-36, RT-040, RT-041)',
     const past = await call('POST', `/variants/${s.variant}/prices`, c.as, { amount: 900, effectiveFrom: new Date(Date.now() - 60_000).toISOString() });
     expect(past.json().error.code).toBe('invalid_value');
     expect((await call('POST', `/variants/${s.variant}/prices`, c.as, { amount: 700 })).statusCode, 'at cost is allowed').toBe(201);
+    const later = new Date(Date.now() + 86_400_000).toISOString();
+    const pricer = await employeeWithAccess(db.app, c.org, ['Price.View', 'Price.Edit'], { assignedStore: null, accessStores: [c.store] });
+    await db.app.query("UPDATE employee SET first_name = 'Pia' WHERE id = $1", [pricer]);
+    await created('POST', `/variants/${s.variant}/prices`, signedInAs(pricer, c.org), { amount: 800, effectiveFrom: later });
     const listed = (await call('GET', `/variants/${s.variant}/prices`, c.as)).json().items;
-    expect(listed[0]).toMatchObject({ amount: 700, currencyCode: 'XTS', started: true });
+    expect(listed, 'PR-32: the history, newest first, with who set each version').toEqual([
+      { id: expect.any(String), amount: 800, currencyCode: 'XTS', minorUnitExponent: 2, effectiveFrom: later, started: false, setByName: 'Pia Employee' },
+      { id: expect.any(String), amount: 700, currencyCode: 'XTS', minorUnitExponent: 2, effectiveFrom: expect.any(String), started: true, setByName: 'Test Employee' },
+      { id: expect.any(String), amount: 1_000, currencyCode: 'XTS', minorUnitExponent: 2, effectiveFrom: expect.any(String), started: true, setByName: 'Test Employee' },
+    ]);
   });
 
   it('PR-36: setting a standard cost needs Product.Cost.View as well as Product.Edit', async () => {
@@ -329,6 +402,53 @@ describe("the till's scan (UX-09, UX-11, UX-25, UX-48, SM-11, RT-124, RT-493, AD
     const response = await scan(c, '96385074', there, abroad);
     expect(response.statusCode).toBe(409);
     expect(response.json().error).toEqual({ code: 'no_price', message: 'Oat milk — 1 L has no price in force here, so it cannot be sold yet.' });
+  });
+
+  it('UX-48, UX-49, UX-47, RT-379, SM-11, RT-493, PR-30: a name finds only what this store sells, case-blind and at most 20, and never by barcode', async () => {
+    const c = await catalogue();
+    const elsewhere = await catalogue();
+    await sellable(elsewhere, { value: '4006381333931', kind: 'EAN13' });
+    const s = await sellable(c, { value: '012345678905', kind: 'UPC_A' }, 1_250);
+    // Not for sale: a draft, an unclassified item, and an archived variant.
+    const draft = await created('POST', '/products', c.as, { categoryId: s.category, name: 'Oatcake' });
+    await created('POST', `/products/${draft}/variants`, c.as, { baseUnitId: s.unit, taxCategoryId: s.tax, price: { amount: 100 } });
+    const plain = await created('POST', '/products', c.as, { categoryId: s.category, name: 'Oat flakes' });
+    await created('POST', `/products/${plain}/variants`, c.as, { baseUnitId: s.unit, price: { amount: 100 } });
+    await call('POST', '/transitions', c.as, { machine: 'Product', event: 'activate', subject: plain });
+    const big = await created('POST', `/products/${s.product}/variants`, c.as, { name: '2 L', baseUnitId: s.unit, taxCategoryId: s.tax, price: { amount: 2_000 } });
+    expect((await call('POST', `/variants/${big}/archive`, c.as)).statusCode).toBe(200);
+
+    const find = (name: string, as: Headers = c.as, store = c.store) => call('GET', `/stores/${store}/items?name=${encodeURIComponent(name)}`, as);
+    const found = await find('OAT');
+    expect(found.statusCode).toBe(200);
+    expect(found.json().items).toEqual([
+      {
+        variantId: s.variant,
+        productId: s.product,
+        description: 'Oat milk — 1 L',
+        barcode: null,
+        unit: { code: expect.any(String), quantityKind: 'Countable', scale: 0 },
+        price: { amount: 1_250, currencyCode: 'XTS', minorUnitExponent: 2 },
+        quotedAt: expect.any(String),
+        quote: expect.any(String),
+      },
+    ]);
+    expect((await find('1 l')).json().items.map((i: { variantId: string }) => i.variantId), "the variant's own name").toEqual([s.variant]);
+    expect((await find('012345678905')).json().items, 'RT-379: a name never resolves as a barcode').toEqual([]);
+    expect((await find('%')).json().items, 'a wildcard is only a character').toEqual([]);
+
+    for (let i = 0; i < 21; i++) await insertSellableVariant(db.app, c.org);
+    expect((await find('product')).json().items, 'UX-49: limited').toHaveLength(20);
+
+    await db.owner.query(`INSERT INTO currency (code, minor_unit_exponent) VALUES ('XXX', 0) ON CONFLICT (code) DO NOTHING`);
+    const abroad = (await db.app.query<{ id: string }>(
+      `INSERT INTO store (organization_id, code, name, time_zone, currency_code) VALUES ($1, $2, 'Abroad', 'UTC', 'XXX') RETURNING id`,
+      [c.org, `S-${randomUUID()}`],
+    )).rows[0]!.id;
+    const there = signedInAs(await employeeWithAccess(db.app, c.org, ['Sale.Create'], { assignedStore: null, accessStores: [abroad] }), c.org);
+    expect((await find('oat', there, abroad)).json().items, 'PR-30: nothing is priced at that store').toEqual([]);
+    const viewer = signedInAs(await employeeWithAccess(db.app, c.org, ['Product.View', 'Price.View'], { assignedStore: null, accessStores: [c.store] }), c.org);
+    expect((await find('oat', viewer)).statusCode, 'finding is ringing up: Sale.Create').toBe(403);
   });
 
   it('MS-03, AC-01: scanning needs Sale.Create in that store; another store or organization gets a 403', async () => {

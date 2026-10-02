@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { withTransaction } from '../../db/pool.ts';
 import { AppError } from '../../http/errors.ts';
 import { auditContext } from '../../http/gate.ts';
+import { paged, pageOf } from '../../http/paging.ts';
 
 const text = z.string().trim().min(1).max(200);
 const NewMethod = z.object({ code: text, name: text, methodType: z.enum(['Cash', 'Card']) });
@@ -18,11 +19,12 @@ export async function paymentMethodRoutes(app: FastifyInstance, options: { pool:
   const { pool } = options;
 
   app.get('/payment-methods', { config: { access: { kind: 'permission', key: 'Payment.Method.Configure', scope: 'organization' } } }, async (request) => {
+    const page = pageOf(request.query);
     const { rows } = await pool.query(
-      `SELECT id, code, name, method_type AS "methodType" FROM payment_method WHERE organization_id = $1 ORDER BY code`,
-      [request.principal!.organizationId],
+      `SELECT id, code, name, method_type AS "methodType" FROM payment_method WHERE organization_id = $1 ORDER BY code, id LIMIT $2 OFFSET $3`,
+      [request.principal!.organizationId, page.limit, page.offset],
     );
-    return { items: rows };
+    return paged(rows, page);
   });
 
   app.post('/payment-methods', { config: { access: { kind: 'permission', key: 'Payment.Method.Configure', scope: 'organization' } } }, async (request, reply) => {

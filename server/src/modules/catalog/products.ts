@@ -4,7 +4,9 @@ import { z } from 'zod';
 import { withTransaction, type Queryable } from '../../db/pool.ts';
 import { AppError } from '../../http/errors.ts';
 import { auditContext, requirePermission, type Access } from '../../http/gate.ts';
+import { paged, pageOf } from '../../http/paging.ts';
 import type { MachineBinding } from '../../http/transitions.ts';
+import { employeeName } from '../identity/names.ts';
 
 /** The Product machine (§22.1). Its edges, keys, events and reasons are data; the database checks activation (SM-12). */
 export const productMachine: MachineBinding = {
@@ -279,15 +281,21 @@ export async function productRoutes(app: FastifyInstance, options: { pool: pg.Po
     return { id, archived: true };
   });
 
-  /** The organization default price's versions, in force and scheduled (`PR-30`, `PR-32`). */
+  /**
+   * The organization default price's versions, newest first, in force and scheduled (`PR-30`, `PR-32`): the price
+   * history, with who set each version and the currency's decimal places to show it in.
+   */
   app.get('/variants/:id/prices', organizationWide('Price.View'), async (request) => {
     const { id } = Id.parse(request.params);
+    const page = pageOf(request.query);
     const { rows } = await pool.query(
-      `SELECT p.id, p.amount, p.currency_code AS "currencyCode", p.effective_from AS "effectiveFrom", p.effective_from <= now() AS started
-       FROM variant_price p WHERE p.variant_id = $1 AND p.organization_id = $2 ORDER BY p.effective_from DESC LIMIT 50`,
-      [id, org(request)],
+      `SELECT p.id, p.amount, p.currency_code AS "currencyCode", c.minor_unit_exponent AS "minorUnitExponent",
+              p.effective_from AS "effectiveFrom", p.effective_from <= now() AS started, ${employeeName('e')} AS "setByName"
+       FROM variant_price p JOIN currency c ON c.code = p.currency_code JOIN employee e ON e.id = p.created_by
+       WHERE p.variant_id = $1 AND p.organization_id = $2 ORDER BY p.effective_from DESC, p.id LIMIT $3 OFFSET $4`,
+      [id, org(request), page.limit, page.offset],
     );
-    return { items: rows };
+    return paged(rows, page);
   });
 
   app.post('/variants/:id/prices', organizationWide('Price.Edit'), async (request, reply) => {
