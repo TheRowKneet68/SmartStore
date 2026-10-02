@@ -651,6 +651,28 @@ fallback is a design that holds either answer, not a guess at the answer.
 - **Blocked:** a real acquirer (the owner's: an account and secrets), and the reconciliation of orphaned payments (item 2).
 - *Meanwhile:* the gateway is simulated and says so everywhere it can; an orphaned payment is visible on its open checkout.
 
+- **Update 2026-10-02, part A built** (D4 §16): void a `Pending` or `Authorized` card payment under `Payment.Void`, and a report,
+  under `Payment.View`, of the payments that need a person. No key is new. **Item 2 is still open for its part B:** what returns
+  the money of a payment that was captured and never became a sale. The owner is to decide among three options:
+  1. *A refund tied to a payment, not a sale.* The refund machine, its second-person approval, its provider round trip and its
+     audit are reused, and a refund may name a captured payment with no sale. It changes the schema (a refund's sale and its lines
+     become optional, and its bound becomes what the payment took less what was refunded of it).
+  2. *Finish the sale from the stored checkout.* The customer paid, so make the sale they paid for. A checkout stores no lines
+     today, so it would store the cart, and a person would complete it. It sells goods the customer may never have taken.
+  3. *A payment reversal record.* A new small document, linked to the captured payment, with a reason, an approver and the provider's
+     reference, that asks the provider to give the money back. It touches neither the sale nor the refund schema, and it is a
+     second refund-like document with its own approval and audit.
+
+### OQ-037 — How long a card payment may wait before it needs a person
+
+- **Unknown:** `PY-40`: "A payment that has been `Pending` for more than a configured window is escalated to a person." The
+  specification gives no value, and no setting holds one. The same window is wanted for an authorized payment never captured and
+  a captured one with no sale.
+- **Meanwhile:** the report and `npm run payments:check` take the window as a required parameter and never default it, as OQ-027
+  does for security policy. A store-level setting would be additive.
+- **Why not answerable from `/docs`:** a configured value is the owner's to set.
+- **Blocked:** a scheduled run (`BQ-02` too).
+
 ## How to use this file
 
 - Add an entry the moment you hit something the specification does not answer. Then continue with a different task.

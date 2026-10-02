@@ -1687,3 +1687,9 @@ Supersedes §13's "reading returns and refunds (no key)" and the permission coun
 `…/refunds[/:id]`. A draft refund may be withdrawn (`Draft → Cancelled` on `cancel`, `Sale.Refund`, a reason; one migration,
 `20261002120000`, so the migration count is 15). A drawer refund is paid by someone signed in at its till. `OQ-035` is closed;
 tests are 483. Still open in this area: the orphaned-payment path, `OQ-036` item 2.
+
+---
+
+## 15. Update, 2026-10-02, orphaned payments (part A)
+
+Supersedes §13's "not built: voiding a payment and the reconciliation job" in part. **Built:** `POST /stores/:storeId/payments/:id/void` (`Payment.Void`) and `GET /stores/:storeId/payments/attention` (`Payment.View`), with `npm run payments:check`; D4 §16. **Not built:** the scheduler (`BQ-02`), the settlement-file comparison, the notification, and **part B**, what returns the money of a payment captured with no sale (`OQ-036` item 2: three options, the owner's to decide). `OQ-037`: the window a payment may wait is not given by the specification, so it is a required parameter. Tests: 493.

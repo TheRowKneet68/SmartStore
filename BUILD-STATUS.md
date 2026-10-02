@@ -351,8 +351,8 @@ Step 3 rules, given by the owner on 2026-10-01 with "start Step 3":
 - **Phase C is done:** the permission-key proposal waits for the owner's answer.
 - **2026-10-02: the owner answered it.** The answers are owner decision D-16. The owner said "go" after the report of
   affected files and rule IDs, and the keys are applied (Phase E, step 1: migration `20261002100000_d7_d16_permission_keys.sql`;
-  D7 §11, D4 §14). What Phase E still holds: the locations routes, reopening a shift (OQ-033), and the orphaned-payment path (void,
-  reconciliation, OQ-036 item 2). Domain 5's application layer (step 2), the card path through a simulated gateway
+  D7 §11, D4 §14). What Phase E still holds: the locations routes, reopening a shift (OQ-033), and part B of the orphaned-payment path
+  (OQ-036 item 2; part A is built, step 5). Domain 5's application layer (step 2), the card path through a simulated gateway
   (step 3) and owner decision D-17 (step 4) are built.
 - **Phase D is under way.** The audit-log read is not built (OQ-024 item 2). The identity admin screens and the
   reference-data screen are written and tested in `web/`; they are committed with their server routes.
@@ -522,8 +522,8 @@ sets the order. Phase A (housekeeping and the push) is done.
 
    **The keys are decided (D-16, 2026-10-02) and applied** (Phase E, step 1; see the log). Q8, a refund's retry under
    `Sale.Refund` while paying it is `Refund.Pay`, was raised back to the owner, who gave no change. **Still to build:**
-   routes for warehouses and storage locations (`Config.Organization`), and the card path's void and reconciliation
-   (OQ-036 item 2), which is the next step. **Domain 5's
+   routes for warehouses and storage locations (`Config.Organization`), and part B of the orphaned-payment path
+   (OQ-036 item 2: the owner decides how the money of a payment with no sale returns). **Domain 5's
    application layer is built** (step 2 in the log; its focused mutation check is there too). **Not buildable yet:**
    reopening a shift (OQ-033).
 5. **Phase F:**
@@ -1437,3 +1437,19 @@ Append-only. One dated line per step, including failed and abandoned attempts.
     captured and never became a sale. The payment has no way out but a linked refund, and a refund needs a sale.
   - **Staging:** BUILD-STATUS, OPEN-QUESTIONS, OWNER-DECISIONS and `onboarding.test.ts` hold another session's uncommitted work, so
     their staged copies are the committed files plus this step's lines only.
+- 2026-10-02 — **Phase E, step 5: orphaned payments, part A.** D4 §16; `OQ-036` item 2 (part B waits for the owner); `OQ-037`.
+  - **Void:** `POST /stores/:storeId/payments/:id/void` under `Payment.Void` (D-16). A `Pending` or `Authorized` card payment is voided
+    at the provider outside the transaction; one the provider never answered is first asked about, and if it holds nothing a
+    person voids it here, and the answer says so. A provider that does not confirm leaves it unchanged (`void_failed`,
+    `void_pending`). Terminal; its cart is abandoned; the same sale answers `card_voided`. Captured is refunded, never voided.
+  - **Report:** `GET /stores/:storeId/payments/attention?olderThanMinutes=N` under `Payment.View`, and `npm run payments:check --
+    --older-than N [--store id]` (exits non-zero when anything needs a person): `PendingTooLong`, `AuthorizedNotCaptured`,
+    `CapturedNoSale`. It changes nothing. **The window is required and never defaulted** (`OQ-037`).
+  - **No key is new and none was open.** The simulated gateway learned `TEST-VOID-FAIL` and `TEST-VOID-TIMEOUT`.
+  - **Not built:** part B (the three options are in `OQ-036`, for the owner), the scheduler (`BQ-02`), the settlement-file
+    comparison, and the notification.
+  - **Tests:** 10 new in `payments/card.test.ts`, one of them running the command. Server: 493 pass; the server typechecks. The
+    command was also run against the development database, which had nothing to report.
+  - **Mutation check:** `plan-void.mjs`, 18 mutations (the void and its guards, the report, its key, window, scope, age, order and counts). 13 were detected at once. Five survived. One was a real design flaw, found because a survivor asked why the filter existed: the report listed only payments on an open checkout, which would hide a pending payment on an abandoned one, so the filter was removed. Two needed tests (the void racing a capture, and oldest first), one became detectable once the filter was gone, and one (the simulated void's idempotency on the default path) cannot be observed and was dropped. **18 of 18**, restored byte for byte.
+  - **Staging:** BUILD-STATUS and OPEN-QUESTIONS hold another session's uncommitted work, so their staged copies are the committed
+    files plus this step's lines only.

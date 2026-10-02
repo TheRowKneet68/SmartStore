@@ -498,3 +498,43 @@ the sale is not saved and the charge stands for a person (`total_changed`; never
 - The card's **last four, scheme and expiry** for display (`PY-43`): the simulated provider supplies none, and no column holds them.
 - Offline card payment (`PY-47`, `PY-48`), with offline.
 - Mobile wallets and the other method types (`PY-03`).
+
+## 16. Orphaned payments, part A: void, and the report (2026-10-02)
+
+Code: `payments/card-payment.ts` (`voidCardPayment`), `attention.ts`, `routes.ts`, `server/src/cli/payments-check.ts`; tests in
+`payments/card.test.ts`. `OQ-036` item 2, part A. No key is new: the void is `Payment.Void` (D-16 Q3) and the report is read under
+`Payment.View` ("see payments and refunds"). Part B, what returns the money of a payment that was captured and never became a
+sale, is the owner's to decide and is not built.
+
+**Void** (`POST /stores/:storeId/payments/:id/void`, `Payment.Void`). A `Pending` or `Authorized` card payment is voided at the
+provider, outside any transaction (`PY-36`), under the payment's own merchant reference, so asking again is the same request
+(§15). A captured payment is refunded, never voided (`PY-12`, `PY-13`); a declined, failed or voided one is over; a cash payment is
+not voided at a provider.
+
+| The payment | What the void does |
+|---|---|
+| `Authorized`, the provider holds it | The provider is asked to void it; `Approved` records `Voided` |
+| `Pending`, the provider holds the authorization (a timeout it did act on) | Asked what it holds (`PY-11`), found, voided there, `Voided` |
+| `Pending`, the provider holds nothing (a timeout it never saw) | There is nothing to cancel there, so a **person** voids it here, and the answer says `providerHeld: false`. It is the one place silence from the provider is acted on, and it is a manual, permissioned act on the report, not an automatic one (`PY-41`) |
+| The provider does not confirm | The payment is unchanged: `void_failed`, or `void_pending` when it may have happened (a timeout, an error). Voiding again asks again and does it once |
+
+A voided payment is terminal (`PY-54`). Its checkout, if it never became a sale, is abandoned with the cart, and the same sale sent
+again answers `card_voided`. Voiding a voided payment returns it and asks the provider nothing (`SM-04`).
+
+**The report** (`GET /stores/:storeId/payments/attention?olderThanMinutes=N`, `Payment.View`; and `npm run payments:check --
+--older-than N [--store id]`, which exits non-zero when anything needs a person, as `ledger:check` does). It is the escalation of
+`PY-40`, "reported, never auto-adjusted", and changes nothing. It lists card payments that are not settled:
+
+| Kind | What it is |
+|---|---|
+| `PendingTooLong` | The provider has not said yes or no (`PY-11`, `PY-41`) |
+| `AuthorizedNotCaptured` | Funds reserved and never taken |
+| `CapturedNoSale` | Money taken and the checkout never became a sale (`PY-37`) |
+
+Each row says what a person needs: the payment, its amount and age, what the provider last said, whether the gateway was simulated
+(null while the provider has given no reference), and the cart's operation id, because sending the same sale again resumes the
+payment (§15). No card data is in it. Age runs from when the payment entered its present state. A summary counts every kind across
+all pages. **The window is required and never defaulted:** `PY-40` calls it "configured" and gives no value (OQ-037).
+
+**Not built:** the scheduler that would run the check (`BQ-02`); the provider comparison against a settlement file (`PY-40`); the
+notification when something needs a person; and part B.
