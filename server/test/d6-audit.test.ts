@@ -139,6 +139,7 @@ describe('the closed vocabulary and the contract (AU-11, AU-12, D-06, s22)', () 
       ['Refund', 'Processing', 'Completed', 'Payment.Refund', false],
       ['Refund', 'Processing', 'Failed', 'Payment.Refund', false],
       ['Refund', 'Failed', 'Processing', null, false],
+      ['Refund', 'Draft', 'Cancelled', 'Refund.StateChange', true], // D-17 item 5
       ['Refund', 'Approved', 'Cancelled', 'Refund.StateChange', true],
       ['Refund', 'Processing', 'Cancelled', 'Refund.StateChange', true],
     ];

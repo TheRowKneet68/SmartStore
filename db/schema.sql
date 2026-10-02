@@ -3940,7 +3940,7 @@ CREATE TABLE public.refund (
     CONSTRAINT ck_refund_separation CHECK (((approved_by IS NULL) OR ((approved_by <> created_by) AND (approved_by <> submitted_by)))),
     CONSTRAINT ck_refund_status CHECK ((status = ANY (ARRAY['Draft'::text, 'PendingApproval'::text, 'Approved'::text, 'Processing'::text, 'Completed'::text, 'Failed'::text, 'Cancelled'::text]))),
     CONSTRAINT ck_refund_submitted CHECK (((submitted_at IS NULL) = (submitted_by IS NULL))),
-    CONSTRAINT ck_refund_submitted_when CHECK (((status = 'Draft'::text) OR (submitted_by IS NOT NULL))),
+    CONSTRAINT ck_refund_submitted_when CHECK (((status = 'Draft'::text) OR (submitted_by IS NOT NULL) OR ((status = 'Cancelled'::text) AND (approved_by IS NULL)))),
     CONSTRAINT ck_refund_till CHECK ((num_nulls(pos_terminal_id, cash_drawer_id, cash_shift_id) = ANY (ARRAY[0, 3])))
 );
 
@@ -4047,7 +4047,7 @@ COMMENT ON CONSTRAINT ck_refund_submitted ON public.refund IS 'Cites: SM-03. Sub
 -- Name: CONSTRAINT ck_refund_submitted_when ON refund; Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON CONSTRAINT ck_refund_submitted_when ON public.refund IS 'Cites: SM-03. Every refund past Draft records who submitted it.';
+COMMENT ON CONSTRAINT ck_refund_submitted_when ON public.refund IS 'Cites: SM-03, D-17. Every refund past Draft records who submitted it, except a withdrawn draft, which was never submitted.';
 
 
 --
@@ -11510,4 +11510,5 @@ INSERT INTO public.schema_migrations (version) VALUES
     ('20261001120100'),
     ('20261001130000'),
     ('20261001140000'),
-    ('20261002100000');
+    ('20261002100000'),
+    ('20261002120000');

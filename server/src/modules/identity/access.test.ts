@@ -73,7 +73,7 @@ describe('roles and their grants (AC-01, AC-02, AC-04, PC-01..PC-03)', () => {
     const listed = await call('GET', '/permissions', o.as);
     expect(listed.statusCode).toBe(200);
     expect(listed.json().items).toEqual(catalogue);
-    expect(catalogue, 'D-16 made it 122').toHaveLength(122);
+    expect(catalogue, 'D-16 made it 122, D-17 124').toHaveLength(124);
     const viewer = await employeeWithAccess(db.app, o.org, ['Employee.View'], { assignedStore: null, accessStores: [o.store] });
     expect((await call('GET', '/permissions', signedInAs(viewer, o.org))).statusCode, 'Employee.View is not Role.View').toBe(403);
   });

@@ -433,3 +433,84 @@ describe('refunds: money back for a sale (RR-01, RR-03, RR-22, RR-24, PY-25, PY-
     expect(await refundedOf(s.bread.saleLineId)).toBe(0);
   });
 });
+
+describe('owner decision D-17: the payer is at the till, a draft can be withdrawn, and returns and refunds can be read', () => {
+  it('D-17 item 4, PY-27: a drawer refund is paid by someone signed in at the till it was drafted at, and by no one else', async () => {
+    const s = await returnsShop();
+    const id = await approved(s, { lines: [{ saleLineId: s.bread.saleLineId, amount: 500 }], reasonCodeId: s.reason });
+    const second = (await kit.ok('POST', `${s.store}/terminals`, s.owner, { code: 'T2', label: 'Till 2' })).id as string;
+    await kit.ok('POST', '/transitions', s.owner, { machine: 'Device', event: 'activate', subject: second });
+    const elsewhere = await s.staff(['Refund.Pay'], second);
+    const backOffice = await s.staff(['Refund.Pay']);
+    for (const as of [elsewhere, backOffice]) {
+      const refused = await s.go(as, 'Refund', 'submit to provider', id);
+      expect(refused.statusCode).toBe(409);
+      expect(refused.json().error.code).toBe('not_at_refund_till');
+    }
+    expect(await stateOf(id), 'refused whole: not held, not paid').toBe('Approved');
+    expect(await refundedOf(s.bread.saleLineId)).toBe(0);
+    expect((await s.go(s.clerk, 'Refund', 'submit to provider', id)).json().state).toBe('Completed');
+  });
+
+  it('D-17 item 5, SM-42, BI-40: a draft refund is withdrawn with a reason, by Sale.Refund, and then cannot go on; one already submitted cannot be', async () => {
+    const s = await returnsShop();
+    const lines = [{ saleLineId: s.bread.saleLineId, amount: 500 }];
+    const id = (await draft(s, { lines, reasonCodeId: s.reason })).json().id as string;
+    expect((await s.go(s.clerk, 'Refund', 'cancel', id)).json().error.code, 'a reason is required').toBe('SS055');
+    const noKey = await s.staff(['Return.View'], undefined);
+    expect((await s.go(noKey, 'Refund', 'cancel', id, { reasonCodeId: s.reason })).statusCode, 'Sale.Refund is the key').toBe(403);
+    const withdrawn = await s.go(s.clerk, 'Refund', 'cancel', id, { reasonCodeId: s.reason });
+    expect(withdrawn.statusCode, withdrawn.body).toBe(200);
+    expect(withdrawn.json().state).toBe('Cancelled');
+    expect((await db.app.query(`SELECT cancel_reason_code_id FROM refund WHERE id = $1`, [id])).rows[0].cancel_reason_code_id).toBe(s.reason);
+    expect(await refundedOf(s.bread.saleLineId), 'a draft held nothing, so nothing is released').toBe(0);
+    expect((await s.go(s.clerk, 'Refund', 'submit', id)).json().error.code, 'withdrawn is final').toBe('illegal_transition');
+    const audited = await db.app.query(`SELECT event_type FROM audit_event WHERE entity_id = $1`, [id]);
+    expect(audited.rows.map((r: Json) => r.event_type)).toContain('Refund.StateChange');
+    // Once submitted, only the contract's own cancels apply: not from PendingApproval.
+    const sent = (await draft(s, { lines, reasonCodeId: s.reason })).json().id as string;
+    await s.go(s.clerk, 'Refund', 'submit', sent);
+    expect((await s.go(s.clerk, 'Refund', 'cancel', sent, { reasonCodeId: s.reason })).json().error.code).toBe('illegal_transition');
+  });
+
+  it('D-17 items 7 and 8, MS-02, AC-01: returns are read under Return.View and refunds under Refund.View, in the store, a page at a time', async () => {
+    const s = await returnsShop();
+    const ids: string[] = [];
+    for (let i = 0; i < 3; i++) ids.push((await open(s)).json().id as string);
+    await addLine(s, ids[0]!, { saleLineId: s.bread.saleLineId, quantity: '1' });
+    await s.go(s.clerk, 'CustomerReturn', 'post', ids[0]!);
+    const refund = (await draft(s, { lines: [{ saleLineId: s.milk.saleLineId, amount: 1_250 }], reasonCodeId: s.reason })).json().id as string;
+
+    const viewer = await s.staff(['Return.View', 'Refund.View']);
+    const returnsOnly = await s.staff(['Return.View']);
+    const refundsOnly = await s.staff(['Refund.View']);
+    const list = await call('GET', `${s.store}/returns?limit=2`, viewer);
+    expect(list.statusCode, list.body).toBe(200);
+    expect(list.json().items.map((r: Json) => r.documentNumber)).toEqual([3, 2]);
+    expect(list.json().items[0]).toMatchObject({ status: 'Draft', saleId: s.sale.saleId, saleDocumentNumber: 1, lines: 0 });
+    const rest = await call('GET', `${s.store}/returns?limit=2&after=${list.json().next}`, viewer);
+    expect(rest.json().items.map((r: Json) => r.documentNumber)).toEqual([1]);
+    expect(rest.json().next).toBeNull();
+    expect((await call('GET', `${s.store}/returns?status=Posted`, viewer)).json().items.map((r: Json) => r.id)).toEqual([ids[0]]);
+    expect((await call('GET', `${s.store}/returns?saleId=${randomUUID()}`, viewer)).json().items).toEqual([]);
+    const one = await call('GET', `${s.store}/returns/${ids[0]}`, viewer);
+    expect(one.json()).toMatchObject({ id: ids[0], status: 'Posted', lines: [{ saleLineId: s.bread.saleLineId, disposition: 'Sellable' }] });
+
+    const refunds = await call('GET', `${s.store}/refunds`, viewer);
+    expect(refunds.json().items).toMatchObject([{ id: refund, status: 'Draft', amount: 1_250, disbursement: 'Drawer', simulated: false, saleDocumentNumber: 1 }]);
+    expect((await call('GET', `${s.store}/refunds?status=Completed`, viewer)).json().items).toEqual([]);
+    expect((await call('GET', `${s.store}/refunds/${refund}`, viewer)).json()).toMatchObject({ id: refund, lines: [{ saleLineId: s.milk.saleLineId }] });
+
+    // Each read is its own key, and no write key stands in for it.
+    expect((await call('GET', `${s.store}/returns`, refundsOnly)).statusCode).toBe(403);
+    expect((await call('GET', `${s.store}/refunds`, returnsOnly)).statusCode).toBe(403);
+    expect((await call('GET', `${s.store}/returns/${ids[0]}`, s.clerk)).statusCode, 'Return.Create does not read').toBe(403);
+    expect((await call('GET', `${s.store}/refunds/${refund}`, s.manager)).statusCode, 'Sale.Refund does not read').toBe(403);
+    // Another store's documents do not exist to this caller (MS-04).
+    const elsewhere = await returnsShop();
+    const theirs = (await open(elsewhere, elsewhere.clerk)).json().id as string;
+    expect((await call('GET', `${s.store}/returns/${theirs}`, viewer)).statusCode).toBe(404);
+    expect((await call('GET', `${s.store}/refunds/${randomUUID()}`, viewer)).statusCode).toBe(404);
+    expect((await call('GET', `${s.store}/returns`, {})).statusCode).toBe(401);
+  });
+});

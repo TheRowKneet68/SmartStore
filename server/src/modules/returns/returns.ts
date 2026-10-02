@@ -4,13 +4,13 @@ import { z } from 'zod';
 import { withTransaction, type Queryable } from '../../db/pool.ts';
 import { AppError } from '../../http/errors.ts';
 import { auditContext, type Access } from '../../http/gate.ts';
+import { MAX_PAGE } from '../../http/paging.ts';
 import type { MachineBinding } from '../../http/transitions.ts';
 import { STORE_LOCATIONS } from '../inventory/stock.ts';
 
 /**
- * One write per request, and a repeat of one is answered with the document it made (`RR-15`, `RR-16`, `SM-04`). There is
- * no read route yet: no catalogue key is named for reading a return (OQ-035), so a document is returned by the writes
- * that make or change it, to someone who holds that write's key.
+ * One write per request, and a repeat of one is answered with the document it made (`RR-15`, `RR-16`, `SM-04`). Reading
+ * returns, a list and one return, is `Return.View` (owner decision D-17), held in the store like every store-scoped key.
  */
 const inStore = (key: string): { config: { access: Access } } => ({ config: { access: { kind: 'permission', key, scope: 'store' } } });
 
@@ -26,6 +26,13 @@ const NewLine = z.object({
 });
 const LateApproval = z.object({ reasonCodeId: z.uuid() });
 const Doc = z.object({ storeId: z.uuid(), id: z.uuid() });
+const Listing = z.object({
+  status: z.enum(['Draft', 'Posted', 'Settled', 'Closed', 'Cancelled']).optional(),
+  saleId: z.uuid().optional(),
+  limit: z.coerce.number().int().min(1).max(MAX_PAGE).default(50),
+  // The `next` of the page before: a document number, newest first (architecture §18.5).
+  after: z.coerce.number().int().min(1).optional(),
+});
 const DocLine = z.object({ storeId: z.uuid(), id: z.uuid(), lineId: z.uuid() });
 
 /** One `SALE_RETURN` per line, into the line's dispositioned location, in the order every writer locks balances (`IV-24`). */
@@ -93,6 +100,28 @@ async function returnOf(db: Queryable, storeId: string | null, id: string): Prom
 /** Returns: goods back against exactly one sale of the store (`RR-01`, `RR-08`, `RR-13`). */
 export async function returnRoutes(app: FastifyInstance, options: { pool: pg.Pool }): Promise<void> {
   const { pool } = options;
+
+  /** The store's returns, newest first, a page at a time, by status or by sale (`Return.View`, D-17). */
+  app.get('/stores/:storeId/returns', inStore('Return.View'), async (request) => {
+    const q = Listing.parse(request.query);
+    const { rows } = await pool.query<{ documentNumber: number }>(
+      `SELECT r.id, r.document_number AS "documentNumber", r.sale_id AS "saleId", s.document_number AS "saleDocumentNumber",
+              r.status, r.business_date::text AS "businessDate", r.created_at AS "createdAt",
+              (SELECT count(*)::int FROM customer_return_line l WHERE l.customer_return_id = r.id) AS lines
+       FROM customer_return r JOIN sale s ON s.id = r.sale_id
+       WHERE r.store_id = $1 AND ($2::text IS NULL OR r.status = $2) AND ($3::uuid IS NULL OR r.sale_id = $3)
+         AND ($4::bigint IS NULL OR r.document_number < $4)
+       ORDER BY r.document_number DESC LIMIT $5`,
+      [request.storeId, q.status ?? null, q.saleId ?? null, q.after ?? null, q.limit],
+    );
+    return { items: rows, next: rows.length === q.limit ? rows[rows.length - 1]!.documentNumber : null };
+  });
+
+  app.get('/stores/:storeId/returns/:id', inStore('Return.View'), async (request) => {
+    const { id } = Doc.parse(request.params);
+    await returnOf(pool, request.storeId, id);
+    return readReturn(pool, id);
+  });
 
   /** A draft return against a sale of this store. A repeat of the operation id returns the return already opened (`RR-15`). */
   app.post('/stores/:storeId/returns', inStore('Return.Create'), async (request, reply) => {

@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { withTransaction, type Queryable } from '../../db/pool.ts';
 import { AppError } from '../../http/errors.ts';
 import { auditContext, type Access } from '../../http/gate.ts';
+import { MAX_PAGE } from '../../http/paging.ts';
 import type { MachineBinding } from '../../http/transitions.ts';
 import type { PaymentGateway } from '../payments/gateway.ts';
 import { tillOf } from '../sales/till.ts';
@@ -70,9 +71,16 @@ export const refundMachine: MachineBinding = {
   storeColumn: 'store_id',
   actorColumnsFor: (to) => (to === 'PendingApproval' ? ['submitted_by'] : to === 'Approved' ? ['approved_by'] : []),
   reasonColumnFor: (to) => (to === 'Cancelled' ? 'cancel_reason_code_id' : null),
-  before: async (c, id, _from, to) => {
+  before: async (c, id, _from, to, principal) => {
     if (to !== 'Processing') return;
-    const refund = await c.query<{ disbursement: string }>('SELECT disbursement FROM refund WHERE id = $1', [id]);
+    const refund = await c.query<{ disbursement: string; terminal: string | null }>(
+      'SELECT disbursement, pos_terminal_id AS terminal FROM refund WHERE id = $1',
+      [id],
+    );
+    // D-17 item 4: cash goes out of one drawer, so the person who pays it is signed in at that till.
+    if (refund.rows[0]!.disbursement === 'Drawer' && principal.terminalId !== refund.rows[0]!.terminal) {
+      throw new AppError(409, 'not_at_refund_till', "This refund is paid out of a till's drawer. Sign in at the till it was drafted at to pay it.");
+    }
     if (refund.rows[0]!.disbursement === 'Provider') {
       throw new AppError(409, 'use_pay_route', 'A refund to a card is paid at /refunds/:id/pay and retried at /refunds/:id/retry, where the provider is asked outside the transaction.');
     }
@@ -278,6 +286,35 @@ export async function refundRoutes(app: FastifyInstance, options: { pool: pg.Poo
   });
 
   const Ref = z.object({ storeId: z.uuid(), id: z.uuid() });
+  const Listing = z.object({
+    status: z.enum(['Draft', 'PendingApproval', 'Approved', 'Processing', 'Completed', 'Failed', 'Cancelled']).optional(),
+    saleId: z.uuid().optional(),
+    limit: z.coerce.number().int().min(1).max(MAX_PAGE).default(50),
+    after: z.coerce.number().int().min(1).optional(),
+  });
+
+  /** The store's refunds, newest first, a page at a time, by status or by sale (`Refund.View`, D-17). */
+  app.get('/stores/:storeId/refunds', inStore('Refund.View'), async (request) => {
+    const q = Listing.parse(request.query);
+    const { rows } = await pool.query<{ documentNumber: number }>(
+      `SELECT r.id, r.document_number AS "documentNumber", r.sale_id AS "saleId", s.document_number AS "saleDocumentNumber",
+              r.customer_return_id AS "returnId", r.status, r.method, r.disbursement, r.amount, r.currency_code AS "currencyCode",
+              coalesce(r.provider_transaction_reference LIKE 'SIM-%', false) AS simulated, r.created_at AS "createdAt"
+       FROM refund r JOIN sale s ON s.id = r.sale_id
+       WHERE r.store_id = $1 AND ($2::text IS NULL OR r.status = $2) AND ($3::uuid IS NULL OR r.sale_id = $3)
+         AND ($4::bigint IS NULL OR r.document_number < $4)
+       ORDER BY r.document_number DESC LIMIT $5`,
+      [request.storeId, q.status ?? null, q.saleId ?? null, q.after ?? null, q.limit],
+    );
+    return { items: rows, next: rows.length === q.limit ? rows[rows.length - 1]!.documentNumber : null };
+  });
+
+  app.get('/stores/:storeId/refunds/:id', inStore('Refund.View'), async (request) => {
+    const { id } = Ref.parse(request.params);
+    const found = await pool.query('SELECT 1 FROM refund WHERE id = $1 AND store_id = $2', [id, request.storeId]);
+    if (found.rows.length === 0) throw new AppError(404, 'not_found', 'There is no such refund in this store.');
+    return readRefund(pool, id);
+  });
   /** Pays an approved refund to the card it came from (`Refund.Pay`, D-16), or resumes one in flight. */
   app.post('/stores/:storeId/refunds/:id/pay', inStore('Refund.Pay'), async (request) => {
     const { id } = Ref.parse(request.params);

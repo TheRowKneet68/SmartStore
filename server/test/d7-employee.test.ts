@@ -15,6 +15,7 @@ import {
 /** Domain 7 — Employee / Role / Permission. Design: docs/database/D7-EMPLOYEE-ROLE-PERMISSION.md */
 
 /** The five keys owner decision D-16 added to the catalogue. */
+const ADDED_BY_D17 = ['Return.View', 'Refund.View'];
 const ADDED_BY_D16 = ['Payment.Capture', 'Payment.Void', 'Employee.Reactivate', 'Refund.Pay', 'Shift.Reopen'];
 
 let db: TestDb;
@@ -271,10 +272,10 @@ describe('permissions (AC-01, AC-02, EM-13, MS-11, MS-12)', () => {
   const holds = async (w: Access, store: string | null, key: string) =>
     (await db.app.query<{ ok: boolean }>('SELECT employee_holds_permission($1, $2, $3) AS ok', [w.person, store, key])).rows[0]!.ok;
 
-  it('AC-02, D-01, D-16, RT-009: the catalogue is exactly the 122 keys of actors-and-roles s2, and only a catalogue key can be granted', async () => {
+  it('AC-02, D-01, D-16, RT-009: the catalogue is exactly the 124 keys of actors-and-roles s2, and only a catalogue key can be granted', async () => {
     const { rows } = await db.app.query<{ n: string }>('SELECT count(*) AS n FROM permission');
-    expect(rows[0]!.n).toBe('122');
-    for (const key of ['Product.Edit', 'Sale.Refund.Large.Approve', 'Inventory.Count.Post', 'Backup.Restore', ...ADDED_BY_D16]) {
+    expect(rows[0]!.n).toBe('124');
+    for (const key of ['Product.Edit', 'Sale.Refund.Large.Approve', 'Inventory.Count.Post', 'Backup.Restore', ...ADDED_BY_D16, ...ADDED_BY_D17]) {
       expect((await db.app.query('SELECT 1 FROM permission WHERE key = $1', [key])).rows, key).toHaveLength(1);
     }
     const w = await world([]);
@@ -482,6 +483,7 @@ describe('the permission each transition needs (architecture s8.4, SM-02d, D-01)
       key('CustomerReturn', 'Draft', 'Posted', 'Return.Create'),
       key('CustomerReturn', 'Draft', 'Cancelled', 'Return.Create'),
       none('Refund', 'Draft'),
+      key('Refund', 'Draft', 'Cancelled', 'Sale.Refund'), // D-17 item 5: a draft is withdrawn
       key('Refund', 'Draft', 'PendingApproval', 'Sale.Refund'),
       key('Refund', 'PendingApproval', 'Approved', 'Sale.Refund.Large.Approve'),
       key('Refund', 'Approved', 'Processing', 'Refund.Pay'),
