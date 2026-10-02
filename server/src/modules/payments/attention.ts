@@ -11,8 +11,7 @@ import type { Queryable } from '../../db/pool.ts';
  * | `AuthorizedNotCaptured` | Funds reserved and never taken | Send the sale again to capture, or void it |
  * | `CapturedNoSale` | Money taken, and the checkout never became a sale (`PY-37`) | Send the sale again to finish it; otherwise the owner's decision (OQ-036 item 2) |
  *
- * Only a payment on an open checkout is listed: a declined, failed or voided one is over, and a captured one with a sale is
- * settled. How long is "too long" is a number the specification calls configured and does not give, so the caller supplies it
+ * A declined, failed or voided payment is over, and a captured one with a sale is settled, so neither is listed. How long is "too long" is a number the specification calls configured and does not give, so the caller supplies it
  * (OQ-037). It is measured from when the payment entered its present state.
  */
 export type AttentionKind = 'PendingTooLong' | 'AuthorizedNotCaptured' | 'CapturedNoSale';
@@ -44,7 +43,7 @@ export interface Attention {
 }
 
 const NEEDS_A_PERSON = `
-  p.method_type = 'Card' AND k.status = 'Open'
+  p.method_type = 'Card'
   AND now() - p.status_changed_at >= make_interval(mins => $2::int)
   AND ($1::uuid IS NULL OR p.store_id = $1)
   AND (p.status IN ('Pending', 'Authorized')

@@ -562,6 +562,28 @@ describe('voiding a card payment that is not settled (PY-13, PY-36, PY-54, D-16 
   });
 });
 
+describe('a void racing a capture (PY-12, PY-13)', () => {
+  it('PY-12: a payment captured while the provider was being asked to void it is not voided over', async () => {
+    const s = await shop();
+    const first = await pay(s, { card: { token: 'TEST-CAPTURE-FAIL' } });
+    const id = await paymentIdOf(s, first.operation);
+    const original = gateway.void.bind(gateway);
+    gateway.void = async (r) => {
+      // Between the provider's answer and the record of it, the payment is captured by someone else.
+      await db.owner.query(`UPDATE payment SET status = 'Captured' WHERE id = $1`, [id]);
+      return original(r);
+    };
+    try {
+      const raced = await voidIt(s, id, await s.staff(['Payment.Void']));
+      expect(raced.statusCode, raced.body).toBe(409);
+      expect(raced.json().error.code).toBe('payment_changed');
+    } finally {
+      gateway.void = original;
+    }
+    expect(await payments(s.storeId, first.operation)).toMatchObject([{ status: 'Captured' }]);
+  });
+});
+
 describe('the card payments that need a person (PY-37, PY-40, PY-41)', () => {
   const attention = (s: Shop, query: string, as: Record<string, string>) => call('GET', `${s.store}/payments/attention?${query}`, as);
 
@@ -619,6 +641,11 @@ describe('the card payments that need a person (PY-37, PY-40, PY-41)', () => {
     expect(rest.json().next).toBeNull();
     const ids = [...page.json().items, ...rest.json().items].map((i: Json) => i.paymentId);
     expect(new Set(ids).size).toBe(3);
+    // Oldest first: the one that has waited longest is the first a person sees.
+    const stuck = (await db.app.query<{ id: string }>(`SELECT id FROM payment WHERE store_id = $1 AND status = 'Pending' ORDER BY id`, [s.storeId])).rows.map((r) => r.id);
+    for (const [i, id] of stuck.entries()) await db.owner.query(`UPDATE payment SET status_changed_at = now() - make_interval(mins => $2) WHERE id = $1`, [id, [10, 30, 20][i]]);
+    const ordered = await attention(s, 'olderThanMinutes=0', viewer);
+    expect(ordered.json().items.map((i: Json) => i.ageMinutes)).toEqual([30, 20, 10]);
     expect((await attention(s, 'olderThanMinutes=0', s.clerk)).statusCode, 'Sale.Create does not read payments').toBe(403);
     expect((await attention(s, 'olderThanMinutes=0', await s.staff(['Payment.Void']))).statusCode, 'Payment.Void does not read').toBe(403);
     const other = await shop();
