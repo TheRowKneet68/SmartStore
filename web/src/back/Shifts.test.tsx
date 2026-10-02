@@ -8,7 +8,7 @@ import { ShiftReview, type ShiftAnswers } from './Shifts.tsx';
  * run together.
  */
 
-const GBP = { code: 'GBP', exponent: 2 };
+const NPR = { code: 'NPR', exponent: 2 };
 const LIST = 'GET /api/v1/stores/s1/shifts';
 const DETAIL = 'GET /api/v1/stores/s1/shifts/sh2';
 const REASONS = 'GET /api/v1/reason-codes';
@@ -61,7 +61,7 @@ const passes = [
   { id: 'c2', passNumber: 2, countedAmount: 2_200, expectedAmount: 2_250, variance: -50, countedByName: 'Cass Employee', acknowledgedByName: null, reason: null },
 ];
 
-const review = (canAcknowledge = true) => render(<ShiftReview storeId="s1" currency={GBP} canAcknowledge={canAcknowledge} />);
+const review = (canAcknowledge = true) => render(<ShiftReview storeId="s1" currency={NPR} canAcknowledge={canAcknowledge} />);
 const rowOf = async (till: string) => (await screen.findByText(till)).closest('tr')!;
 
 describe('the shift list (CD-30, CD-31, RT-527, UX-52)', () => {
@@ -71,9 +71,9 @@ describe('the shift list (CD-30, CD-31, RT-527, UX-52)', () => {
     const counting = within(await rowOf('Till 2'));
     expect(counting.getByText('Cass Employee')).toBeTruthy();
     expect(counting.getByText('Counting').closest('.chip')?.querySelector('[aria-hidden="true"]')?.textContent).toBe('◐');
-    expect(counting.getByText('£22.50')).toBeTruthy();
-    expect(counting.getByText('£22.00')).toBeTruthy();
-    expect(counting.getByText('Short by £0.50')).toBeTruthy();
+    expect(counting.getByText('NPR 22.50')).toBeTruthy();
+    expect(counting.getByText('NPR 22.00')).toBeTruthy();
+    expect(counting.getByText('Short by NPR 0.50')).toBeTruthy();
     const done = within(await rowOf('Till 1'));
     expect(done.getByText('Closed')).toBeTruthy();
     expect(done.getByText('Balanced')).toBeTruthy();
@@ -85,7 +85,7 @@ describe('the shift list (CD-30, CD-31, RT-527, UX-52)', () => {
     const row = await rowOf('Till 3');
     expect(within(row).getByText('Trading')).toBeTruthy();
     expect(within(row).getAllByText('—')).toHaveLength(3);
-    expect(row.textContent).not.toContain('£');
+    expect(row.textContent).not.toContain('NPR\u00a0');
   });
 
   it('CD-30: the status filter asks the server for shifts in that status', async () => {
@@ -105,9 +105,9 @@ describe('one shift (CD-30, CD-23, BI-25, UX-08)', () => {
     fireEvent.click(within(await rowOf('Till 2')).getByRole('button'));
     expect(await screen.findByText('The difference needs an acknowledgement with a reason before the shift can close.')).toBeTruthy();
     const figures = [...document.querySelectorAll('dl.figures dd')].map((dd) => dd.textContent);
-    expect(figures).toEqual(['£22.50', '£22.00', 'Short by £0.50', '£0.00', '—']);
+    expect(figures).toEqual(['NPR\u00a022.50', 'NPR\u00a022.00', 'Short by NPR\u00a00.50', 'NPR\u00a00.00', '—']);
     const counts = screen.getAllByRole('row').slice(1).map((row) => row.textContent);
-    expect(counts).toEqual(['1£20.00£22.50Short by £2.50Cass Employee—', '2£22.00£22.50Short by £0.50Cass Employee—']);
+    expect(counts).toEqual(['1NPR\u00a020.00NPR\u00a022.50Short by NPR\u00a02.50Cass Employee—', '2NPR\u00a022.00NPR\u00a022.50Short by NPR\u00a00.50Cass Employee—']);
   });
 
   it('UX-08: without Cash.Variance.Acknowledge, the shift offers no acknowledge control', async () => {

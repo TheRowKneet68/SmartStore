@@ -3,7 +3,7 @@ import { createInterface } from 'node:readline/promises';
 import { z } from 'zod';
 import { loadDotEnv } from '../config.ts';
 import { createPool } from '../db/pool.ts';
-import { onboard, OnboardingInput } from '../onboarding.ts';
+import { DEFAULT_CURRENCY, onboard, OnboardingInput } from '../onboarding.ts';
 
 /**
  * Onboards the organization, its Owner and its default store (onboarding.ts). Run once, by the operator, with
@@ -60,8 +60,11 @@ stdout.write('SmartStore onboarding: the organization, its Owner, and its defaul
 const answers = {
   legalName: await ask('Organization legal name: '),
   tradingName: await ask('Trading name (blank if the same): '),
-  currencyCode: (await ask('Currency code, ISO 4217 (for example GBP): ')).toUpperCase(),
-  minorUnitExponent: Number(await ask('Decimal places of that currency (for example 2): ')),
+  // Blank takes the deployment default (D-15); anything typed overrides it, so another currency is still onboardable.
+  currencyCode: ((await ask(`Currency code, ISO 4217 (blank for ${DEFAULT_CURRENCY.code}): `)) || DEFAULT_CURRENCY.code).toUpperCase(),
+  minorUnitExponent: Number(
+    (await ask(`Decimal places of that currency (blank for ${DEFAULT_CURRENCY.minorUnitExponent}): `)) || DEFAULT_CURRENCY.minorUnitExponent,
+  ),
   timeZone: await ask('Time zone, IANA (for example Europe/London): '),
   storeCode: await ask('Store code: '),
   storeName: await ask('Store name: '),

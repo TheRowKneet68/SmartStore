@@ -8,6 +8,12 @@ rate, and no jurisdictional assertion. The target market (Nepal, NPR) is stated 
 **not** a documented business decision in the product documents (GR-05: jurisdictional specifics are business
 decisions not yet taken) — this is recorded, not assumed as decided.
 
+**Update 2026-10-01 (owner, D-15).** The owner has since decided the **deployment currency: `NPR`, minor-unit
+exponent 2** — see `architecture/OWNER-DECISIONS.md` D-15. The paragraph above is left as it was written and is
+superseded on that one point only: the currency is now a business decision. Everything the paragraph protects
+stands — no tax rate, no taxable-class list, and no receipt obligation is decided, `D-12` and `GAP-044` are still
+open, and overview §3.1 still requires each amount's currency and exponent to be recorded rather than assumed.
+
 ---
 
 ## 1. The distinction this document keeps separate

@@ -155,7 +155,7 @@ export function ShiftReview({ storeId, currency, canAcknowledge }: { storeId: st
   );
 }
 
-/** The difference in words: "Balanced", "Short by £0.50", "Over by £0.50", or a dash before any count. */
+/** The difference in words: "Balanced", "Short by NPR 0.50", "Over by NPR 0.50", or a dash before any count. */
 function difference(s: { variance: number | null }, money: (amount: number) => string): string {
   if (s.variance === null) return '—';
   if (s.variance === 0) return 'Balanced';

@@ -8,14 +8,14 @@ import { SaleScreen } from './Sale.tsx';
  * response shapes run together. (Named apart from `Sale.test.tsx`, which the web agent's brief reserves.)
  */
 
-const GBP = { code: 'GBP', exponent: 2 };
+const NPR = { code: 'NPR', exponent: 2 };
 const SCAN = 'GET /api/v1/stores/s1/scan/012345678905';
 const SALES = 'POST /api/v1/stores/s1/sales';
 const milk = {
   variantId: 'v1',
   description: 'Oat milk',
   barcode: '012345678905',
-  price: { amount: 1_250, currencyCode: 'GBP', minorUnitExponent: 2 },
+  price: { amount: 1_250, currencyCode: 'NPR', minorUnitExponent: 2 },
   quote: 'signed-quote',
 };
 const SYSTEM = 'Something went wrong on the server. Nothing was saved; try again.';
@@ -46,7 +46,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-const till = (onCartChange = vi.fn()) => render(<SaleScreen storeId="s1" currency={GBP} onCartChange={onCartChange} />);
+const till = (onCartChange = vi.fn()) => render(<SaleScreen storeId="s1" currency={NPR} onCartChange={onCartChange} />);
 const scan = async (code = '012345678905') => {
   const field = screen.getByLabelText('Scan or type a barcode, then Enter');
   fireEvent.change(field, { target: { value: code } });
@@ -66,11 +66,11 @@ describe('the payment step (UX-14, UX-15, UX-17)', () => {
     till();
     await scan();
     await screen.findByTestId('cart-line');
-    expect(tender(), 'an empty field is the exact total').toEqual(['Total due', '£12.50', 'Cash given', '£12.50', 'Change', '£0.00']);
+    expect(tender(), 'an empty field is the exact total').toEqual(['Total due', 'NPR\u00a012.50', 'Cash given', 'NPR\u00a012.50', 'Change', 'NPR\u00a00.00']);
     typeCash('20');
-    expect(tender()).toEqual(['Total due', '£12.50', 'Cash given', '£20.00', 'Change', '£7.50']);
+    expect(tender()).toEqual(['Total due', 'NPR\u00a012.50', 'Cash given', 'NPR\u00a020.00', 'Change', 'NPR\u00a07.50']);
     typeCash('2.505');
-    expect(tender(), 'not an amount: no figure').toEqual(['Total due', '£12.50', 'Cash given', '—', 'Change', '—']);
+    expect(tender(), 'not an amount: no figure').toEqual(['Total due', 'NPR\u00a012.50', 'Cash given', '—', 'Change', '—']);
   });
 
   it('UX-17, SP-40: an underpayment is named with what is still to pay, and nothing is sent', async () => {
@@ -79,10 +79,10 @@ describe('the payment step (UX-14, UX-15, UX-17)', () => {
     await scan();
     await screen.findByTestId('cart-line');
     typeCash('10');
-    expect(screen.getByTestId('still-to-pay').textContent).toBe('£2.50');
+    expect(screen.getByTestId('still-to-pay').textContent).toBe('NPR\u00a02.50');
     expect(screen.queryByTestId('change-due')).toBeNull();
     pay();
-    expect(await problem()).toEqual({ kind: 'user', text: 'The cash given is £2.50 short of the total due. Take more cash.' });
+    expect(await problem()).toEqual({ kind: 'user', text: 'The cash given is NPR\u00a02.50 short of the total due. Take more cash.' });
     expect(calls.some((c) => c.key === SALES)).toBe(false);
   });
 });
@@ -103,7 +103,7 @@ describe('problems, by whose they are (UX-59, UX-11, UX-57)', () => {
       [SCAN]: { body: milk },
       [SALES]: [
         { status: 500, body: { error: { code: 'internal', message: SYSTEM } } },
-        { status: 201, body: { saleId: 'sa1', documentNumber: 7, currencyCode: 'GBP', totalDue: 1_250, tendered: 2_000, change: 750 } },
+        { status: 201, body: { saleId: 'sa1', documentNumber: 7, currencyCode: 'NPR', totalDue: 1_250, tendered: 2_000, change: 750 } },
       ],
     });
     till();
@@ -150,15 +150,15 @@ describe('the till knows the cart (UX-57, BI-30)', () => {
   it('BI-30, UX-15: the completed sale shows the amounts the server computed, not the browser\'s', async () => {
     serve({
       [SCAN]: { body: milk },
-      [SALES]: { status: 201, body: { saleId: 'sa1', documentNumber: 8, currencyCode: 'GBP', totalDue: 1_300, tendered: 2_000, change: 700 } },
+      [SALES]: { status: 201, body: { saleId: 'sa1', documentNumber: 8, currencyCode: 'NPR', totalDue: 1_300, tendered: 2_000, change: 700 } },
     });
     till();
     await scan();
     await screen.findByTestId('cart-line');
     typeCash('20');
     pay();
-    expect(await screen.findByText('Change £7.00')).toBeTruthy();
-    expect(screen.getByText('Total £13.00, cash £20.00')).toBeTruthy();
+    expect(await screen.findByText('Change NPR 7.00')).toBeTruthy();
+    expect(screen.getByText('Total NPR 13.00, cash NPR 20.00')).toBeTruthy();
   });
 });
 
@@ -174,14 +174,14 @@ describe('finding an item by name (UX-48, UX-49, UX-11, RT-379)', () => {
       'GET /api/v1/stores/s1/items?name=oat': {
         body: { items: [byName, { ...byName, variantId: 'v2', description: 'Oat bar', price: { ...byName.price, amount: 150 }, quote: 'quote-2' }] },
       },
-      [SALES]: { status: 201, body: { saleId: 'sa1', documentNumber: 1, currencyCode: 'GBP', totalDue: 1_250, tendered: 1_250, change: 0 } },
+      [SALES]: { status: 201, body: { saleId: 'sa1', documentNumber: 1, currencyCode: 'NPR', totalDue: 1_250, tendered: 1_250, change: 0 } },
     });
     till();
     find('oat');
     const choices = await screen.findByRole('list', { name: 'Items found' });
-    expect(within(choices).getAllByRole('button').map((b) => b.textContent)).toEqual(['Oat milk — £12.50', 'Oat bar — £1.50']);
+    expect(within(choices).getAllByRole('button').map((b) => b.textContent)).toEqual(['Oat milk — NPR\u00a012.50', 'Oat bar — NPR\u00a01.50']);
     expect(calls.some((c) => c.key.includes('/scan/')), 'never as a barcode').toBe(false);
-    fireEvent.click(within(choices).getByRole('button', { name: 'Oat milk — £12.50' }));
+    fireEvent.click(within(choices).getByRole('button', { name: 'Oat milk — NPR\u00a012.50' }));
     expect(await screen.findByTestId('cart-line')).toBeTruthy();
     expect(screen.queryByRole('list', { name: 'Items found' }), 'the list closes').toBeNull();
     await vi.waitFor(() => expect(document.activeElement, 'back to the scan field').toBe(screen.getByLabelText('Scan or type a barcode, then Enter')));

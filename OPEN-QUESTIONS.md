@@ -102,12 +102,20 @@ fallback is a design that holds either answer, not a guess at the answer.
 
 ### OQ-006 — Which currency, and its minor-unit exponent
 
-- **Unknown:** the currency of the first deployment and its ISO 4217 minor-unit exponent. `tax-and-currency.md` records
-  that the target market appears in the task instruction but is not a documented business decision (`GR-05`); `D-12` is open.
-- **Blocked:** release configuration only.
-- **Meanwhile:** the `currency` table ships with no rows. Test fixtures use the ISO 4217 test code `XTS` and are
-  labelled TEST-ONLY. The exponent is data and is never assumed to be 2 (overview §3.1). ISO 4217 is outside `/docs`,
-  so any real currency's exponent is **UNVERIFIED** until checked against the standard.
+**RESOLVED 2026-10-01 — decided as D-15 in `docs/architecture/OWNER-DECISIONS.md`: the deployment currency is `NPR`
+with minor-unit exponent 2** (Nepalese rupee; ISO 4217 alphabetic `NPR`, numeric `524`, minor unit `2` — verified
+against the standard, so the "UNVERIFIED" caveat below is discharged). The entry is kept as the record.
+
+- **Unknown (now answered):** the currency of the first deployment and its ISO 4217 minor-unit exponent. The owner
+  decided `NPR`/2. `tax-and-currency.md` had already recorded the target market as Nepal, NPR.
+- **Blocked:** nothing. Release configuration, and it is configured.
+- **Meanwhile (still true, and still binding):** the `currency` table stays data, not a constant. Nothing may treat
+  exponent 2 as universal — overview §3.1 requires the recorded exponent. Conversion stays OUT OF SCOPE (overview
+  §3.1). `D-12` and `GAP-044` are separate and remain open: no tax rate, taxable class or receipt obligation is
+  decided by D-15.
+- **Applied:** the onboarding CLI takes `NPR`/2 on a blank answer and still accepts any typed code and exponent.
+  Web fixtures moved off `£`/`GBP`. Fixtures using ISO 4217's non-currency codes (`XTS`, `XXX`, `XBB`) are
+  deliberately unchanged — they are what proves the code is data.
 
 ### OQ-007 — Which time zone defines the business date: the organization's or the store's
 

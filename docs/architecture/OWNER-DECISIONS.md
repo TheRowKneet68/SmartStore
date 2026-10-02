@@ -448,6 +448,37 @@ machine table and `BI-25` already stated this and were **not** changed â€” 
 
 ---
 
+## D-15 — The deployment currency is NPR, with a minor-unit exponent of 2
+
+**Status:** DECIDED — 2026-10-01 (owner). Closes `OQ-006`.
+
+**Decision:** the deployment currency is the **Nepalese rupee, ISO 4217 `NPR`**, whose minor-unit exponent is
+**2**. The owner named it directly; it also matches the target market `tax-and-currency.md` already recorded
+(Nepal, NPR).
+
+**What is decided, and what is not.** Only the *deployment default*. This decides nothing about:
+
+- **Conversion.** Overview §3.1 already puts conversion **OUT OF SCOPE** for v1, and this does not change that.
+- **The `currency` table.** It stays data, not a constant: a row is written by onboarding (`ensureCurrency`) and
+  every amount carries its own code. Nothing in the schema or code may treat 2 as a universal exponent — overview
+  §3.1 requires the recorded exponent so zero- and three-decimal currencies remain representable.
+- **Any other currency.** Onboarding still takes a typed code and exponent, so a store in another currency is
+  still onboardable; `NPR`/2 is only what a blank answer takes.
+- **Tax.** `D-12` and `GAP-044` are untouched. No rate, taxable class, or receipt obligation is decided here.
+
+**Citation of the exponent.** `NPR`'s ISO 4217 minor unit is 2 (ISO 4217 list one, minor-unit column; `NPR` /
+numeric `524` / minor unit `2`). This resolves the `OQ-006` caveat that a real currency's exponent was
+**UNVERIFIED**: it is now verified against the standard. `/docs` still asserts no rate and no jurisdiction — the
+exponent is a standard fact, not a legal one.
+
+**Applied.** The onboarding CLI (`cli/onboard.ts`) takes `NPR`/2 on a blank answer and keeps the typed answer as
+the override; the prompt no longer offers `GBP` as its example. The web fixtures were moved off `£`/`GBP` to
+`NPR`. Test fixtures that deliberately use ISO 4217's non-currency codes (`XTS` for the general test organization,
+`XXX` for a zero-decimal foreign store, `XBB` for a foreign-currency rejection) are **unchanged**: they exist to
+prove the code is data, and renaming them would remove that proof.
+
+---
+
 ## D-16 — Permission keys for the transitions and creations that had none
 
 **Status:** DECIDED — 2026-10-02 (owner). Answers `PERMISSION-KEY-PROPOSAL.md` Q1–Q14. Closes `OQ-018`, `OQ-026` and
@@ -622,6 +653,7 @@ cancel from `Failed`. Retry remains the other way out, and `Cancelled` is final.
 | D-12 | Tax config vs legal | | |
 | D-13 | RPO/RTO | | |
 | D-14 | `Payment` `Failed` terminal (CON-03) | (PY-54) A customer `Payment` in `Failed` is terminal for that record; a retry is a new `Payment` against the same sale. `Declined` still retryable (PY-14). `SM-30` and `SM-41` unchanged. `SM-53` and `RT-420` reworded, all citations kept. Closes the last Phase 3 blocker | 2026-09-30 |
+| D-15 | Deployment currency and its minor-unit exponent (`OQ-006`) | **NPR, exponent 2** (Nepalese rupee, ISO 4217 `524`/minor unit `2`, verified against the standard). The deployment *default* only: onboarding takes it on a blank answer and still accepts any typed code/exponent, the `currency` table stays data, conversion stays OUT OF SCOPE (overview §3.1), and the exponent is never assumed to be 2. `D-12`/`GAP-044` tax untouched. Web fixtures moved off `£`/`GBP`; `XTS`/`XXX`/`XBB` test fixtures deliberately unchanged | 2026-10-01 |
 | D-16 | Permission keys for the transitions and creations with none (`PERMISSION-KEY-PROPOSAL.md` Q1–Q14) | Reused: `Sale.Create` (card submit; reading a receipt at the till), `Employee.Edit` (back from leave), `Device.Disable` (till re-enable), `Sale.Refund` (refund retry and cancel), `Return.Create` (return cancel), `Config.Organization` (warehouses and storage locations), `Role.Create`/`Role.Edit` (`Config.Roles` authorizes nothing). New: `Payment.Capture`, `Payment.Void`, `Employee.Reactivate`, `Refund.Pay`, `Shift.Reopen` (catalogue 117 → 122). Closes OQ-018, OQ-026, OQ-028 and the key parts of OQ-014, OQ-023, OQ-025; narrows GAP-036 (27 → 20 rows). Documentation applied; implementation waits for the owner's go-ahead | 2026-10-02 |
 | D-17 | Reading returns and refunds; the payer at the till; withdrawing a draft refund (`OQ-035` items 4, 5, 7, 8) | The payer of a drawer refund is signed in at the refund's till. A draft refund may be withdrawn: `Draft → Cancelled` on `cancel`, under `Sale.Refund`, with a reason (read from D-16 Q9; raised for veto). New keys `Return.View` and `Refund.View` (catalogue 122 → 124) | 2026-10-02 |
 | D-18 | The money of a payment that never became a sale (`OQ-036` item 2, part B) | Option 1: a refund tied to a captured card payment, not a sale; the sale and lines are optional on it. Keys: `Sale.Refund` to issue, `Sale.Refund.Large.Approve` to approve, `Refund.Pay` to pay. No new key. Read from option 1, for veto: card payments only, partial, a reason, and a refund (even a draft) blocks the sale | 2026-10-02 |

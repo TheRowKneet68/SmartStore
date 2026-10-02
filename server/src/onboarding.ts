@@ -12,12 +12,20 @@ import {
   ensureCurrency,
 } from './modules/organization/repo.ts';
 
+/**
+ * The deployment currency when the operator gives none (D-15): the Nepalese rupee, ISO 4217 `NPR`, minor unit 2.
+ * A default, not a constraint — a typed code and exponent still onboard any other currency, and no amount may
+ * assume an exponent (overview §3.1).
+ */
+export const DEFAULT_CURRENCY = { code: 'NPR', minorUnitExponent: 2 } as const;
+
 /** What the operator supplies. Everything else is decided by the specification, as noted where it is set. */
 export const OnboardingInput = z.object({
   organization: z.object({
     legalName: z.string().trim().min(1),
     tradingName: z.string().trim().min(1).nullable(),
-    // The deployment currency is the owner's configuration (OQ-006), so the operator supplies it.
+    // The deployment currency is the owner's configuration. D-15 sets the default to DEFAULT_CURRENCY; the operator
+    // may override it, so a store in another currency is still onboardable.
     currencyCode: z.string().regex(/^[A-Z]{3}$/),
     minorUnitExponent: z.number().int().min(0).max(18),
     timeZone: z.string().trim().min(1),

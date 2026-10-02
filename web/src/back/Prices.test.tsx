@@ -12,7 +12,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-const GBP = { code: 'GBP', exponent: 2 };
+const NPR = { code: 'NPR', exponent: 2 };
 const oat = {
   id: 'p1',
   name: 'Oat milk',
@@ -25,7 +25,7 @@ const oat = {
 const version = (over: Partial<PriceVersion>): PriceVersion => ({
   id: 'x1',
   amount: 1_200,
-  currencyCode: 'GBP',
+  currencyCode: 'NPR',
   minorUnitExponent: 2,
   effectiveFrom: '2026-09-01T09:00:00.000Z',
   started: true,
@@ -54,7 +54,7 @@ describe('price history (PR-32, RT-041, UX-52)', () => {
       [OAT]: { body: oat },
       [OAT_PRICES]: { body: { items: history } },
     });
-    render(<Prices permissions={['Product.View', 'Price.View']} currency={GBP} />);
+    render(<Prices permissions={['Product.View', 'Price.View']} currency={NPR} />);
     await screen.findByRole('button', { name: /^Bread/ });
     fireEvent.click(screen.getByRole('button', { name: 'Show more products' }));
     expect(await screen.findByRole('button', { name: 'Butter (Draft)' }), 'a page at a time').toBeTruthy();
@@ -66,9 +66,9 @@ describe('price history (PR-32, RT-041, UX-52)', () => {
     expect(await screen.findByRole('heading', { name: 'Oat milk — 1 L · 012345678905' })).toBeTruthy();
     await screen.findByText('Mona Lee');
     expect(cells().map((row) => [row[0], row[2], row[3]])).toEqual([
-      ['£14.00', '◐Scheduled', 'Mona Lee'],
-      ['£12.50', '●In force', 'Olive Owner'],
-      ['£12.00', '○Replaced', 'Olive Owner'],
+      ['NPR\u00a014.00', '◐Scheduled', 'Mona Lee'],
+      ['NPR\u00a012.50', '●In force', 'Olive Owner'],
+      ['NPR\u00a012.00', '○Replaced', 'Olive Owner'],
     ]);
     expect(screen.queryByText(/Retired size/), 'an archived variant is not shown').toBeNull();
     expect(screen.queryByRole('button', { name: 'Set the price' }), 'Price.View alone sets nothing').toBeNull();
@@ -84,13 +84,13 @@ describe('price history (PR-32, RT-041, UX-52)', () => {
         { status: 201, body: { id: 'x4' } },
       ],
     });
-    render(<Prices permissions={['Product.View', 'Price.View', 'Price.Edit']} currency={GBP} />);
+    render(<Prices permissions={['Product.View', 'Price.View', 'Price.Edit']} currency={NPR} />);
     await openOat();
     const form = await screen.findByRole('form', { name: 'New price for Oat milk — 1 L' });
-    const amount = within(form).getByLabelText('New price (GBP)');
+    const amount = within(form).getByLabelText('New price (NPR)');
     fireEvent.change(amount, { target: { value: '12.345' } });
     fireEvent.submit(form);
-    expect((await within(form).findByRole('alert')).textContent).toBe('Enter the new price in GBP, with at most 2 decimal places.');
+    expect((await within(form).findByRole('alert')).textContent).toBe('Enter the new price in NPR, with at most 2 decimal places.');
     expect(calls.some((c) => c.key === SET)).toBe(false);
 
     fireEvent.change(amount, { target: { value: '9' } });
@@ -102,8 +102,8 @@ describe('price history (PR-32, RT-041, UX-52)', () => {
     fireEvent.change(amount, { target: { value: '13' } });
     fireEvent.change(within(form).getByLabelText('Starts (leave empty for now)'), { target: { value: '2026-12-15T09:00' } });
     fireEvent.submit(form);
-    expect(await screen.findByText(/^Oat milk — 1 L costs £13\.00 from /)).toBeTruthy();
+    expect(await screen.findByText(/^Oat milk — 1 L costs NPR 13\.00 from /)).toBeTruthy();
     expect(calls.filter((c) => c.key === SET).map((c) => c.body)).toEqual([{ amount: 900 }, { amount: 1_300, effectiveFrom: new Date('2026-12-15T09:00').toISOString() }]);
-    await vi.waitFor(() => expect(cells()[0]?.[0], 'read again').toBe('£13.00'));
+    await vi.waitFor(() => expect(cells()[0]?.[0], 'read again').toBe('NPR\u00a013.00'));
   });
 });

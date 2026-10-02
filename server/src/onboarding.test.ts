@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestDb, type TestDb } from '../test/db.ts';
 import { onboardingAnswers } from '../test/fixtures.ts';
-import { onboard } from './onboarding.ts';
+import { DEFAULT_CURRENCY, onboard } from './onboarding.ts';
 
 let db: TestDb;
 
@@ -77,6 +77,25 @@ describe('onboarding (organization-model s9, actors-and-roles s3.2 and s4, CONVE
       { event_type: 'Employee.StateChange', actor_id: o.ownerEmployeeId, source: 'Job' },
       { event_type: 'Security.Role.Assign', actor_id: o.ownerEmployeeId, source: 'Job' },
     ]);
+  });
+
+  it('D-15: the deployment default is NPR with two decimal places, and it is a default, not a constraint', async () => {
+    expect(DEFAULT_CURRENCY).toEqual({ code: 'NPR', minorUnitExponent: 2 });
+
+    // A blank answer takes the default, and onboarding writes it as data.
+    const blank = onboardingAnswers();
+    blank.organization.currencyCode = DEFAULT_CURRENCY.code;
+    blank.organization.minorUnitExponent = DEFAULT_CURRENCY.minorUnitExponent;
+    const o = await onboard(db.app, blank);
+    const currency = await db.app.query<{ code: string; minor_unit_exponent: number }>(
+      'SELECT code, minor_unit_exponent FROM currency WHERE code = $1',
+      [DEFAULT_CURRENCY.code],
+    );
+    expect(currency.rows).toEqual([{ code: 'NPR', minor_unit_exponent: 2 }]);
+
+    // Another currency is still onboardable: a zero-decimal one must not be refused for disagreeing with the default.
+    const other = await onboard(db.app, onboardingAnswers());
+    expect(other.organizationId).not.toBe(o.organizationId);
   });
 
   it("ADR-04, BI-01: a currency's decimal places are never changed, and a refused onboarding writes nothing", async () => {

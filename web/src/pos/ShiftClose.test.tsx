@@ -8,7 +8,7 @@ import { BeginCount, CountDrawer, type Pass } from './ShiftClose.tsx';
  * is checked as the server would receive it.
  */
 
-const GBP = { code: 'GBP', exponent: 2 };
+const NPR = { code: 'NPR', exponent: 2 };
 const COUNTS = 'POST /api/v1/stores/s1/shifts/sh1/counts';
 const ACKNOWLEDGE = 'POST /api/v1/stores/s1/shifts/sh1/counts/c1/acknowledge';
 const TRANSITIONS = 'POST /api/v1/transitions';
@@ -49,7 +49,7 @@ const pass = (over: Partial<Pass> = {}): Pass => ({
 const balanced = pass({ countedAmount: 2_250, variance: 0 });
 
 const drawer = (canAcknowledge = true, onClosed = vi.fn(), onDone = vi.fn()) =>
-  render(<CountDrawer storeId="s1" shiftId="sh1" currency={GBP} canAcknowledge={canAcknowledge} onClosed={onClosed} onDone={onDone} />);
+  render(<CountDrawer storeId="s1" shiftId="sh1" currency={NPR} canAcknowledge={canAcknowledge} onClosed={onClosed} onDone={onDone} />);
 const type = (label: RegExp | string, value: string) => fireEvent.change(screen.getByLabelText(label), { target: { value } });
 const submit = (button: string) => fireEvent.submit(screen.getByRole('button', { name: button }).closest('form')!);
 const figures = () => [...document.querySelectorAll('dl.figures dd')].map((dd) => dd.textContent);
@@ -77,8 +77,8 @@ describe('counting the drawer (CD-21, CD-22, CD-31, UX-33, UX-34)', () => {
     serve({ [COUNTS]: { status: 201, body: pass() }, [REASONS]: { body: { items: [] } } });
     drawer();
     await counted('22');
-    expect(figures()).toEqual(['£22.00', '£22.50', '-£0.50', '£0.00']);
-    const words = screen.getByText('Short by £0.50. This needs an acknowledgement before the shift can close.');
+    expect(figures()).toEqual(['NPR\u00a022.00', 'NPR\u00a022.50', '-NPR\u00a00.50', 'NPR\u00a00.00']);
+    const words = screen.getByText('Short by NPR 0.50. This needs an acknowledgement before the shift can close.');
     expect(words.closest('.notice')?.getAttribute('data-tone')).toBe('warn');
     expect(words.closest('.notice')?.querySelector('[aria-hidden="true"]')?.textContent).toBe('⚠');
   });
@@ -87,7 +87,7 @@ describe('counting the drawer (CD-21, CD-22, CD-31, UX-33, UX-34)', () => {
     serve({ [COUNTS]: { status: 201, body: pass({ countedAmount: 2_300, variance: 50 }) }, [REASONS]: { body: { items: [] } } });
     const first = drawer();
     await counted('23');
-    expect(screen.getByText('Over by £0.50. This needs an acknowledgement before the shift can close.')).toBeTruthy();
+    expect(screen.getByText('Over by NPR 0.50. This needs an acknowledgement before the shift can close.')).toBeTruthy();
     first.unmount();
 
     serve({ [COUNTS]: { status: 201, body: balanced } });
@@ -134,7 +134,7 @@ describe('acknowledging the difference (CD-23, BI-25, RT-245, UX-08)', () => {
     expect(calls.some((c) => c.key === ACKNOWLEDGE), 'nothing sent without a reason').toBe(false);
     type('Reason for the difference', 'r1');
     submit('Acknowledge the difference');
-    expect(await screen.findByText('Short by £0.50, acknowledged.')).toBeTruthy();
+    expect(await screen.findByText('Short by NPR 0.50, acknowledged.')).toBeTruthy();
     expect(calls.find((c) => c.key === ACKNOWLEDGE)?.body).toEqual({ reasonCodeId: 'r1' });
     expect(screen.getByRole('button', { name: 'Close shift' })).toBeTruthy();
   });
@@ -151,7 +151,7 @@ describe('acknowledging the difference (CD-23, BI-25, RT-245, UX-08)', () => {
     type(/Cash left in the drawer for the next shift/, '100');
     submit('Close shift');
     expect(await alertText()).toBe(UNACKNOWLEDGED);
-    expect(figures(), 'the count stays').toEqual(['£22.00', '£22.50', '-£0.50', '£0.00']);
+    expect(figures(), 'the count stays').toEqual(['NPR\u00a022.00', 'NPR\u00a022.50', '-NPR\u00a00.50', 'NPR\u00a00.00']);
   });
 });
 
@@ -167,7 +167,7 @@ describe('closing the shift (CD-20, RT-526)', () => {
     expect(await screen.findByRole('heading', { name: 'Shift closed' })).toBeTruthy();
     expect(calls.at(-1)).toEqual({ key: TRANSITIONS, body: { machine: 'Shift', event: 'close', subject: 'sh1', payload: { closingFloat: 10_000 } } });
     expect(onClosed).toHaveBeenCalledTimes(1);
-    expect(figures()).toEqual(['£22.50', '£22.50', '£0.00', '£0.00', '£100.00']);
+    expect(figures()).toEqual(['NPR\u00a022.50', 'NPR\u00a022.50', 'NPR\u00a00.00', 'NPR\u00a00.00', 'NPR\u00a0100.00']);
     fireEvent.click(screen.getByRole('button', { name: 'Done' }));
     expect(onDone).toHaveBeenCalledTimes(1);
   });
