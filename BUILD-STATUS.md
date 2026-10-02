@@ -1476,3 +1476,14 @@ Append-only. One dated line per step, including failed and abandoned attempts.
   - **Tests:** 2 new in `payments/card.test.ts` (a failed refund of a sale, and of a payment with no sale: held through the failure, cancelled with a reason under the key, released, the drift checks empty, the money refundable again). Server: 504 pass; the server typechecks. Migrations: 17.
   - **Mutation check:** `plan-d19.mjs`, 4 mutations: the edge, its key and reason, and the release of the hold on a payment and on a sold line. All 4 caught; the first because the migration then refuses to apply. **4 of 4**, restored byte for byte.
   - **Staging:** BUILD-STATUS, OPEN-QUESTIONS and OWNER-DECISIONS hold another session's uncommitted work, so their staged copies are the committed files plus this step's lines only.
+- 2026-10-02 — **Phase F, run again after Phase E.** ADR-31 §16 (a third table appended). `npm run perf`, `ledger:check`, `audit:check`, `payments:check`.
+  - **Numbers (p95):** scan over HTTP 7.8 ms, scan in the browser 29.2 ms, **sale-save (10 lines, cash) 69.8 ms**, 100,000 variants. The budget for
+    the scan is p95 ≤ 100 ms: met. Sale-save's proposed budget of p95 ≤ 100 ms, not yet approved: met, with 30 ms to spare.
+  - **Against before:** sale-save p95 27.1 ms (first), 69.1 ms (second), **69.8 ms (now)**: Phase E did not move the cash path. The
+    earlier 2.5-times rise is still unexplained and not Phase E's. The scan crept up (3.4, 5.1, 7.8 ms) with unchanged code.
+  - **Not measured:** a card sale, a return, a refund. **The checks:** the ledger agrees with every balance, the audit chain is intact,
+    and no card payment needs a person. They ran against the development database, which holds little; the same checks run
+    on every test's data (`inventory_ledger_drift`, `sale_counter_drift`, `payment_refund_drift`, `audit_chain_breaks`).
+  - **A first run was lost to a missing browser** (Playwright's Chromium was not installed, so the run died after 11 minutes of
+    seeding, before printing a number). `npx playwright install chromium` fixed it.
+  - **Staging:** BUILD-STATUS holds another session's uncommitted work, so its staged copy is the committed file plus this entry only.

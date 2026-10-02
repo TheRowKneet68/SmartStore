@@ -367,3 +367,29 @@ Sale-save's p95 is 2.5 times the first. Nothing in its path changed between the 
 shift actors, count reasons, reprints and unit kinds, none of which a cash sale writes. Re-run it on the first setup
 before reading this as a regression. If it holds there, profile the sale's transaction. The proposed budget is still
 met, with less room than the first run suggested.
+
+### Re-measured 2026-10-02, after Phase E (returns, refunds, the simulated card gateway, D-17 to D-19)
+
+Appended; the tables above stand. Same machine and same test, 100,000 variants, Node v26.7.0, PostgreSQL 17.11, nothing else run during the
+measurement. Phase E rewrote the sale's completion (a plan, a tender split and a completion shared by cash and card), added
+three migrations that touch the sale's triggers (`assert_sale_complete()`, `payment_before_write()`), and added `payment.refunded_amount`.
+The test is the cash sale, so it answers whether the cash path paid for any of that.
+
+| Measure | n | p50 | p95 | max | Budget |
+|---|---|---|---|---|---|
+| scan-to-cart (HTTP) | 1000 | 4.1 ms | 7.8 ms | 10.2 ms | p95 ≤ 100 ms: **met** |
+| scan-to-cart in the browser (Enter to line drawn) | 200 | 20.1 ms | 29.2 ms | 48.6 ms | p95 ≤ 100 ms: **met** |
+| sale-save, 10 lines, cash | 200 | 54.0 ms | 69.8 ms | 219.3 ms | proposed p95 ≤ 100 ms: met |
+
+Across the three runs (p95): scan over HTTP 3.4, 5.1, 7.8 ms; scan in the browser 20.6, 24.1, 29.2 ms; sale-save 27.1, 69.1, 69.8 ms.
+
+- **Sale-save did not move with Phase E:** p95 69.8 ms against 69.1 ms, p50 54.0 against 55.7. Within the noise of 200 samples, so the
+  rewrite and the new migrations cost the cash path nothing measurable. The jump from 27 ms, which the second run left unexplained, is
+  still unexplained and is **not** Phase E's: it was there before. The suspects the second run named stand (a different Node, 26.7.0
+  against 26.10.0; the sale's transaction, which now carries the audit and hash-chain triggers). It has not been profiled.
+- **The scan is slower each run** (3.4, 5.1, 7.8 ms) though its code has not changed. All are far inside the budget. The likeliest cause is the
+  machine's state, not the code; a fourth point would show a trend.
+- **Not measured:** a card sale (three transactions, one gateway call each, the simulated gateway answering at once), a return, and a
+  refund. The test does not build them. A card sale's cost is its own round trips plus the real provider's latency, which this
+  machine cannot show.
+- **The budget is a local-network figure** (§8). The proposed sale-save budget, p95 ≤ 100 ms, is still met, and still not approved.
