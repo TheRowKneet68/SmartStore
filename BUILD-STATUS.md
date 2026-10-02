@@ -1487,3 +1487,21 @@ Append-only. One dated line per step, including failed and abandoned attempts.
   - **A first run was lost to a missing browser** (Playwright's Chromium was not installed, so the run died after 11 minutes of
     seeding, before printing a number). `npx playwright install chromium` fixed it.
   - **Staging:** BUILD-STATUS holds another session's uncommitted work, so its staged copy is the committed file plus this entry only.
+- 2026-10-02 — **UI, step 1: the Returns screen** (`web/src/back/Returns.tsx`, `Returns.test.tsx`, 19 tests). The first of the owner's five screens (returns, refunds, the card panel, void, the payments report).
+  - **What it does, and no more:** lists the store's returns (newest first, by status, "show more" on the server's cursor); opens a return against a sale **by its number**
+    (the sales list pages by number, so the sale numbered N is the first below N + 1); adds goods (item, quantity, state, place) and removes a line; posts; cancels with a
+    chosen reason; approves late. It speaks the contract of D5 §10 and D-17 exactly, and decides nothing the server decides: the bounds (`RR-14`), the window (`RR-10`), the
+    place a state goes to (`RR-19`) and the late approver (`AP-08`) stay the database's.
+  - **Rules it keeps:** no default state of the goods, only a choice (`RR-17`, `RR-18`); the places offered are those the state goes to, and the server judges them again; what is left to
+    return is shown beside each item and an item with none cannot be chosen; past the window it names the day it closed and who must approve (`SS048`); a reason is chosen, never
+    typed (`SM-42`); a refusal is said in place with its next step, and the system's failures apart from the person's (`UX-55`, `UX-57`, `UX-59`); what is spoken is what is on screen
+    (`UX-51`); the first field has focus and a line added returns focus to the first field (`UX-01`).
+  - **Keys, exactly the server's:** the screen is offered with `Return.View`; opening, filling, posting and cancelling need `Return.Create`; the late approval `Return.Approve`. Nothing is
+    offered to someone without the key (`UX-05`, `UX-08`).
+  - **Coordination with the other session:** `App.tsx`, `App.test.tsx` and `NotYet.tsx` hold that session's uncommitted work (a grouped back-office navigation). The screen uses only
+    committed libraries (`api`, `Problem`, `Chip`, `Announcer`, `test/serve`), so the commit builds without their files. **Two shapes of the same wiring:** the committed `App.tsx` is the
+    committed file plus the Returns tab; the working `App.tsx` has the same entry in their groups (under Sell, "Returns", `Return.View`) and their `NotYet.tsx` entry "Returns and refunds" is now
+    "Refunds", because returns exist. Both were tested: the committed shape in a clean checkout of HEAD, the working shape in the tree. Their files stay uncommitted; nothing of theirs was staged.
+  - **Not here:** linking a posted return to a refund (the Refunds screen, next); the store's default disposition (reading settings needs `Config.Store`, so the person chooses); who
+    opened or approved (the API returns ids, not names).
+  - **Tests:** web 19 new, plus 2 in `App.test.tsx` (Returns appears with `Return.View` only). The web typechecks.

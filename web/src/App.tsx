@@ -5,6 +5,7 @@ import { check, problemOf, ProblemNotice, type Problem } from './lib/Problem.tsx
 import { People } from './back/People.tsx';
 import { Prices } from './back/Prices.tsx';
 import { ReferenceData } from './back/Reference.tsx';
+import { Returns } from './back/Returns.tsx';
 import { Roles } from './back/Roles.tsx';
 import { ShiftReview } from './back/Shifts.tsx';
 import { SaleScreen } from './pos/Sale.tsx';
@@ -176,6 +177,7 @@ function BackOffice({ store, organization, stores, onTillSet }: { store: Store; 
   const sections = [
     ...(store.permissions.includes('Cash.Count.View') ? [['shifts', 'Shifts'] as const] : []),
     ...(store.permissions.includes('Device.View') ? [['till', 'Till set-up'] as const] : []),
+    ...(store.permissions.includes('Return.View') ? [['returns', 'Returns'] as const] : []),
     ...(organization.includes('Employee.View') ? [['people', 'People'] as const] : []),
     ...(organization.includes('Role.View') ? [['roles', 'Roles'] as const] : []),
     ...(organization.includes('Product.View') || organization.includes('Tax.View') ? [['reference', 'Units, tax and brands'] as const] : []),
@@ -196,6 +198,8 @@ function BackOffice({ store, organization, stores, onTillSet }: { store: Store; 
       )}
       {section === 'shifts' ? (
         <ShiftReview storeId={store.id} currency={currency} canAcknowledge={store.permissions.includes('Cash.Variance.Acknowledge')} />
+      ) : section === 'returns' ? (
+        <Returns storeId={store.id} permissions={store.permissions} />
       ) : section === 'people' ? (
         <People permissions={organization} stores={stores} />
       ) : section === 'roles' ? (
