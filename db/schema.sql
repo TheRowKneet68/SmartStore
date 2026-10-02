@@ -213,6 +213,24 @@ DECLARE
   v_line record;
   v_left bigint;
 BEGIN
+  IF NEW.sale_id IS NULL THEN
+    IF NEW.status = 'Processing' AND OLD.status = 'Approved' THEN
+      -- PY-37: a sale made from this payment since the refund was drafted would be paid for twice.
+      IF EXISTS (SELECT 1 FROM payment p JOIN sale s ON s.checkout_id = p.checkout_id WHERE p.id = NEW.payment_id) THEN
+        RAISE EXCEPTION 'payment % has become a sale: refund the sale', NEW.payment_id USING ERRCODE = 'SS059';
+      END IF;
+      -- One conditional increment: it affects no row if the payment would give back more than it took (PY-22).
+      UPDATE payment SET refunded_amount = refunded_amount + NEW.amount
+      WHERE id = NEW.payment_id AND refunded_amount + NEW.amount <= amount;
+      IF NOT FOUND THEN
+        SELECT amount - refunded_amount INTO v_left FROM payment WHERE id = NEW.payment_id;
+        RAISE EXCEPTION 'only % of that payment can still be given back', v_left USING ERRCODE = 'SS058', DETAIL = v_left::text;
+      END IF;
+    ELSIF NEW.status = 'Cancelled' AND OLD.status IN ('Processing', 'Failed') THEN
+      UPDATE payment SET refunded_amount = refunded_amount - NEW.amount WHERE id = NEW.payment_id;
+    END IF;
+    RETURN NULL;
+  END IF;
   IF NEW.status = 'Processing' AND OLD.status = 'Approved' THEN
     IF NEW.customer_return_id IS NOT NULL AND (
          NOT EXISTS (SELECT 1 FROM customer_return WHERE id = NEW.customer_return_id AND status = 'Posted')
@@ -242,7 +260,7 @@ BEGIN
           USING ERRCODE = 'SS052';
       END IF;
     END LOOP;
-  ELSIF NEW.status = 'Cancelled' AND OLD.status = 'Processing' THEN
+  ELSIF NEW.status = 'Cancelled' AND OLD.status IN ('Processing', 'Failed') THEN
     UPDATE sale_line l
       SET refunded_amount = l.refunded_amount - r.amount,
           refunded_tax_amount = l.refunded_tax_amount - r.tax_amount
@@ -258,7 +276,7 @@ $$;
 -- Name: FUNCTION apply_refund_hold(); Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON FUNCTION public.apply_refund_hold() IS 'Cites: RR-03, RR-06, RR-24, RR-42, BI-10, SM-40, SM-41, PY-22, PY-23, RT-145, RT-155, RT-161, EC-02. Entering Processing holds the refund against each line''s settled amount with a conditional update, naming the remainder when it refuses, with the tax at the line''s stored tax in proportion; a refund for a return pays only for what that posted return took back. The hold stays through Failed and Completed and is released only by cancellation. The per-sale cap follows: the settled amounts sum to the total due (SS034).';
+COMMENT ON FUNCTION public.apply_refund_hold() IS 'Cites: RR-03, RR-06, RR-24, RR-42, BI-10, SM-40, SM-41, PY-22, PY-23, PY-37, D-18, D-19. Entering Processing takes the hold with one conditional increment: on each sold line, which affects no row past its settled amount or its proportional tax; or, for a refund with no sale, on the payment, which affects no row past what the payment took. Failed and Completed keep it, and only a cancellation, from Processing or from Failed, releases it. A refund for a return pays only the lines the posted return took back. A payment that has become a sale is no longer refunded without it.';
 
 
 --
@@ -583,10 +601,12 @@ DECLARE
   v_amount bigint;
   v_tax    bigint;
 BEGIN
-  SELECT count(*), coalesce(sum(amount), 0), coalesce(sum(tax_amount), 0) INTO v_lines, v_amount, v_tax
-  FROM refund_line WHERE refund_id = NEW.id;
-  IF v_lines = 0 OR v_amount <> NEW.amount OR v_tax <> NEW.tax_amount THEN
-    RAISE EXCEPTION 'refund % must equal the sum of its lines', NEW.id USING ERRCODE = 'SS053';
+  IF NEW.sale_id IS NOT NULL THEN
+    SELECT count(*), coalesce(sum(amount), 0), coalesce(sum(tax_amount), 0) INTO v_lines, v_amount, v_tax
+    FROM refund_line WHERE refund_id = NEW.id;
+    IF v_lines = 0 OR v_amount <> NEW.amount OR v_tax <> NEW.tax_amount THEN
+      RAISE EXCEPTION 'refund % must equal the sum of its lines', NEW.id USING ERRCODE = 'SS053';
+    END IF;
   END IF;
   IF NEW.status = 'Completed' AND NEW.disbursement = 'Drawer' AND NEW.amount IS DISTINCT FROM (
        SELECT amount FROM cash_transaction WHERE refund_id = NEW.id) THEN
@@ -601,7 +621,7 @@ $$;
 -- Name: FUNCTION assert_refund_whole(); Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON FUNCTION public.assert_refund_whole() IS 'Cites: RR-43, PY-27, CD-19, BI-04, RT-156. At commit, a refund that has left Draft equals the sum of its lines, tax included, and a completed cash refund has left the drawer as a recorded disbursement of exactly its amount.';
+COMMENT ON FUNCTION public.assert_refund_whole() IS 'Cites: RR-43, PY-27, CD-19, BI-04, RT-156, D-18. At commit, a refund that has left Draft equals the sum of its lines, tax included (a refund with no sale has no lines), and a completed cash refund has left the drawer as a recorded disbursement of exactly its amount.';
 
 
 --
@@ -700,6 +720,11 @@ BEGIN
   IF v_captured <> s.total_due OR s.change_given <> v_change THEN
     RAISE EXCEPTION 'the captured payments of sale % do not settle it exactly', s.id USING ERRCODE = 'SS034';
   END IF;
+  -- D-18, PY-37: a payment that is being given back, or has been, does not pay for goods.
+  IF EXISTS (SELECT 1 FROM refund r JOIN payment p ON p.id = r.payment_id
+             WHERE p.checkout_id = s.checkout_id AND r.sale_id IS NULL AND r.status <> 'Cancelled') THEN
+    RAISE EXCEPTION 'a payment of sale % is being refunded without it', s.id USING ERRCODE = 'SS059';
+  END IF;
 
   SELECT coalesce(sum(amount), 0) INTO v_disbursed FROM cash_transaction WHERE sale_id = s.id AND type = 'ChangeDisbursed';
   IF v_disbursed <> s.change_given THEN
@@ -722,7 +747,7 @@ $$;
 -- Name: FUNCTION assert_sale_complete(); Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON FUNCTION public.assert_sale_complete() IS 'Cites: SP-02, SP-36, SP-40, BI-04, BI-18, RT-119, RT-133, RT-135, RT-136, RT-146, IV-15. At commit, a sale is whole: at least one line; totals are the sums of its lines and follow the tax mode; the settled amounts sum to the total due; no tender is left pending; captured tenders equal the total due; change equals cash tendered beyond cash applied and is disbursed from the drawer; and every stocked line moved exactly its quantity.';
+COMMENT ON FUNCTION public.assert_sale_complete() IS 'Cites: SP-02, SP-36, SP-40, BI-04, BI-18, RT-119, RT-133, RT-135, RT-136, RT-146, IV-15, PY-37, D-18. At commit, a sale is whole: at least one line; totals are the sums of its lines and follow the tax mode; the settled amounts sum to the total due; no tender is left pending; captured tenders equal the total due; no payment of it is being refunded without it; change equals cash tendered beyond cash applied and is disbursed from the drawer; and every stocked line moved exactly its quantity.';
 
 
 --
@@ -1693,6 +1718,40 @@ COMMENT ON FUNCTION public.freeze_used_quantity_kind() IS 'Cites: PR-14, RT-491.
 
 
 --
+-- Name: grant_to_complete_roles(text[]); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.grant_to_complete_roles(p_keys text[]) RETURNS integer
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+  v_granted integer;
+BEGIN
+  INSERT INTO role_permission (role_id, organization_id, permission_key, granted_by)
+  SELECT r.id, r.organization_id, k.key,
+         (SELECT g.granted_by FROM role_permission g WHERE g.role_id = r.id ORDER BY g.granted_at, g.id LIMIT 1)
+  FROM role r CROSS JOIN unnest(p_keys) AS k(key)
+  WHERE r.archived_at IS NULL
+    AND NOT EXISTS (SELECT 1 FROM role_permission g
+                    WHERE g.role_id = r.id AND g.permission_key = k.key AND g.revoked_at IS NULL)
+    AND NOT EXISTS (SELECT 1 FROM permission p
+                    WHERE p.key <> ALL (p_keys)
+                      AND NOT EXISTS (SELECT 1 FROM role_permission g
+                                      WHERE g.role_id = r.id AND g.permission_key = p.key AND g.revoked_at IS NULL));
+  GET DIAGNOSTICS v_granted = ROW_COUNT;
+  RETURN v_granted;
+END
+$$;
+
+
+--
+-- Name: FUNCTION grant_to_complete_roles(p_keys text[]); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.grant_to_complete_roles(p_keys text[]) IS 'Cites: AC-01, AC-02, D-01, D-16. Gives every live role that holds every other catalogue key the keys named, so that a role holding everything (the Owner''s, actors-and-roles s3.2, s4) still does when keys are added. Each grant names whoever granted the role its first key, as onboarding records the Owner granting their own. For migrations only.';
+
+
+--
 -- Name: gtin_check_digit_valid(text); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -1828,7 +1887,8 @@ BEGIN
     END IF;
     RETURN NEW;
   END IF;
-  IF OLD.status IN ('Captured', 'Declined', 'Voided', 'Failed') THEN
+  IF OLD.status IN ('Captured', 'Declined', 'Voided', 'Failed')
+     AND (to_jsonb(NEW) - 'refunded_amount') IS DISTINCT FROM (to_jsonb(OLD) - 'refunded_amount') THEN
     RAISE EXCEPTION 'payment % is % and is never changed; a retry is a new payment', OLD.id, OLD.status
       USING ERRCODE = 'SS035';
   END IF;
@@ -1845,6 +1905,28 @@ $$;
 --
 
 COMMENT ON FUNCTION public.payment_before_write() IS 'Cites: PY-04, PY-12, PY-54, D-14, BI-09. An attempt is added only to an open checkout with a method enabled at the store; a payment in a terminal state is never modified again.';
+
+
+--
+-- Name: payment_refund_drift(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.payment_refund_drift() RETURNS TABLE(payment_id uuid, problem text, recorded bigint, expected bigint)
+    LANGUAGE sql STABLE
+    AS $$
+  SELECT p.id, 'refunded amount differs from the refunds holding it', p.refunded_amount, coalesce(h.amount, 0)::bigint
+  FROM payment p
+  LEFT JOIN LATERAL (SELECT sum(r.amount) AS amount FROM refund r
+                     WHERE r.payment_id = p.id AND r.sale_id IS NULL AND r.status IN ('Processing', 'Failed', 'Completed')) h ON true
+  WHERE p.refunded_amount <> coalesce(h.amount, 0)
+$$;
+
+
+--
+-- Name: FUNCTION payment_refund_drift(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.payment_refund_drift() IS 'Cites: PY-22, RR-24, D-18, SP-66. Rebuilds every payment''s refunded amount from the refunds with no sale that hold money (Processing, Failed, Completed) and returns each disagreement. It never repairs; an empty result is the proof.';
 
 
 --
@@ -2078,7 +2160,22 @@ DECLARE
   v_method_type text;
 BEGIN
   IF TG_OP = 'INSERT' THEN
-    IF NEW.method = 'OriginalTender' THEN
+    IF NEW.method = 'OriginalTender' AND NEW.sale_id IS NULL THEN
+      -- D-18: the return to the card of a captured card payment that has no sale.
+      SELECT p.method_type INTO v_method_type
+      FROM payment p
+      WHERE p.id = NEW.payment_id AND p.status = 'Captured' AND p.store_id = NEW.store_id AND p.currency_code = NEW.currency_code;
+      IF v_method_type IS NULL THEN
+        RAISE EXCEPTION 'payment % is not a captured payment of this store and currency', NEW.payment_id USING ERRCODE = 'SS050';
+      END IF;
+      IF v_method_type <> 'Card' THEN
+        RAISE EXCEPTION 'only a card payment is taken back without its sale' USING ERRCODE = 'SS059';
+      END IF;
+      IF EXISTS (SELECT 1 FROM payment p JOIN sale s ON s.checkout_id = p.checkout_id WHERE p.id = NEW.payment_id) THEN
+        RAISE EXCEPTION 'payment % belongs to a sale: refund the sale', NEW.payment_id USING ERRCODE = 'SS059';
+      END IF;
+      NEW.disbursement := 'Provider';
+    ELSIF NEW.method = 'OriginalTender' THEN
       SELECT p.method_type INTO v_method_type
       FROM payment p JOIN sale s ON s.checkout_id = p.checkout_id
       WHERE p.id = NEW.payment_id AND s.id = NEW.sale_id AND p.status = 'Captured';
@@ -2127,7 +2224,7 @@ $$;
 -- Name: FUNCTION refund_before_write(); Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON FUNCTION public.refund_before_write() IS 'Cites: RR-22, RR-23, RR-25, PY-25, PY-27, PT-03, BI-09, BI-42, SM-03. A refund to the original tender goes back to a captured tender of the same sale, cash through the drawer and card through the provider; numbering; transition stamps; a completed or cancelled refund is frozen; drawer cash is paid out only at a till in service and not in training, during an open shift.';
+COMMENT ON FUNCTION public.refund_before_write() IS 'Cites: RR-22, RR-23, RR-25, PY-25, PY-27, PT-03, BI-09, BI-42, SM-03, PY-37, D-18. A refund to the original tender goes back to a captured tender of the same sale, cash through the drawer and card through the provider; or, with no sale, to a captured card payment of this store and currency that has no sale (D-18); numbering; transition stamps; a completed or cancelled refund is frozen; drawer cash is paid out only at a till in service and not in training, during an open shift.';
 
 
 --
@@ -3526,8 +3623,10 @@ CREATE TABLE public.payment (
     status_changed_at timestamp with time zone DEFAULT now() NOT NULL,
     status_changed_by uuid NOT NULL,
     correlation_id uuid,
+    refunded_amount bigint DEFAULT 0 NOT NULL,
     CONSTRAINT ck_payment_positive CHECK ((amount > 0)),
     CONSTRAINT ck_payment_provider_outcome CHECK ((provider_outcome = ANY (ARRAY['Approved'::text, 'Declined'::text, 'Pending'::text, 'Failed'::text, 'Errored'::text, 'Timeout'::text]))),
+    CONSTRAINT ck_payment_refunded CHECK (((refunded_amount >= 0) AND (refunded_amount <= amount) AND ((refunded_amount = 0) OR (status = 'Captured'::text)))),
     CONSTRAINT ck_payment_sequence CHECK ((sequence_number >= 1)),
     CONSTRAINT ck_payment_status CHECK ((status = ANY (ARRAY['Pending'::text, 'Authorized'::text, 'Captured'::text, 'Declined'::text, 'Voided'::text, 'Failed'::text]))),
     CONSTRAINT ck_payment_tendered CHECK ((((method_type = 'Cash'::text) AND (tendered_amount IS NOT NULL) AND (tendered_amount >= amount)) OR ((method_type <> 'Cash'::text) AND (tendered_amount IS NULL))))
@@ -3542,6 +3641,13 @@ COMMENT ON TABLE public.payment IS 'Cites: PY-02, PY-12, PY-42, PY-46, PY-54, D-
 
 
 --
+-- Name: COLUMN payment.refunded_amount; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.payment.refunded_amount IS 'Cites: PY-22, PY-23, RR-24, D-18. What refunds that have no sale are holding back to this payment: raised when such a refund enters Processing, kept through Failed and Completed, lowered only by a cancellation. Written only by the owner''s hold trigger; never more than the payment took. A refund of a sold line is bounded on the line, not here.';
+
+
+--
 -- Name: CONSTRAINT ck_payment_positive ON payment; Type: COMMENT; Schema: public; Owner: -
 --
 
@@ -3553,6 +3659,13 @@ COMMENT ON CONSTRAINT ck_payment_positive ON public.payment IS 'Cites: PY-02, SP
 --
 
 COMMENT ON CONSTRAINT ck_payment_provider_outcome ON public.payment IS 'Cites: PY-10, PY-11. The provider''s response normalised to six outcomes; the raw code is kept beside it.';
+
+
+--
+-- Name: CONSTRAINT ck_payment_refunded ON payment; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_payment_refunded ON public.payment IS 'Cites: PY-22, BI-10, D-18. A payment never gives back more than it took, and only a captured payment gives anything back.';
 
 
 --
@@ -3865,7 +3978,7 @@ CREATE TABLE public.refund (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     store_id uuid NOT NULL,
     organization_id uuid NOT NULL,
-    sale_id uuid NOT NULL,
+    sale_id uuid,
     customer_return_id uuid,
     document_number bigint NOT NULL,
     client_operation_id uuid NOT NULL,
@@ -3903,10 +4016,11 @@ CREATE TABLE public.refund (
     CONSTRAINT ck_refund_method CHECK ((method = ANY (ARRAY['OriginalTender'::text, 'Cash'::text]))),
     CONSTRAINT ck_refund_method_payment CHECK (((method = 'OriginalTender'::text) = (payment_id IS NOT NULL))),
     CONSTRAINT ck_refund_provider_outcome CHECK ((provider_outcome = ANY (ARRAY['Approved'::text, 'Declined'::text, 'Pending'::text, 'Failed'::text, 'Errored'::text, 'Timeout'::text]))),
+    CONSTRAINT ck_refund_sale_or_payment CHECK (((sale_id IS NOT NULL) OR ((method = 'OriginalTender'::text) AND (payment_id IS NOT NULL) AND (customer_return_id IS NULL) AND (tax_amount = 0) AND (reason_code_id IS NOT NULL)))),
     CONSTRAINT ck_refund_separation CHECK (((approved_by IS NULL) OR ((approved_by <> created_by) AND (approved_by <> submitted_by)))),
     CONSTRAINT ck_refund_status CHECK ((status = ANY (ARRAY['Draft'::text, 'PendingApproval'::text, 'Approved'::text, 'Processing'::text, 'Completed'::text, 'Failed'::text, 'Cancelled'::text]))),
     CONSTRAINT ck_refund_submitted CHECK (((submitted_at IS NULL) = (submitted_by IS NULL))),
-    CONSTRAINT ck_refund_submitted_when CHECK (((status = 'Draft'::text) OR (submitted_by IS NOT NULL))),
+    CONSTRAINT ck_refund_submitted_when CHECK (((status = 'Draft'::text) OR (submitted_by IS NOT NULL) OR ((status = 'Cancelled'::text) AND (approved_by IS NULL)))),
     CONSTRAINT ck_refund_till CHECK ((num_nulls(pos_terminal_id, cash_drawer_id, cash_shift_id) = ANY (ARRAY[0, 3])))
 );
 
@@ -3989,6 +4103,13 @@ COMMENT ON CONSTRAINT ck_refund_provider_outcome ON public.refund IS 'Cites: PY-
 
 
 --
+-- Name: CONSTRAINT ck_refund_sale_or_payment ON refund; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_refund_sale_or_payment ON public.refund IS 'Cites: RR-01, RR-35, PY-21, PY-37, D-18. A refund is of a sale, or it is the return to the card of a payment that never became one: then it names that payment, has no return and no tax (no sale charged any), and a reason (it is goodwill in the sense of RR-35). Its lines cannot exist: a line names a sale.';
+
+
+--
 -- Name: CONSTRAINT ck_refund_separation ON refund; Type: COMMENT; Schema: public; Owner: -
 --
 
@@ -4013,7 +4134,7 @@ COMMENT ON CONSTRAINT ck_refund_submitted ON public.refund IS 'Cites: SM-03. Sub
 -- Name: CONSTRAINT ck_refund_submitted_when ON refund; Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON CONSTRAINT ck_refund_submitted_when ON public.refund IS 'Cites: SM-03. Every refund past Draft records who submitted it.';
+COMMENT ON CONSTRAINT ck_refund_submitted_when ON public.refund IS 'Cites: SM-03, D-17. Every refund past Draft records who submitted it, except a withdrawn draft, which was never submitted.';
 
 
 --
@@ -11475,4 +11596,8 @@ INSERT INTO public.schema_migrations (version) VALUES
     ('20261001120000'),
     ('20261001120100'),
     ('20261001130000'),
-    ('20261001140000');
+    ('20261001140000'),
+    ('20261002100000'),
+    ('20261002120000'),
+    ('20261002130000'),
+    ('20261002141000');

@@ -1,6 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app.ts';
 import { createPool } from '../src/db/pool.ts';
+import { SimulatedGateway } from '../src/modules/payments/simulated-gateway.ts';
+import type { PaymentGateway } from '../src/modules/payments/gateway.ts';
 import type { SessionPolicy } from '../src/modules/identity/sessions.ts';
 import type { TestDb } from './db.ts';
 
@@ -22,7 +24,7 @@ function serverPool(db: TestDb) {
 
 /** The server as it runs: principals come from session cookies only. */
 export async function sessionApp(db: TestDb, policy: SessionPolicy = TEST_SESSION_POLICY): Promise<FastifyInstance> {
-  return buildApp({ pool: serverPool(db), session: policy, quoteMaxAgeMinutes: TEST_QUOTE_MAX_AGE_MINUTES, lockTimeoutMs: TEST_LOCK_TIMEOUT_MS, ownsPool: true });
+  return buildApp({ pool: serverPool(db), gateway: new SimulatedGateway(), session: policy, quoteMaxAgeMinutes: TEST_QUOTE_MAX_AGE_MINUTES, lockTimeoutMs: TEST_LOCK_TIMEOUT_MS, ownsPool: true });
 }
 
 /**
@@ -30,9 +32,10 @@ export async function sessionApp(db: TestDb, policy: SessionPolicy = TEST_SESSIO
  * of a route need not sign in first. Everything after the session lookup (the permission check, the handlers) runs
  * for real; `sessionApp` tests the session lookup itself.
  */
-export async function testApp(db: TestDb, options: { quoteMaxAgeMinutes?: number } = {}): Promise<FastifyInstance> {
+export async function testApp(db: TestDb, options: { quoteMaxAgeMinutes?: number; gateway?: PaymentGateway } = {}): Promise<FastifyInstance> {
   return buildApp({
     pool: serverPool(db),
+    gateway: options.gateway ?? new SimulatedGateway(),
     session: TEST_SESSION_POLICY,
     quoteMaxAgeMinutes: options.quoteMaxAgeMinutes ?? TEST_QUOTE_MAX_AGE_MINUTES,
     lockTimeoutMs: TEST_LOCK_TIMEOUT_MS,

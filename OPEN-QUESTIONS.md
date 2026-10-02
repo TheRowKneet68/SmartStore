@@ -521,6 +521,178 @@ fallback is a design that holds either answer, not a guess at the answer.
 - *Suggested interim, once the migration is authorized:* a threshold of zero, so that every manual weight needs a
   reason, as OQ-020 does for the shift variance.
 
+### OQ-033 — Reopening a closed shift: what the recount counts, and the money already handed on
+
+- **Unknown:** D-16 names the key (`Shift.Reopen`). `SM-56` and `SM-57` give the path: `Closed → Reopened →
+  Reconciling → Closed`. Each recount is a new pass, and the original count stands. Three things that path needs are
+  not specified:
+  1. *The drawer.* A recount happens in `Reconciling`, and a drawer has at most one shift `Open` or `Reconciling`
+     (`CD-01`, `CD-03`). Once the next shift has opened at that drawer, the reopened shift cannot be recounted until
+     the next one closes, and by then its drawer holds the next shift's money. What is the recount a count of?
+  2. *The closing float.* The first close declared a closing float and handed it on (`CD-20`), and the next shift
+     counted its own opening float (`CD-10`). Closing the reopened shift again would declare a second. Is it declared
+     again, carried over, or not at all? And what does the recount's expected amount (`CD-06`) include?
+  3. *Who closed it.* The schema clears `closed_by` and `closed_at` while a shift is not `Closed`
+     (`ck_cash_shift_closed_when`), so a reopen removes the first close from the row. Its audit event keeps it.
+     Confirm that is the record intended.
+- **Why not answerable from `/docs`:** the documents give the path and its controls (a reason, the audit, the standing
+  report: `CD-26`), not the money.
+- **Blocked:** the reopen edge. The key exists in the catalogue (D-16); the edge does not, so a reopen still refuses.
+- *Meanwhile:* reopening is not built, as D4 §8 has said since Domain 4's design.
+
+### OQ-034 — Questions the consolidated blueprint found (`BQ-01` to `BQ-11`)
+
+- **Unknown:** [SMARTSTORE-CONSOLIDATED-BLUEPRINT.md](docs/architecture/SMARTSTORE-CONSOLIDATED-BLUEPRINT.md) was written
+  only from `/docs`, the ADRs, the owner's decisions and the code. The owner's request for it assumed several components
+  that the record neither chooses nor rejects. Each is marked in the blueprint as `BQ-nn` and gathered here. None
+  blocks the work in progress; each blocks the part named.
+  1. `BQ-01` *Partitioning or archival* of `inventory_movement`, `audit_event` and `cash_transaction`. No volume is stated.
+  2. `BQ-02` *A cache, queue, scheduler or job runner* for the outbox, the reconciliation jobs, retention and
+     notification delivery. Architecture §15 and §9.4 require the behaviour; ADR-31 chooses no mechanism. Blocks
+     notifications, jobs, and scheduling `ledger:check` and `audit:check`.
+  3. `BQ-03` *Real-time transport* (server-sent events, WebSocket or polling) for device status and notifications.
+  4. `BQ-04` *The till client's technology*, its local store, the sync wire format, and whether it is a separate
+     workspace. `OF-01` to `OF-50` fix the behaviour only. Blocks offline POS.
+  5. `BQ-05` *File storage and receipt rendering*: the file-store interface exists in §17.3 with no implementation or format.
+  6. `BQ-06` *API contract documentation, generated clients, the web router and data layer*, and which creates beyond
+     the sale and the transition need a client operation id (§18.2 says all financial and state-changing requests).
+  7. `BQ-07` *Hosting, containers, CI/CD, environments and secrets injection*. §27 gives the shape, not the platform.
+  8. `BQ-08` *Metrics, tracing, log shipping and alert routing*. §25 names five signals, not the tooling.
+  9. `BQ-09` *Device credentials, security headers, CSRF beyond `SameSite=Strict`, general rate limiting, and a written
+     threat model.* Only sign-in throttling exists.
+  10. `BQ-10` *Device types and commands beyond `HD-04`*: a label printer, a customer display, and the ESP32's command
+      set are in the master goal's hardware list and in no rule.
+  11. `BQ-11` *The idempotency-key retention window.* `ADR-30` ties it to the longest offline window, which has no value.
+- **Why not answerable from `/docs`:** each is a technology or policy choice the record leaves out. Stack choices are the
+  owner's (CLAUDE.md, "Ask the owner only for"), through an ADR.
+- **Blocked:** nothing in v1's built slice. Each item names what it blocks.
+- *Meanwhile:* the blueprint says "not built, and not decided" for each and invents no design.
+
+### OQ-035 — Returns and refunds in use: the keys that no edge names, and what the application had to choose
+
+- **Unknown:** Domain 5's application layer needed six things the specification does not settle. Each was built the
+  narrowest way, and none invents a key.
+  1. *Reading.* No catalogue key names reading a return or a refund, so there is no list or detail route. A write returns
+     the document it made or changed. A sale's detail (`Sale.View`) carries its lines' returned and refunded amounts and
+     its payments, which is what drafting needs. A returns screen and a refunds queue need a key: `Sale.View` ("see
+     sales"), or new ones.
+  2. *Creating.* A draft return and its lines are under `Return.Create` ("accept a customer return against a sale",
+     `actors-and-roles.md` §2.5), and a draft refund under `Sale.Refund` ("issue a refund"). Creation is not a transition,
+     so no §22 row names either key. Confirm.
+  3. *The late approval.* `RR-11` requires `Return.Approve` and a reason, and the database requires the approver to be
+     neither the opener nor the poster. Built as the approver's own act, in their own session, while the return is a draft.
+     Not specified: where the approval is given from (a second session, or at the till), and whether it may be given
+     while the window is still open. The act has no audit event of its own, because the vocabulary is closed (D-06) and
+     has no type for it; who approved and why are on the return from the moment it is posted.
+  4. *Who pays.* A drawer refund goes out of the drawer and shift it was drafted at, and is completed at once. The person
+     holding `Refund.Pay` need not be at that till. Whether they must be is not specified.
+  5. *A draft cannot be withdrawn.* No edge leaves `Draft` or `PendingApproval` but forward (OQ-023 item 1), so a refund
+     drafted wrongly stays a draft. Cancelling is from `Approved` and `Processing` only.
+  6. *The amount of a line.* The caller names it, bounded by what is left of the line's settled amount, because how much a
+     partial return makes refundable is not defined (OQ-023 item 2).
+- **Why not answerable from `/docs`:** the keys are the owner's to name, and the rest is silent.
+- **Blocked:** a returns screen's list and a refund queue (item 1). Nothing else.
+- *Meanwhile:* the writes above, as D5 §10 describes them. A card refund is refused because the payment provider is not
+  built, which is not a question for the owner.
+
+- **Update 2026-10-02, the owner’s table of eight questions about OQ-035** (the table’s numbering: 1 the key for creating a
+  return, 2 for creating a refund, 3 the late approver, 4 whether the payer must be at the till, 5 withdrawing a draft, 6 the
+  amount of a line, 7 and 8 the keys for reading returns and refunds). **Answered as recommended:** 1 and 2 (the creating keys
+  stay `Return.Create` and `Sale.Refund`), 3 (the late approver is another employee holding `Return.Approve`) and 6 (the server
+  works out the most a line can still have refunded, and the person may only reduce it). All four are what is built, so
+  nothing changes in the code. **Not yet decided, waiting for the owner:**
+  - **4.** Must the person who pays be at the refund’s till and drawer? Yes or no.
+  - **5.** May a refund draft be withdrawn while it is a draft? Yes would add an edge to §22.7, a contract change.
+  - **7 and 8.** The keys for reading returns, and for reading refunds. The options, all of them existing or named here:
+    - *Returns:* `Sale.View` (existing, "see sales"); a new `Return.View`; or `Return.Create` (existing, so only those
+      who may create can read, which a manager reviewing returns would not be).
+    - *Refunds:* `Sale.View`; `Payment.View` (existing); a new `Refund.View`; or `Sale.Refund` (existing, issuers only).
+    - The catalogue’s own convention is `.View`, not `.Read`, so a new key would be `Return.View` and `Refund.View`. A new
+      key grows the catalogue from 122 to 123 or 124 and needs a migration like D-16’s.
+
+- **Closed by owner decision D-17, 2026-10-02.** The owner decided the four open items of the table:
+  - **4.** The person who pays a drawer refund is signed in at the refund's till. Built.
+  - **5.** A draft refund may be withdrawn, with the required edge. Built as `Draft → Cancelled` on `cancel`, under
+    `Sale.Refund` with a reason, as D-16 Q9 names the other cancels. The owner did not name the key or the reason, so that
+    reading stands for the owner's veto.
+  - **7 and 8.** The keys are `Return.View` and `Refund.View`, new. Built, with the routes that read returns and refunds.
+
+  Items 1 to 3 and 6 were answered earlier in this entry and stand. Nothing in OQ-035 is open. Recorded in
+  OWNER-DECISIONS D-17, D5 §12 and D7 §12.
+
+### OQ-036 — Card payments through the simulated gateway: what the specification leaves out
+
+- **Unknown:** the card path was built from `PY-07` to `PY-48` and left these unsettled. Each was built the narrowest
+  way, and none invents a key.
+  1. *A failed card refund cannot be cancelled.* §22.7 has `Failed → Processing` (retry) and
+     `Approved|Processing → Cancelled`, and no cancel from `Failed`. `SM-41` and `RR-24` say only a cancellation releases the
+     hold. A refund the provider keeps declining therefore keeps its hold until a retry succeeds. Needs an edge, and its key.
+  2. *A payment that is captured and has no sale, or is left `Authorized` or `Pending`.* `PY-37` and `PY-40` send it to the
+     reconciliation job, "reported for voiding or refund". The job is not built, voiding has a key (`Payment.Void`) but no
+     route, and a refund needs a sale, so a captured payment with no sale has no way out but a person with the database.
+     This happens when the cart no longer adds up after the card was charged, or the sale cannot be saved and is never
+     sent again. Needs the job, a void route, and an answer for refunding a payment that never became a sale.
+  3. *A retry after a decline.* `PY-54` makes it a new `Payment`; D4 §1 says "against the same checkout". A resent request
+     cannot be told from a deliberate retry, so each checkout holds one card payment, and a retry is a new operation id
+     and a new checkout. The same operation id replayed after a decline returns the decline and charges nothing.
+  4. *How the outcomes map to states.* `PY-10` lists six outcomes and the payment machine has six states, not the same
+     six. `Declined` is `Declined`; `Failed` is `Failed`; `Errored`, `Timeout` and `Pending` leave a payment `Pending`;
+     `Approved` moves it on. A refund differs only in that `Declined`, `Failed` and `Errored` fail it, as it has no
+     `Declined`, and a failed refund is retryable.
+  5. *The order of a split.* `PY-20` asks for a deterministic order, recorded. The card is first, because only it can fail
+     and cash is taken inside the completion that cannot be half done.
+  6. *Who needs `Payment.Capture`.* D-16 names it for a card's capture. A till operator taking a card therefore holds
+     `Sale.Create` and `Payment.Capture`, and the route refuses one who does not before the provider is asked. The Cashier
+     template (`actors-and-roles.md` §4) lists "payment capture" among a cashier's sensitive actions, which agrees.
+  7. *Provider per store and method* (`PY-09`) and `Payment.Provider.Configure`: not built; one gateway serves the process.
+  8. *What a card payment records for display* (`PY-43`: last four, scheme, expiry): no column holds them, and the
+     simulated provider supplies none.
+- **Why not answerable from `/docs`:** items 1 and 2 are contract gaps; the rest are choices inside the specification's room.
+- **Blocked:** a real acquirer (the owner's: an account and secrets), and the reconciliation of orphaned payments (item 2).
+- *Meanwhile:* the gateway is simulated and says so everywhere it can; an orphaned payment is visible on its open checkout.
+
+- **Update 2026-10-02, part A built** (D4 §16): void a `Pending` or `Authorized` card payment under `Payment.Void`, and a report,
+  under `Payment.View`, of the payments that need a person. No key is new. **Item 2 is still open for its part B:** what returns
+  the money of a payment that was captured and never became a sale. The owner is to decide among three options:
+  1. *A refund tied to a payment, not a sale.* The refund machine, its second-person approval, its provider round trip and its
+     audit are reused, and a refund may name a captured payment with no sale. It changes the schema (a refund's sale and its lines
+     become optional, and its bound becomes what the payment took less what was refunded of it).
+  2. *Finish the sale from the stored checkout.* The customer paid, so make the sale they paid for. A checkout stores no lines
+     today, so it would store the cart, and a person would complete it. It sells goods the customer may never have taken.
+  3. *A payment reversal record.* A new small document, linked to the captured payment, with a reason, an approver and the provider's
+     reference, that asks the provider to give the money back. It touches neither the sale nor the refund schema, and it is a
+     second refund-like document with its own approval and audit.
+
+- **Closed by owner decision D-18, 2026-10-02.** Item 2, the money of a payment captured with no sale, is decided: option 1, a
+  refund tied to a payment, under the refund's own keys (`Sale.Refund`, `Sale.Refund.Large.Approve`, `Refund.Pay`), built (D5 §13).
+  The report and the void of part A stand (D4 §16). Items 3 to 8 are choices made inside the specification's room, recorded above, and
+  stand as built unless the owner objects. **Item 1 is not closed by this: a failed card refund still has no cancel edge.** It is moved
+  to `OQ-038` so that this entry can close.
+
+
+### OQ-037 — How long a card payment may wait before it needs a person
+
+- **Unknown:** `PY-40`: "A payment that has been `Pending` for more than a configured window is escalated to a person." The
+  specification gives no value, and no setting holds one. The same window is wanted for an authorized payment never captured and
+  a captured one with no sale.
+- **Meanwhile:** the report and `npm run payments:check` take the window as a required parameter and never default it, as OQ-027
+  does for security policy. A store-level setting would be additive.
+- **Why not answerable from `/docs`:** a configured value is the owner's to set.
+- **Blocked:** a scheduled run (`BQ-02` too).
+
+### OQ-038 — A failed card refund cannot be cancelled (was `OQ-036` item 1)
+
+- **Unknown:** §22.7 contracts `Failed → Processing` (retry) and `Approved|Processing → Cancelled`, and no cancel from `Failed`.
+  `SM-41` and `RR-24` say only a cancellation releases the hold. A refund the provider keeps declining therefore keeps its hold until
+  a retry succeeds, on a sold line or, since D-18, on a payment, and nothing may release it.
+- **Why not answerable from `/docs`:** a missing edge is a contract change, and the owner's (as D-17 was for the draft). The key and
+  reason would be those of the other cancels (`Sale.Refund`, a reason), as D-17 read them.
+- **Blocked:** releasing the money of a refund that cannot be made to succeed.
+- *Meanwhile:* retry, and the provider's own recovery. Nothing is invented.
+
+- **Closed by owner decision D-19, 2026-10-02.** The owner decided the same pattern as D-17: a failed refund is cancelled under `Sale.Refund`
+  with a required reason, and cancelling releases the hold. Built as `Failed → Cancelled` on `cancel` (D5 §14). No key is new.
+
 ## How to use this file
 
 - Add an entry the moment you hit something the specification does not answer. Then continue with a different task.

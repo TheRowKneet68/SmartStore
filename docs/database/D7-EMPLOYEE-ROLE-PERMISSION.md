@@ -304,3 +304,52 @@ Removing a key from a role shows the server's affected count and is sent again w
 
 **Mutation check:** both of the route's mutants, its key and reading the whole catalogue, are detected. They ran
 with the reference data's in one plan (D2 §10).
+
+## 11. Owner decision D-16 applied (2026-10-02)
+
+Migration `20261002100000_d7_d16_permission_keys.sql`:
+- **Five keys join the catalogue,** which now holds 122: `Payment.Capture`, `Payment.Void`, `Employee.Reactivate`,
+  `Refund.Pay` and `Shift.Reopen`.
+- **The edges D-16 names stop refusing everyone:**
+
+  | Machine | Edge | Key |
+  |---|---|---|
+  | Payment | creation (`Pending`) | `Sale.Create` |
+  | Payment | capture | `Payment.Capture` |
+  | Payment | void (both edges) | `Payment.Void` |
+  | Employee | back from leave | `Employee.Edit` |
+  | Employee | reactivation after suspension | `Employee.Reactivate` |
+  | Device | re-enable | `Device.Disable` |
+  | CustomerReturn | cancel | `Return.Create` |
+  | Refund | submit to provider | `Refund.Pay` |
+  | Refund | retry, and both cancels | `Sale.Refund` |
+
+  Their reasons and audit types were already in the data (D6), so a reactivation after suspension and a till's
+  re-enable still need a reason.
+- **The shift's `Closed → Reopened` edge is not created.** Its key exists, but what a reopened shift's recount counts
+  is not specified (OQ-033), so a reopen still refuses.
+- **The Owner's role still holds everything.** Every live role that held every other key is given the five, through
+  `grant_to_complete_roles(keys)` (actors-and-roles §3.2, §4).
+  - Each grant carries the name of whoever granted the role its first key, as onboarding records the Owner granting
+    their own.
+  - The function is for migrations only (`REVOKE ... FROM PUBLIC`). A future key can be given the same way.
+  - Test databases have no organizations when the migrations run, so the function is tested directly: a role written
+    as an Owner's was before D-16, a role missing one key, and an archived role.
+- **Tests changed:**
+  - the catalogue's size, 117 to 122, in three tests;
+  - the contract of every edge's permission;
+  - the employee test that proved an undecided edge refuses everyone now proves each reactivation's own key.
+- **One path lost its proof.** The gate's refusal of an edge with no key (`not_permitted`) has no edge left to prove it
+  on: D-16 decided the last undecided edges of the bound machines, and none of them has a `System` edge. It is reached
+  again by the provider's `System` edges once payments and refunds are bound to the transition endpoint.
+- **Mutation check:** `plan-e1.mjs`, 16 of 16: each edge's key, the catalogue's five, the grant's four conditions, and
+  the receipt's key (D4 §14).
+
+## 12. Owner decision D-17 applied (2026-10-02)
+
+Migration `20261002120000_d17_return_refund_view_and_withdraw.sql`:
+- **Two keys join the catalogue,** which now holds 124: `Return.View` and `Refund.View`.
+- **The refund machine gains an edge:** `Draft → Cancelled`, event `cancel`, key `Sale.Refund`, a reason, audit type
+  `Refund.StateChange` (D5 §12). The edge contract in `d7-employee.test.ts` and the audit table in `d6-audit.test.ts` name it.
+- **The Owner's role still holds everything.** `grant_to_complete_roles()` (§11) gives every live role that held every other key
+  the two new ones, in its first granter's name. Onboarding gives the Owner all 124 (`onboarding.test.ts`).

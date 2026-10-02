@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit",
     "perf": "node test/perf/perf.ts",
     "demo": "node src/cli/demo.ts",
-    "ledger:check": "node src/cli/ledger-check.ts"
+    "ledger:check": "node src/cli/ledger-check.ts",
+    "payments:check": "node src/cli/payments-check.ts"
   },
   "dependencies": {
     "fastify": "5.12.5",

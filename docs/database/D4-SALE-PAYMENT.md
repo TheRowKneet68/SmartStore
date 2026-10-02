@@ -427,3 +427,116 @@ refusal is still `SS021`, and names the first use.
 - **Mutation check:** the route's 10 mutants are all detected (`plan-d-name.mjs`): the wildcard, the organization,
   an archived variant, a product not released, an unclassified variant, no price at the store, the variant's name,
   the limit, the barcode, and the key. The scan's 9 mutants were run again after the refactor, and all are detected.
+
+## 14. Owner decision D-16 in Domain 4 (2026-10-02)
+
+- **Reading a receipt needs `Sale.Create`** (Q13), not `Sale.View`. It is receipt issuance, the cashier's work. The
+  sales list and a sale's detail stay under `Sale.View` (`MS-02`).
+  - A test proves both.
+  - Its mutant is detected (`plan-e1.mjs` R01), and `plan-b3.mjs`'s R01 was repointed at the new key.
+- **A disabled till goes back into service** with `Device.Disable` and a reason (Q6, `HD-32`). The test that proved the
+  edge refused now proves this, and that the till then trades again. `plan-d4-edges.mjs`'s V02, which mutated the old
+  refusal, is retired.
+- **A card tender's keys are in the data** (Q1–Q3): submit under `Sale.Create`, capture under `Payment.Capture`, void
+  under `Payment.Void`. The card path itself is not built yet; that is Phase E's card step.
+- **Reopening a shift stays unbuilt.** D-16 names `Shift.Reopen`, but what the recount counts, and what happens to the
+  float already handed on, is not specified (OQ-033).
+
+## 15. Phase E: card payments, through a simulated gateway (2026-10-02)
+
+Code: `server/src/modules/payments/` (`gateway.ts`, `simulated-gateway.ts`, `card-payment.ts`) and `sales.ts`; tests
+`payments/card.test.ts` (24). The owner's brief: card payments work on sales, the gateway is clearly marked TEST /
+simulated, no key or rule is invented. ADR-31 §13 item 4 chose a `PaymentGateway` interface with a simulated
+implementation; a real acquirer needs an account and secrets, which are the owner's call.
+
+**The gateway is TEST / simulated, and says so.** `SimulatedGateway` moves no money and talks to no provider. Its file header
+says so; `simulated` is true on the object; `main.ts` logs a warning when the server starts; every reference it issues
+starts with `SIM-`, and a payment or refund carrying one is reported `simulated: true` (the sale's detail and receipt, and a
+refund). It accepts only tokens that start with `TEST-`: a real card number in the token is declined (`SIM_ONLY_TEST_TOKENS`),
+never used, and stored nowhere (`PY-43`, `PY-44`). A token chooses the outcome:
+
+| Token | Authorize | Then |
+|---|---|---|
+| `TEST-APPROVE` | Approved | capture and refund approved |
+| `TEST-DECLINE` / `TEST-FAIL` / `TEST-ERROR` | Declined / Failed / Errored | |
+| `TEST-TIMEOUT` | Timeout, the provider did approve | a query finds it Approved |
+| `TEST-TIMEOUT-LOST` | Timeout, the provider never saw it | a query finds nothing |
+| `TEST-CAPTURE-FAIL` / `TEST-CAPTURE-TIMEOUT` | Approved | capture Failed / Timeout, the provider did capture |
+| `TEST-REFUND-DECLINE` / `-FAIL` / `-TIMEOUT` | Approved | refund Declined / Failed / Timeout, the provider did refund |
+
+**The interface** is the five commands of `PY-07` and the closed outcomes of `PY-10`. Every call carries a merchant reference
+derived from the payment's or refund's own id, so a retry after a timeout is the same request and never a second charge
+(architecture §13.3). Money crosses as integer minor units. No file outside `simulated-gateway.ts`, `main.ts` and tests names
+the simulated class; a test asserts it (`PY-08`).
+
+**A card sale** (`POST /stores/:storeId/sales` with `card: { token, amount? }`, beside or instead of `cash`):
+1. **Planned and checked first.** The cart is planned (settings, shift, method enabled, every line priced and taxed) and the
+   tender is checked, so a tender that does not add up is refused before the card is touched (`SP-40`, `PY-19`). A card is never
+   overpaid; only cash gives change; with cash and card both, the card's amount is said (`PY-16`).
+2. **Committed:** the checkout and the card's `Pending` payment (`PY-42`: every attempt recorded).
+3. **The provider authorizes**, outside any transaction (`PY-36`), and the result is committed: `Authorized`, or `Declined` and
+   `Failed` (terminal, `D-14`, `PY-54`, and the checkout is abandoned), or a timeout, which leaves the payment `Pending`.
+4. **The provider captures**, and `Captured` is committed. This is `Payment.Capture` (D-16 Q2), checked before the provider is
+   asked for anything; the submit is `Sale.Create`, the route's own key.
+5. **The sale commits** in the one completion transaction of §1, with the card as the first payment and cash, if any, the
+   second (`PY-20`: the card first, since only it can fail). `assert_sale_complete()` checks it whole.
+
+**It is resumable by the cart's operation id** (`PY-39`). Sending the same sale again picks the payment up where it stopped:
+a timed-out authorization is resolved by asking the provider what it holds (`PY-11`), never by failing it for the silence
+(`PY-41`) and never by authorizing again; a failed or timed-out capture is tried again under the same reference; and a sale
+that could not be saved after the money was taken stays on its open checkout, the answer says `cardCaptured: true`, and the
+same request completes it without a second charge (`PY-37`, `PY-38`). If the cart no longer adds up to what was charged,
+the sale is not saved and the charge stands for a person (`total_changed`; never adjusted silently, `PY-40`).
+
+**Refused answers** (the cart survives, `SP-43`): `card_declined`, `card_failed`, `card_pending`, `card_capture_failed`,
+`card_not_accepted`, `underpaid`, `card_overpaid`, `card_covers_total`, `card_amount_needed`.
+
+**Not built:**
+- **Voiding** a `Pending` or `Authorized` payment (`Payment.Void`, `PY-13`) and the **reconciliation job** (`PY-40`): a payment
+  left `Authorized` or `Pending`, or captured with no sale, waits for a person (OQ-036 item 2).
+- The **provider per store and method** (`PY-09`) and `Payment.Provider.Configure`: one gateway serves the process.
+- The card's **last four, scheme and expiry** for display (`PY-43`): the simulated provider supplies none, and no column holds them.
+- Offline card payment (`PY-47`, `PY-48`), with offline.
+- Mobile wallets and the other method types (`PY-03`).
+
+## 16. Orphaned payments, part A: void, and the report (2026-10-02)
+
+Code: `payments/card-payment.ts` (`voidCardPayment`), `attention.ts`, `routes.ts`, `server/src/cli/payments-check.ts`; tests in
+`payments/card.test.ts`. `OQ-036` item 2, part A. No key is new: the void is `Payment.Void` (D-16 Q3) and the report is read under
+`Payment.View` ("see payments and refunds"). Part B, what returns the money of a payment that was captured and never became a
+sale, is the owner's to decide and is not built.
+
+**Void** (`POST /stores/:storeId/payments/:id/void`, `Payment.Void`). A `Pending` or `Authorized` card payment is voided at the
+provider, outside any transaction (`PY-36`), under the payment's own merchant reference, so asking again is the same request
+(§15). A captured payment is refunded, never voided (`PY-12`, `PY-13`); a declined, failed or voided one is over; a cash payment is
+not voided at a provider.
+
+| The payment | What the void does |
+|---|---|
+| `Authorized`, the provider holds it | The provider is asked to void it; `Approved` records `Voided` |
+| `Pending`, the provider holds the authorization (a timeout it did act on) | Asked what it holds (`PY-11`), found, voided there, `Voided` |
+| `Pending`, the provider holds nothing (a timeout it never saw) | There is nothing to cancel there, so a **person** voids it here, and the answer says `providerHeld: false`. It is the one place silence from the provider is acted on, and it is a manual, permissioned act on the report, not an automatic one (`PY-41`) |
+| The provider does not confirm | The payment is unchanged: `void_failed`, or `void_pending` when it may have happened (a timeout, an error). Voiding again asks again and does it once |
+
+A voided payment is terminal (`PY-54`). Its checkout, if it never became a sale, is abandoned with the cart, and the same sale sent
+again answers `card_voided`. Voiding a voided payment returns it and asks the provider nothing (`SM-04`).
+
+**The report** (`GET /stores/:storeId/payments/attention?olderThanMinutes=N`, `Payment.View`; and `npm run payments:check --
+--older-than N [--store id]`, which exits non-zero when anything needs a person, as `ledger:check` does). It is the escalation of
+`PY-40`, "reported, never auto-adjusted", and changes nothing. It lists card payments that are not settled:
+
+| Kind | What it is |
+|---|---|
+| `PendingTooLong` | The provider has not said yes or no (`PY-11`, `PY-41`) |
+| `AuthorizedNotCaptured` | Funds reserved and never taken |
+| `CapturedNoSale` | Money taken and the checkout never became a sale (`PY-37`) |
+
+Each row says what a person needs: the payment, its amount and age, what the provider last said, whether the gateway was simulated
+(null while the provider has given no reference), and the cart's operation id, because sending the same sale again resumes the
+payment (§15). No card data is in it. Age runs from when the payment entered its present state. A summary counts every kind across
+all pages. **The window is required and never defaulted:** `PY-40` calls it "configured" and gives no value (OQ-037).
+
+**Not built:** the scheduler that would run the check (`BQ-02`); the provider comparison against a settlement file (`PY-40`); the
+notification when something needs a person; and part B.
+
+**Owner decision D-18 (2026-10-02) completes part B** (D5 §13). A refund may name a captured card payment instead of a sale, so the money of a `CapturedNoSale` payment goes back to the card under the refund's own keys. The report keeps a payment until it has all been given back, and shows `heldBack` and `givenBack`; paying such a refund gives its cart up, and the same sale answers `card_refunded`. A payment being refunded cannot become a sale (`SS059`).

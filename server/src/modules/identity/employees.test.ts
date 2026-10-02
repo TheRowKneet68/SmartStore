@@ -210,20 +210,21 @@ describe('the transition endpoint, on the Employee machine (architecture s8.4, s
     expect((await db.app.query('SELECT status FROM employee WHERE id = $1', [id])).rows).toEqual([{ status: 'Active' }]);
   });
 
-  it('SM-02d, OQ-025: an edge whose permission is undecided refuses everyone, even a holder of every key', async () => {
+  it('D-16, SM-50: back from leave takes Employee.Edit; reactivation after suspension takes Employee.Reactivate and a reason, which Employee.Edit does not give', async () => {
     const m = await managed(['Employee.Create', 'Employee.Edit']);
     const id = await newEmployee(m);
+    const reason = await insertReasonCode(db.app, m.org);
+    await transition(m.as, id, 'leave', { reasonCodeId: reason });
+    expect((await transition(m.as, id, 'reactivate')).json(), 'back from leave').toEqual({ subject: id, state: 'Active', changed: true });
+
     await transition(m.as, id, 'suspend');
-    const everything = await employeeWithAccess(db.app, m.org, [], { assignedStore: null, accessStores: [] });
-    await db.app.query(
-      `INSERT INTO role_permission (role_id, organization_id, permission_key, granted_by)
-       SELECT a.role_id, a.organization_id, p.key, $2 FROM employee_role_assignment a, permission p WHERE a.employee_id = $1`,
-      [everything, actor()],
-    );
-    const reactivate = await transition(signedInAs(everything, m.org), id, 'reactivate');
-    expect(reactivate.statusCode).toBe(403);
-    expect(reactivate.json().error.code).toBe('not_permitted');
+    const refused = await transition(m.as, id, 'reactivate', { reasonCodeId: reason });
+    expect(refused.statusCode, 'Employee.Edit suspends, but does not restore access').toBe(403);
+    expect(refused.json().error.message).toContain('Employee.Reactivate');
+    const restorer = signedInAs(await employeeWithAccess(db.app, m.org, ['Employee.Reactivate'], { assignedStore: null, accessStores: [] }), m.org);
+    expect((await transition(restorer, id, 'reactivate')).json().error.code, 'SM-50: a reason, always').toBe('SS055');
     expect((await db.app.query('SELECT status FROM employee WHERE id = $1', [id])).rows).toEqual([{ status: 'Suspended' }]);
+    expect((await transition(restorer, id, 'reactivate', { reasonCodeId: reason })).json()).toEqual({ subject: id, state: 'Active', changed: true });
   });
 
   it('SS055, D-06, AU-05: an edge that needs a reason refuses without one, and records it, with the actor, when given', async () => {

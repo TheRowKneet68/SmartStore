@@ -15,7 +15,11 @@ import { sessionAuthenticator, type SessionPolicy } from './modules/identity/ses
 import { adjustmentMachine, adjustmentRoutes } from './modules/inventory/adjustments.ts';
 import { reasonRoutes } from './modules/inventory/reasons.ts';
 import { stockRoutes } from './modules/inventory/stock.ts';
+import { refundMachine, refundRoutes } from './modules/returns/refunds.ts';
+import { returnMachine, returnRoutes } from './modules/returns/returns.ts';
 import { organizationRoutes } from './modules/organization/routes.ts';
+import type { PaymentGateway } from './modules/payments/gateway.ts';
+import { paymentRoutes } from './modules/payments/routes.ts';
 import { paymentMethodRoutes } from './modules/sales/payment-methods.ts';
 import { quoteSigner } from './modules/sales/quotes.ts';
 import { saleRoutes } from './modules/sales/sales.ts';
@@ -29,6 +33,8 @@ export interface AppOptions {
   quoteMaxAgeMinutes: number;
   /** How long a transaction that moves stock waits for a contended balance (IV-23, OQ-027). */
   lockTimeoutMs: number;
+  /** The payment provider (`PY-07`, `PY-08`). v1 runs the simulated one: ADR-31 §13 item 4, `main.ts` says so when it starts. */
+  gateway: PaymentGateway;
   /** How a request's principal is found: the session cookie. Tests may substitute their own. */
   authenticate?: Authenticate;
   logger?: boolean;
@@ -67,14 +73,17 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   await app.register(scanRoutes, { ...v1, quotes });
   await app.register(tillRoutes, v1);
   await app.register(paymentMethodRoutes, v1);
-  await app.register(saleRoutes, { ...v1, quotes, quoteMaxAgeMinutes: options.quoteMaxAgeMinutes, lockTimeoutMs: options.lockTimeoutMs });
+  await app.register(saleRoutes, { ...v1, quotes, quoteMaxAgeMinutes: options.quoteMaxAgeMinutes, lockTimeoutMs: options.lockTimeoutMs, gateway: options.gateway });
   await app.register(shiftCloseRoutes, v1);
+  await app.register(returnRoutes, v1);
+  await app.register(paymentRoutes, { ...v1, gateway: options.gateway });
+  await app.register(refundRoutes, { ...v1, gateway: options.gateway, lockTimeoutMs: options.lockTimeoutMs });
   await app.register(reasonRoutes, v1);
   await app.register(adjustmentRoutes, v1);
   await app.register(stockRoutes, v1);
   await app.register(transitionRoutes, {
     ...v1,
-    machines: [employeeMachine, productMachine, deviceMachine, adjustmentMachine, shiftMachine],
+    machines: [employeeMachine, productMachine, deviceMachine, adjustmentMachine, shiftMachine, returnMachine, refundMachine],
     lockTimeoutMs: options.lockTimeoutMs,
   });
 

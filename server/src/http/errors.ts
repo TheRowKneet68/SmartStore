@@ -22,7 +22,11 @@ export class AppError extends Error {
 interface PgError {
   code?: string;
   constraint?: string;
+  detail?: string;
 }
+
+/** What a refusal's DETAIL means to the client, so it can show it (`RT-148`: the refusal names the remainder). */
+const DETAIL_NAME: Record<string, string> = { SS046: 'remaining', SS048: 'windowClosedOn', SS049: 'remaining', SS058: 'remaining' };
 
 /**
  * Messages for the business-rule refusals the database raises (CONVENTIONS §15). A domain adds its own when its routes
@@ -57,7 +61,17 @@ const BUSINESS_RULES: Record<string, string> = {
   SS042: 'A shift needs its opening float counted, and a count before it closes.',
   SS045: 'That payment method is not taken at this store.',
   SS038: 'The tax mode cannot change once the store has made a sale, and a sale must use the settings in force.',
+  SS046: 'That is more than is still returnable on that line.',
+  SS047: 'That disposition does not go to that kind of location.',
+  SS048: 'The return window for this sale has closed. A return after it needs an approver and a reason.',
+  SS049: 'That is more than is still refundable on that line.',
+  SS050: 'That is not a captured payment of this sale.',
+  SS051: 'A refund for a return can pay only for lines that the posted return took back.',
+  SS052: 'The tax on that refund is not in proportion to the line. Draft it again.',
+  SS053: 'The refund did not add up, so nothing was saved.',
   SS055: 'This needs a reason. Choose one and try again.',
+  SS058: 'That is more than is still left to give back to that payment.',
+  SS059: 'A payment is refunded without its sale only while it has none, and a sale cannot be made from a payment that is being refunded.',
   SS057: 'This employee has a till shift that is not closed. Close it first.',
 };
 
@@ -79,6 +93,10 @@ const CHECKS: Record<string, string> = {
   ck_stock_adjustment_separation: 'The approver must be someone other than the person who submitted it.',
   ck_stock_adjustment_line_positive: 'A quantity must be more than zero.',
   ck_stock_adjustment_line_type: 'That kind of line does not belong on this kind of document.',
+  ck_customer_return_late_separation: 'The approver must be someone other than the person who opened the return or posts it.',
+  ck_refund_separation: 'The approver must be someone other than the person who drafted or submitted the refund.',
+  ck_refund_goodwill_reason: 'A refund with no return needs a reason.',
+  ck_refund_sale_or_payment: 'A refund is of a sale, or of a card payment that never became one, and then it needs a reason.',
 };
 
 /** Uniqueness a client can run into, by constraint or index, with what it means. */
@@ -99,6 +117,10 @@ const UNIQUE: Record<string, string> = {
   uq_pos_terminal_code: 'That till code is already in use in this store.',
   uq_payment_method_code: 'That payment method code is already in use.',
   uq_reason_code_code: 'That reason code is already in use.',
+  uq_customer_return_operation: 'That return was already opened.',
+  uq_customer_return_line_operation: 'That line was already added.',
+  uq_refund_operation: 'That refund was already drafted.',
+  uq_refund_line_per_sale_line: 'A refund has one amount per sold line.',
 };
 
 export function toApiError(error: unknown): AppError {
@@ -114,7 +136,13 @@ export function toApiError(error: unknown): AppError {
   const pgError = error as PgError;
   const code = pgError.code ?? '';
   if (/^SS\d{3}$/.test(code)) {
-    return new AppError(409, code, BUSINESS_RULES[code] ?? `This was refused by a business rule (${code}).`);
+    const name = DETAIL_NAME[code];
+    return new AppError(
+      409,
+      code,
+      BUSINESS_RULES[code] ?? `This was refused by a business rule (${code}).`,
+      name !== undefined && pgError.detail !== undefined ? { [name]: pgError.detail } : {},
+    );
   }
   const check = code === '23514' && pgError.constraint !== undefined ? CHECKS[pgError.constraint] : undefined;
   if (check !== undefined) return new AppError(422, 'invalid_value', check);

@@ -8,7 +8,8 @@
 | **DESIGNED** | Everything in this document |
 | **IMPLEMENTED** | The migration: tables, constraints, triggers, grants, the CustomerReturn and Refund machines as data |
 | **TESTED** | `server/test/d5-returns.test.ts` (38 tests) plus the schema-wide suites; 229 passing |
-| **Not built** | Everything in §9, and all application code, including the returns screen and the refund provider call |
+| **Application layer** | Built 2026-10-02: the return and refund routes and both machines on the transition endpoint (§10), tested through the routes (`server/src/modules/returns/returns.test.ts`, 19) |
+| **Not built** | Everything in §9, the returns screen, a read of returns and refunds (OQ-035), and the refund provider call |
 
 Sources: [returns-refunds-domain.md](../product/returns-refunds-domain.md) (`RR-*`),
 [payment-domain.md](../product/payment-domain.md) §6 (`PY-21`..`PY-28`), [cash-management.md](../product/cash-management.md)
@@ -291,3 +292,197 @@ Recorded in BUILD-STATUS with their rules:
 - The goodwill concentration report (`RR-37`, `RT-523`).
 - The customer-facing refusal text (`RT-524`, UX phase).
 - Restocking fees, which are out of scope per the domain itself.
+
+## 10. The application layer (2026-10-02)
+
+Code: `server/src/modules/returns/returns.ts` and `refunds.ts`; tests `returns.test.ts` (19). The database does the work
+(§1 to §5); the application chooses the order and says no early. Every key is one the specification names (D-16,
+`state-machines.md` §22.7, `actors-and-roles.md` §2.5).
+
+**Returns** (`/api/v1/stores/:storeId/...`)
+
+| Act | How | Key |
+|---|---|---|
+| Open a draft against a sale of this store | `POST /returns { clientOperationId, saleId }`; a repeat returns the return already opened (`RR-15`) | `Return.Create` |
+| Add a line | `POST /returns/:id/lines { clientOperationId, saleLineId, quantity, disposition, locationId }`. The variant comes from the sold line (`BI-16`). No default disposition (`RR-18`). The location must be the store's own (`MS-16`) | `Return.Create` |
+| Remove a draft line | `DELETE /returns/:id/lines/:lineId` | `Return.Create` |
+| Approve a late return | `POST /returns/:id/late-approval { reasonCodeId }`, by the approver, in their own session, while the return is a draft (`RR-11`) | `Return.Approve` |
+| Post | `POST /transitions` `CustomerReturn` `post`: stamps who posted, writes one `SALE_RETURN` per line into its dispositioned location in `(variant, location)` order, in the same transaction. An empty return is refused first | `Return.Create` (the edge) |
+| Cancel | `CustomerReturn` `cancel`, with `reasonCodeId` recorded in `cancel_reason_code_id` (`SM-42`) | `Return.Create` (D-16) |
+
+**Refunds**
+
+| Act | How | Key |
+|---|---|---|
+| Draft | `POST /refunds { clientOperationId, saleId, returnId?, method, paymentId?, reasonCodeId?, lines: [{ saleLineId, amount }] }`. The server derives the disbursement (§4.1), takes the till and open shift from the session for a drawer refund, and computes each line's tax as the cumulative proportion (`SS052`). The draft is bounded by what is left of each line (`SS049`) | `Sale.Refund` |
+| Submit, approve | `Refund` `submit`, `approve`: stamp who did it | `Sale.Refund`, `Sale.Refund.Large.Approve` |
+| Pay | `Refund` `submit to provider`: takes the hold, and for a **drawer** refund writes the `RefundFromDrawer` row and completes the refund in the same transaction (`PY-27`). The answer carries the state it is in then: `Completed` | `Refund.Pay` (D-16) |
+| Cancel | `Refund` `cancel`, with a reason, from `Approved` or `Processing` (`SM-40`) | `Sale.Refund` (D-16) |
+| Retry | `Refund` `retry` (`Failed → Processing`) | `Sale.Refund` (D-16) |
+
+**What the transition endpoint gained.** A machine may name `reasonColumnFor(to)`, the column that records why a subject
+entered a state; it is set in the same statement as the state, because the table's own check ties them together, and a
+request with no reason is refused first with `SS055`. The answer to a transition is the state read after the use case ran.
+
+**What a sale's detail gained** (`Sale.View`, as before): each line's id, returned quantity, settled amount and refunded
+amount; the sale's status; and its captured payments. A return or refund is drafted against these.
+
+**Refused, not built:**
+- **A refund to a card.** Paying one calls the payment provider, which does not exist (card payments through the simulated
+  gateway are the next piece of Phase E). `submit to provider` on a `Provider` refund answers `provider_not_available`
+  and changes nothing. `retry` is the same. `fail` and `complete` are system edges no person can fire, so a refund
+  cannot reach `Failed` until the gateway can.
+- **Reading returns and refunds.** No catalogue key names a read of them (OQ-035), so there is no list or detail route.
+  A write returns the document it made or changed, to someone who holds that write's key.
+- `Posted → Settled → Closed` (keys open, OQ-023 item 2), exchange, store credit, goodwill returns, batch attribution,
+  loyalty reversal and the notifications (§9).
+
+**Open, recorded in OQ-035:** the key for reading, the keys for creating (not edges), where a late approval is given
+from and its audit event, whether the person who pays must be at the refund's till, and a draft that cannot be withdrawn.
+
+**Proved by (`returns.test.ts`):**
+
+| Rule | Test |
+|---|---|
+| `RR-14`, `RR-15`, `RR-17`, `SP-66`, `SM-38` | A return is opened, filled and posted; the stock comes back; the sold line and the sale's status follow, through `Returned`; a repeat opens nothing; a posted return cannot be cancelled or changed; no drift |
+| `RR-14`, `RT-148` | Over-returning is refused as built and at posting, naming the remainder |
+| `RR-17`..`RR-19`, `BE-36`, `MS-16` | No default disposition; each disposition only to its kind of location; the movement names it; only the store's own locations |
+| `RR-08`, `RR-13`, `BI-16`, `MS-04` | Another store's sale, line or return does not exist to the caller |
+| `RR-16`, `SM-04` | A repeated line is added once; a draft line is removed only through its own return |
+| `SM-42`, `BI-40`, `D-16` | A cancel needs a live reason and moves nothing; an empty return cannot post |
+| `AC-01`, `D-16` | Each act needs its own key and no neighbour's; no session is `401` |
+| `RR-10`, `RR-11`, `AP-08` | Past the window: refused naming the day; posts with `Return.Approve` and a reason; the approver is neither opener nor poster; a window's last day is inside |
+| `RR-22`, `RR-24`, `PY-27`, `RT-156`, `RR-06` | A refund is drafted, submitted, approved by another and paid from the drawer; the line holds it; the tax adds to exactly what was charged (114 then 113 of 227) |
+| `RR-03`, `RR-24`, `PY-22`, `EC-02` | More than is left is refused as drafted and at the hold; two drafts of the same money cannot both be paid |
+| `RR-22`, `PY-25`, `BI-09` | Cash names no tender; a tender names a captured payment of this sale; a drawer refund needs a till and an open shift |
+| `RR-35`, `PY-26` | A refund with no return needs a reason; a repeat drafts nothing new; a line appears once and is of the sale |
+| `RR-01`, `SS051` | A refund for a return pays only the lines the posted return took back |
+| `BI-26`, `AP-08`, `AP-03`, `D-16` | The approver is not the submitter; paying is `Refund.Pay`; creating and cancelling are `Sale.Refund`; lines fixed after submission |
+| `PY-27`, `PT-03`, `SS025` | A drawer refund is refused whole at a till out of service |
+| `RR-23`, `PY-25` | A card refund is refused whole, holding nothing |
+
+## 11. Card refunds, through the simulated gateway (2026-10-02)
+
+Code: `refunds.ts` (`payByProvider`), `payments/`; tests `payments/card.test.ts`. The gateway and its marking are D4 §15. A refund
+whose disbursement is `Provider` (§4.1: an original-tender refund of a captured card payment) is now payable.
+
+| Act | Route | Key |
+|---|---|---|
+| Pay | `POST /stores/:storeId/refunds/:id/pay` | `Refund.Pay` (D-16) |
+| Retry a failed one | `POST /stores/:storeId/refunds/:id/retry` | `Sale.Refund` (D-16) |
+| Draft, submit, approve, cancel | as §10: the draft route, and the transition endpoint | as §10 |
+
+A card refund is drafted without a till (§4.1: no drawer), so a back-office session may draft it. It is paid by its own routes
+and the transition endpoint refuses it (`use_pay_route`), because the provider is never asked inside a transaction (`PY-36`).
+Three steps, each committed: (1) `Approved → Processing` (or `Failed → Processing` on a retry), where the owner's trigger
+takes the hold, which stays through failure and retry (`RR-24`, `SM-40`, `SM-41`); (2) the provider is asked to refund the
+captured payment under the refund's id as the merchant reference, so asking again is never a second refund; (3) the answer
+is recorded.
+
+| The provider says | The refund becomes |
+|---|---|
+| `Approved` | `Completed`, with the provider's reference (`SIM-RF-…`); the line keeps its hold |
+| `Declined`, `Failed`, `Errored` (a first answer) | `Failed`: held, retryable, answered `refund_failed` |
+| `Timeout`, or does not know a refund it was already asked about | stays `Processing`, answered `refund_pending`; paying again asks the provider what it holds and does not refund twice (`PY-11`, `PY-41`) |
+
+Paying a refund that is `Processing` resumes it; one that is `Completed` returns unchanged and asks the provider nothing
+(`SM-04`). A pending refund may be cancelled with a reason, which releases the hold (§4.3).
+
+**A gap this exposed (OQ-036 item 1):** the contract has `Approved|Processing → Cancelled` and `Failed → Processing`, and no cancel
+from `Failed`. A refund the provider keeps declining therefore keeps its hold until a retry succeeds; nothing may release it.
+Not built around: an edge is the owner's to add.
+
+Not built: the failure **notification** (`SM-41`, `RR-23`), with the notification outbox; the refund **cap per tender**
+(OQ-023 item 6); the reconciliation job (`PY-40`).
+
+## 12. Owner decision D-17 (2026-10-02)
+
+Migration `20261002120000_d17_return_refund_view_and_withdraw.sql`; code `returns.ts`, `refunds.ts`; tests in `returns.test.ts`.
+
+- **A draft refund may be withdrawn** (item 5). `Draft → Cancelled` on `cancel`, under `Sale.Refund` (D-16 Q9), with a live reason
+  (`SM-42`, `BI-40`), audited as `Refund.StateChange`, through the transition endpoint like the other cancels. A draft holds
+  nothing (§4.3: the hold is taken at `Processing`), so nothing is released, and its lines stay as drafted (`AP-03`). It is final:
+  a withdrawn refund cannot be submitted. Not offered from `PendingApproval`. A withdrawn draft was never submitted, so
+  `ck_refund_submitted_when` gains its one exception, a cancelled refund that was never approved (`SM-03`). The key and reason
+  are this design's reading of D-16 Q9, raised for the owner's veto (OWNER-DECISIONS D-17).
+- **The payer is at the refund's till** (item 4, `PY-27`). A drawer refund is drafted at a till and goes out of that till's
+  drawer and shift (§4.4), so the person who pays it, `submit to provider`, must be signed in at that till. Anyone else, and a
+  back-office session, is refused `not_at_refund_till`, whole: nothing is held and nothing is paid. A card refund has no till and
+  is not affected. It is an application rule, in the refund machine's before-hook, because the session's till is known only to
+  the application.
+- **Returns and refunds are read** (items 7 and 8). `GET /stores/:storeId/returns` and `…/returns/:id` under `Return.View`;
+  `GET /stores/:storeId/refunds` and `…/refunds/:id` under `Refund.View`. Newest first, a page at a time by document number
+  (`limit`, `after`, answering `{ items, next }`), filtered by `status` or `saleId`. A list row carries the document and its
+  sale's number; one document carries its lines. Another store's document does not exist to the caller (`MS-04`). Neither key is
+  implied by a write key: `Return.Create` does not read, and `Sale.Refund` does not read.
+
+| Rule | Test (`returns.test.ts`) |
+|---|---|
+| D-17 item 4, `PY-27` | A drawer refund is paid at its till, and refused whole at another till and at the back office |
+| D-17 item 5, `SM-42`, `BI-40` | A draft is withdrawn with a reason under `Sale.Refund`; no key is refused; withdrawn is final; one past `Draft` is not withdrawable |
+| D-17 items 7 and 8, `MS-02` | Each read is its own key, in the store, paged and filtered; no write key stands in; another store's document is `404`; no session is `401` |
+| D-17 | The catalogue is 124; the Owner holds both keys; the edge contract and the audit table name the new edge |
+
+## 13. Owner decision D-18: a refund of a payment that never became a sale (2026-10-02)
+
+Migration `20261002130000_d18_refund_of_a_payment.sql`; code `refunds.ts`, `payments/attention.ts`, `payments/card-payment.ts`; tests in
+`payments/card.test.ts`. `OQ-036` item 2, part B, the owner's option 1. The keys are the refund's own, unchanged: draft and submit
+`Sale.Refund`, approve `Sale.Refund.Large.Approve`, pay `Refund.Pay`.
+
+**Why.** A card is charged, the sale cannot be saved, and the till never sends it again: money taken for nothing (`PY-37`). A
+captured payment's only way out is a linked refund (`PY-12`), and a refund needed a sale (`RR-01`). So a refund may now name a
+captured card payment **instead of a sale**. Everything else about a refund is as it was: the machine of §22.7, the second-person
+approval (`BI-26`), the hold (`RR-24`), the provider round trip outside the transaction (`PY-36`), the failure, retry and
+cancel (§11), the withdrawal of a draft (§12), the audit, and the reads.
+
+| | A refund of a sale | A refund of a payment (D-18) |
+|---|---|---|
+| Names | A sale, its lines, optionally a return | A captured card payment of the same store and currency, an amount |
+| Lines, tax | Allocated to sold lines, each with its proportional tax (`RR-06`) | None: no sale charged any tax, so the tax is 0 |
+| Reason | When it has no return (`RR-35`) | Always (it is goodwill in the sense of `RR-35`) |
+| Paid | The drawer or the provider, by the tender | The provider, to the card |
+| Bounded by | Each line's settled amount, held on the line (`SS049`) | What the payment took less what is held back to it, held on **`payment.refunded_amount`** (`SS058`) |
+| The hold | One conditional `UPDATE` on each line, when it enters `Processing` | One conditional `UPDATE` on the payment, at the same moment |
+
+**The counter.** `payment.refunded_amount` is written only by the owner's hold trigger, never more than the payment took
+(`ck_payment_refunded`), and only a captured payment gives anything back. The payment stays frozen in every other column (`PY-12`,
+`SS035`): `payment_before_write()` lets the hold move that one counter. Entering `Processing` raises it with one conditional increment,
+atomic with no read-then-write race, so five refunds of 1,000 against a payment of 3,000 paid at once make exactly three (tested). `Failed`
+and `Completed` keep the hold, and only a cancellation releases it (`SM-40`, `SM-41`). `payment_refund_drift()` rebuilds the counter
+from the refunds and never repairs, as `sale_counter_drift()` does for the lines.
+
+**The two ways to be paid back cannot both happen (`SS059`).** A payment with a sale is refunded through the sale, never without it. A
+payment that is being refunded without one, **even as a draft**, cannot become a sale: `assert_sale_complete()` refuses it. Otherwise
+the customer would be given the money back and the goods too (`PY-37`). A withdrawn draft (§12) is no obstacle, and the same sale can
+then complete on the money that was taken. A sale made from the payment before any refund is drafted simply ends the matter: it has a sale.
+
+**In the application.** `POST /stores/:storeId/refunds` with no `saleId` takes `{ clientOperationId, method: 'OriginalTender',
+paymentId, amount, reasonCodeId }` and nothing else (a return, lines or any other field is refused). It is bounded as drafted by what is
+left (`SS058` names it), and the atomic bound is the hold. Paying it, at `POST …/refunds/:id/pay`, **gives its cart up** (the checkout
+is abandoned), because the money is going back; the same sale then answers `card_refunded`. The report (D4 §16) keeps a payment until
+it has all been given back, and shows what is held and what has been given back.
+
+**Read, not written, by the owner (raised for veto):** only a **card** payment is refunded this way (a cash payment exists only with
+its sale); the refund may be **partial**, in parts, up to what the payment took (`PY-24`); a reason is required; and a refund, even a
+draft, blocks the sale. Each follows from option 1 and from `PY-37`; none adds a key.
+
+**Not built:** a refund cap per tender for refunds *of sold lines* (`OQ-023` item 6); the failure notification (`SM-41`).
+
+| Code | Meaning | Raised by |
+|---|---|---|
+| `SS058` | A refund of a payment asks for more than the payment has left to give back; `DETAIL` is the remainder | `apply_refund_hold()` |
+| `SS059` | A payment with a sale is refunded through the sale; a payment being refunded cannot make one; only a card payment is taken back without its sale | `refund_before_write()`, `apply_refund_hold()`, `assert_sale_complete()` |
+
+## 14. Owner decision D-19: a failed refund is cancelled (2026-10-02)
+
+Migration `20261002141000_d19_cancel_a_failed_refund.sql`; tests in `payments/card.test.ts`. Supersedes §11's "A gap this exposed" and `OQ-038`.
+
+- **The edge.** `Failed → Cancelled`, on the refund's `cancel` event, under `Sale.Refund` (D-16 Q9), with a live reason (`SM-42`, `BI-40`), audited as `Refund.StateChange`, through the transition endpoint like the other cancels. The same pattern as the withdrawal of a draft (§12). A refund can now be cancelled from `Draft` (withdrawn), `Approved`, `Processing` and `Failed`, and not from `PendingApproval`.
+- **The hold is released.** It is taken entering `Processing` and kept through `Failed` (`RR-24`, `SM-41`). A cancellation from `Processing` or from `Failed` releases it: on each sold line, or, for a refund with no sale, on the payment (§13). So a refund the provider keeps declining no longer holds its money for ever, and the same money can be refunded again. `sale_counter_drift()` and `payment_refund_drift()` count a held refund as `Processing`, `Failed` or `Completed` only, so they agree.
+- **Final.** A cancelled refund is not retried (`SS035`). Retry remains the other way out of `Failed`.
+
+| Rule | Test (`card.test.ts`) |
+|---|---|
+| D-19, `SM-42`, `BI-40`, `RR-24` | A failed card refund of a sale is held through the failure; cancelling needs a reason and `Sale.Refund`; the line is free and the drift check empty; it cannot be retried; the money can be refunded again |
+| D-19, D-18, `PY-22` | A failed refund of a payment with no sale holds the payment; cancelling releases it, the report shows it as unsettled with nothing held, and the whole payment can be asked for again |
+| D-19 | The edge contract and the audit table name `Failed → Cancelled` |

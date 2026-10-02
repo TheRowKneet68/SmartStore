@@ -14,6 +14,10 @@ import {
 
 /** Domain 7 — Employee / Role / Permission. Design: docs/database/D7-EMPLOYEE-ROLE-PERMISSION.md */
 
+/** The five keys owner decision D-16 added to the catalogue. */
+const ADDED_BY_D17 = ['Return.View', 'Refund.View'];
+const ADDED_BY_D16 = ['Payment.Capture', 'Payment.Void', 'Employee.Reactivate', 'Refund.Pay', 'Shift.Reopen'];
+
 let db: TestDb;
 
 beforeAll(async () => {
@@ -268,10 +272,10 @@ describe('permissions (AC-01, AC-02, EM-13, MS-11, MS-12)', () => {
   const holds = async (w: Access, store: string | null, key: string) =>
     (await db.app.query<{ ok: boolean }>('SELECT employee_holds_permission($1, $2, $3) AS ok', [w.person, store, key])).rows[0]!.ok;
 
-  it('AC-02, D-01, RT-009: the catalogue is exactly the 117 keys of actors-and-roles s2, and only a catalogue key can be granted', async () => {
+  it('AC-02, D-01, D-16, RT-009: the catalogue is exactly the 124 keys of actors-and-roles s2, and only a catalogue key can be granted', async () => {
     const { rows } = await db.app.query<{ n: string }>('SELECT count(*) AS n FROM permission');
-    expect(rows[0]!.n).toBe('117');
-    for (const key of ['Product.Edit', 'Sale.Refund.Large.Approve', 'Inventory.Count.Post', 'Backup.Restore']) {
+    expect(rows[0]!.n).toBe('124');
+    for (const key of ['Product.Edit', 'Sale.Refund.Large.Approve', 'Inventory.Count.Post', 'Backup.Restore', ...ADDED_BY_D16, ...ADDED_BY_D17]) {
       expect((await db.app.query('SELECT 1 FROM permission WHERE key = $1', [key])).rows, key).toHaveLength(1);
     }
     const w = await world([]);
@@ -284,6 +288,41 @@ describe('permissions (AC-01, AC-02, EM-13, MS-11, MS-12)', () => {
       ]);
     expect(await sqlState(grant('Product.*')), 'a wildcard is not a key').toBe('23503');
     expect(await sqlState(grant('Refund.Large.Approve')), 'a name used in s4 but not in the catalogue').toBe('23503');
+  });
+
+  it("D-16, actors-and-roles s3.2, s4: when keys join the catalogue, a role that held every other key is given them, in its first granter's name; no other role is", async () => {
+    const everyOther = (await db.app.query<{ key: string }>('SELECT key FROM permission WHERE key <> ALL ($1)', [ADDED_BY_D16])).rows.map((r) => r.key);
+    // A role written as an Owner's role was before D-16: every key then in the catalogue. The first was granted by one
+    // person and the rest by another, so that whose name the new grants carry is a real choice.
+    const complete = await world([]);
+    const granter = actor();
+    const later = actor();
+    for (const [i, key] of everyOther.entries()) {
+      await db.app.query('INSERT INTO role_permission (role_id, organization_id, permission_key, granted_by) VALUES ($1, $2, $3, $4)', [
+        complete.role, complete.org, key, i === 0 ? granter : later,
+      ]);
+    }
+    const partial = await world(everyOther.slice(1));
+    const archived = await world([]);
+    for (const key of everyOther) {
+      await db.app.query('INSERT INTO role_permission (role_id, organization_id, permission_key, granted_by) VALUES ($1, $2, $3, $4)', [
+        archived.role, archived.org, key, granter,
+      ]);
+    }
+    await db.app.query('UPDATE role SET archived_by = $2 WHERE id = $1', [archived.role, actor()]);
+
+    const granted = await db.owner.query<{ n: number }>('SELECT grant_to_complete_roles($1) AS n', [ADDED_BY_D16]);
+    expect(granted.rows[0]!.n, 'five keys, to the one complete live role').toBe(5);
+    const held = async (role: string) =>
+      (await db.app.query<{ permission_key: string; granted_by: string }>(
+        'SELECT permission_key, granted_by FROM role_permission WHERE role_id = $1 AND permission_key = ANY ($2) AND revoked_at IS NULL ORDER BY permission_key',
+        [role, ADDED_BY_D16],
+      )).rows;
+    expect(await held(complete.role)).toEqual([...ADDED_BY_D16].sort().map((key) => ({ permission_key: key, granted_by: granter })));
+    expect(await held(partial.role), 'a role missing one key held nothing complete').toEqual([]);
+    expect(await held(archived.role), 'an archived role grants nothing, and is given nothing').toEqual([]);
+    expect((await db.owner.query<{ n: number }>('SELECT grant_to_complete_roles($1) AS n', [ADDED_BY_D16])).rows[0]!.n, 'given once').toBe(0);
+    expect(await sqlState(db.app.query('SELECT grant_to_complete_roles($1)', [ADDED_BY_D16])), 'for migrations only').toBe('42501');
   });
 
   it('AC-01, EM-13: no assignment, or an assignment without store access, grants nothing', async () => {
@@ -401,11 +440,10 @@ describe('permissions (AC-01, AC-02, EM-13, MS-11, MS-12)', () => {
 });
 
 describe('the permission each transition needs (architecture s8.4, SM-02d, D-01)', () => {
-  it('SM-02d, D-01: every creation and edge of the built machines names its permission as its s22 row does', async () => {
+  it('SM-02d, D-01, D-16: every creation and edge of the built machines names its permission as its s22 row does', async () => {
     type Row = [string, string, string, string | null, string | null];
     const key = (machine: string, from: string, to: string, k: string): Row => [machine, from, to, 'Key', k];
     const system = (machine: string, from: string, to: string): Row => [machine, from, to, 'System', null];
-    const open = (machine: string, from: string, to: string): Row => [machine, from, to, 'OpenDecision', null];
     const none = (machine: string, to: string): Row => [machine, '*', to, null, null];
     const contract: Row[] = [
       none('Product', 'Draft'),
@@ -425,11 +463,11 @@ describe('the permission each transition needs (architecture s8.4, SM-02d, D-01)
       key('Sale', 'Completed', 'Voided', 'Sale.Void'),
       key('Sale', 'Completed', 'PartiallyReturned', 'Return.Create'),
       key('Sale', 'PartiallyReturned', 'Returned', 'Return.Create'),
-      open('Payment', '*', 'Pending'),
+      key('Payment', '*', 'Pending', 'Sale.Create'),
       system('Payment', 'Pending', 'Authorized'),
-      open('Payment', 'Authorized', 'Captured'),
-      open('Payment', 'Pending', 'Voided'),
-      open('Payment', 'Authorized', 'Voided'),
+      key('Payment', 'Authorized', 'Captured', 'Payment.Capture'),
+      key('Payment', 'Pending', 'Voided', 'Payment.Void'),
+      key('Payment', 'Authorized', 'Voided', 'Payment.Void'),
       system('Payment', 'Pending', 'Declined'),
       system('Payment', 'Pending', 'Failed'),
       key('Shift', '*', 'Open', 'Shift.Open'),
@@ -439,25 +477,27 @@ describe('the permission each transition needs (architecture s8.4, SM-02d, D-01)
       key('Device', '*', 'Registered', 'Device.Register'),
       key('Device', 'Registered', 'Active', 'Device.Edit'),
       key('Device', 'Active', 'Disabled', 'Device.Disable'),
-      open('Device', 'Disabled', 'Active'),
+      key('Device', 'Disabled', 'Active', 'Device.Disable'),
       ...['Registered', 'Active', 'Disabled'].map((from) => key('Device', from, 'Retired', 'Device.Edit')),
       none('CustomerReturn', 'Draft'),
       key('CustomerReturn', 'Draft', 'Posted', 'Return.Create'),
-      open('CustomerReturn', 'Draft', 'Cancelled'),
+      key('CustomerReturn', 'Draft', 'Cancelled', 'Return.Create'),
       none('Refund', 'Draft'),
+      key('Refund', 'Draft', 'Cancelled', 'Sale.Refund'), // D-17 item 5: a draft is withdrawn
       key('Refund', 'Draft', 'PendingApproval', 'Sale.Refund'),
       key('Refund', 'PendingApproval', 'Approved', 'Sale.Refund.Large.Approve'),
-      open('Refund', 'Approved', 'Processing'),
+      key('Refund', 'Approved', 'Processing', 'Refund.Pay'),
       system('Refund', 'Processing', 'Completed'),
       system('Refund', 'Processing', 'Failed'),
-      open('Refund', 'Failed', 'Processing'),
-      open('Refund', 'Approved', 'Cancelled'),
-      open('Refund', 'Processing', 'Cancelled'),
+      key('Refund', 'Failed', 'Cancelled', 'Sale.Refund'), // D-19: a failed refund is cancelled
+      key('Refund', 'Failed', 'Processing', 'Sale.Refund'),
+      key('Refund', 'Approved', 'Cancelled', 'Sale.Refund'),
+      key('Refund', 'Processing', 'Cancelled', 'Sale.Refund'),
       key('Employee', '*', 'Active', 'Employee.Create'),
       key('Employee', 'Active', 'OnLeave', 'Employee.Edit'),
-      open('Employee', 'OnLeave', 'Active'),
+      key('Employee', 'OnLeave', 'Active', 'Employee.Edit'),
       key('Employee', 'Active', 'Suspended', 'Employee.Edit'),
-      open('Employee', 'Suspended', 'Active'),
+      key('Employee', 'Suspended', 'Active', 'Employee.Reactivate'),
       key('Employee', 'Active', 'Terminated', 'Employee.Terminate'),
       key('Employee', 'OnLeave', 'Terminated', 'Employee.Terminate'),
       key('Employee', 'Terminated', 'Archived', 'Employee.Edit'),

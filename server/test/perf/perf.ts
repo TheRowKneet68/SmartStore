@@ -5,6 +5,7 @@ import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { buildApp } from '../../src/app.ts';
 import { createPool } from '../../src/db/pool.ts';
+import { SimulatedGateway } from '../../src/modules/payments/simulated-gateway.ts';
 import { onboard } from '../../src/onboarding.ts';
 import { createTestDb } from '../db.ts';
 import { employeeWithAccess, onboardingAnswers } from '../fixtures.ts';
@@ -98,6 +99,7 @@ try {
   })();
   const app = await buildApp({
     pool,
+    gateway: new SimulatedGateway(),
     session: { lifetimeMinutes: 60, failureLimit: 5, failureWindowMinutes: 15 },
     quoteMaxAgeMinutes: 60,
     lockTimeoutMs: 2_000,

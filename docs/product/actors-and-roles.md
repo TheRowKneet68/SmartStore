@@ -31,7 +31,9 @@ employee without deactivating their account) and produces an empty workspace, pe
 
 The complete set of atomic permissions. Domains are grouped; the key is `<Domain>.<Resource>.<Action>`.
 
-**Owner decision D-16 (2026-10-02).** Five keys were added, so the catalogue now holds 122:
+**Owner decision D-17 (2026-10-02).** Two keys were added, so the catalogue now holds 124: `Return.View` (§2.5) and `Refund.View` (§2.4).
+
+**Owner decision D-16 (2026-10-02).** Five keys were added, so the catalogue then held 122:
 - `Payment.Capture` and `Payment.Void` (§2.11);
 - `Employee.Reactivate` (§2.8);
 - `Refund.Pay` (§2.4);
@@ -94,9 +96,10 @@ The transitions that some existing keys now authorize are named in their rows. `
 | `Sale.Suspend` / `Sale.Resume` | Park and resume a cart |
 | `Sale.Void` | Void a sale that has not yet been finalized |
 | `Sale.Void.Posted.Approve` | Approve voiding an already-finalized sale. **A compensating document is created, never a delete** |
-| `Sale.Refund` | Issue a refund within the permitted amount. Also retries a failed refund and cancels an unpaid one (§22.7, D-16) |
+| `Sale.Refund` | Issue a refund within the permitted amount. Also retries a failed refund, cancels an unpaid one (§22.7, D-16), withdraws a draft (D-17) and cancels a failed one, releasing its hold (D-19) |
 | `Sale.Refund.Large.Approve` | Approve a refund beyond the store threshold |
-| `Refund.Pay` | Submit an approved refund for payment, from the drawer or to the provider (§22.7, "submit to provider"). **Separate from `Sale.Refund`** (D-16) |
+| `Refund.Pay` | Submit an approved refund for payment, from the drawer or to the provider (§22.7, "submit to provider"). **Separate from `Sale.Refund`** (D-16). A drawer refund is paid by someone signed in at the till it was drafted at (D-17) |
+| `Refund.View` | See refunds: the list and one refund (D-17). **Separate from `Payment.View`** |
 | `Sale.OfflineQueue.Manage` | Inspect and reconcile a terminal's offline queue |
 
 ### 2.5 Returns
@@ -104,6 +107,7 @@ The transitions that some existing keys now authorize are named in their rows. `
 | Permission | Grants |
 |---|---|
 | `Return.Create` | Accept a customer return against a sale, and cancel it before it posts (§22.7, D-16) |
+| `Return.View` | See returns: the list and one return (D-17) |
 | `Return.Approve` | Approve a return beyond the permitted value |
 | `Return.Dispose` | Decide quarantine/damaged/sellable disposition |
 

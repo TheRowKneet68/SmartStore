@@ -349,8 +349,11 @@ Step 3 rules, given by the owner on 2026-10-01 with "start Step 3":
 - **Phase B, finishing Domain 4, is done.** Domain 4's full mutation check detected 126 of 126. A gap found
   afterwards, a sold service's unit kind, is closed by a forward-only migration (Next, item 1.7; D4 §12).
 - **Phase C is done:** the permission-key proposal waits for the owner's answer.
-- **2026-10-02: the owner answered it.** The answers are recorded as owner decision D-16 and applied to the
-  documentation only. Implementation waits for the owner's go-ahead, after the report of affected files and rule IDs.
+- **2026-10-02: the owner answered it.** The answers are owner decision D-16. The owner said "go" after the report of
+  affected files and rule IDs, and the keys are applied (Phase E, step 1: migration `20261002100000_d7_d16_permission_keys.sql`;
+  D7 §11, D4 §14). What Phase E still holds: the locations routes and reopening a shift (OQ-033).
+  Domain 5's application layer (step 2), the card path through a simulated gateway (step 3), owner decision D-17 (step 4),
+  the void and the report of unsettled payments (step 5) and owner decision D-18 (step 6) are built.
 - **Phase D is under way.** The audit-log read is not built (OQ-024 item 2). The identity admin screens and the
   reference-data screen are written and tested in `web/`; they are committed with their server routes.
 - The UI steps below are the earlier part of this work. U5 is Phase B's fourth step.
@@ -426,6 +429,7 @@ domain, detected 126 of 126** (D4 §11).
 | 11 | Veto, or accept, two choices for receipts. (a) Recording a print's outcome and reprinting need `Sale.Create`: the catalogue has no reprint key, and receipt issuance is the cashier's work (actors-and-roles §4). (b) A reprint has no audit event: AU-12 has no type for one, and the `receipt_reprint` row is the record. The reprint's mandatory reason is your instruction of 2026-10-01; `/docs` asks for none. **Reading a receipt at the till is decided by D-16 (Q13): `Sale.Create`.** (a) and (b) stay for veto | D4 §10 | Nothing |
 | 12 | Authorize one forward-only migration for manual weigh entry: the sale line's weight source (`PR-27`) and its reason code (`PR-28`), and a per-store threshold. Also give the threshold: the interim proposed is zero, so every manual weight needs a reason | OQ-032 | Manual weigh entry at the till |
 | 13 | Archiving brands, units and tax categories: whether they can be archived, and what an archive stops | OQ-031 | Archiving those three only; editing them is built |
+| 14 | Reopening a closed shift: what the recount counts, whether the closing float is declared again, and who the row names as closer. `Shift.Reopen` exists (D-16); the edge does not | OQ-033, `CD-26` | Reopening a shift |
 
 Until then, tests run on a scratch PostgreSQL 17.11 cluster and a portable Node 26 in the session scratch directory
 (ADR-31 §14). Nothing on the owner's PostgreSQL service is touched.
@@ -516,9 +520,11 @@ sets the order. Phase A (housekeeping and the push) is done.
    - card payments through the simulated gateway;
    - Domain 5's mutation check.
 
-   **The keys are decided: D-16, 2026-10-02.** They are recorded in the documentation only. The owner asked for the
-   affected files and rule IDs first, so **implementation starts on the owner's go-ahead.** Q8, a refund's retry under
-   `Sale.Refund` while paying it is `Refund.Pay`, was raised back to the owner.
+   **The keys are decided (D-16, 2026-10-02) and applied** (Phase E, step 1; see the log). Q8, a refund's retry under
+   `Sale.Refund` while paying it is `Refund.Pay`, was raised back to the owner, who gave no change. **Still to build:**
+   routes for warehouses and storage locations (`Config.Organization`). **Domain 5's
+   application layer is built** (step 2 in the log; its focused mutation check is there too). **Not buildable yet:**
+   reopening a shift (OQ-033).
 5. **Phase F:**
    - typecheck, tests, perf, ledger check and audit check, measured against the p95 ≤ 100 ms budget;
    - a "what is left before a real store can use this" list. It names GAP-044, GATE-Q2-LICENCE and GAP-038 as release
@@ -1342,3 +1348,131 @@ Append-only. One dated line per step, including failed and abandoned attempts.
   - **Raised back to the owner:** Q8, a refund's retry under `Sale.Refund` while paying it is `Refund.Pay`.
   - **Staging:** OWNER-DECISIONS, OPEN-QUESTIONS and BUILD-STATUS hold other sessions' uncommitted work. Their staged
     copies are the working files with those blocks taken back out.
+- 2026-10-02 — **Phase E, step 1: owner decision D-16's keys applied.** D7 §11, D4 §14.
+  - **Migration `20261002100000_d7_d16_permission_keys.sql`** (forward-only; applied to the dev database, and
+    `db/schema.sql` regenerated):
+    - five keys join the catalogue, which now holds 122: `Payment.Capture`, `Payment.Void`, `Employee.Reactivate`,
+      `Refund.Pay`, `Shift.Reopen`;
+    - nine groups of edges stop refusing everyone: a card's submit (`Sale.Create`), capture and void, back from leave
+      and reactivation, a till's re-enable, a return's cancel, a refund's payment, retry and both cancels;
+    - `grant_to_complete_roles(keys)`, for migrations only, gives every live role that holds every other key the new
+      ones, each in the name of whoever granted that role its first key, so the Owner still holds everything.
+  - **The reopen edge is not created.** What a reopened shift's recount counts is unspecified: OQ-033, new.
+  - **Reading a receipt now needs `Sale.Create`** (Q13). The list and a sale's detail stay under `Sale.View`.
+  - **Tests:** the catalogue is 122 in three tests; the edge contract names every key; the employee test that proved
+    an undecided edge refused everyone now proves each reactivation's own key and its reason; the till test now proves
+    a re-enabled till trades again; the receipt's key; and the grant, on a role written as an Owner's was before D-16, a
+    role missing one key, and an archived role. 437 server tests pass, and the server typechecks.
+  - **Mutation check:** `plan-e1.mjs`, 16 of 16 detected, restored byte for byte. `plan-b3`'s R01 was repointed at the
+    receipt's new key and re-run, and `plan-d4-edges`' V02, which mutated the old refusal, is retired.
+  - **One path lost its proof:** the gate's `not_permitted` on an edge with no key has no edge left to prove it on
+    among the bound machines. D7 §11 says so.
+  - **Staging:** BUILD-STATUS, OPEN-QUESTIONS and `onboarding.test.ts` hold another session's uncommitted work, so
+    their staged copies are the committed files plus this step's lines only.
+- 2026-10-02 — **Consolidated blueprint written** at the owner's request: [SMARTSTORE-CONSOLIDATED-BLUEPRINT.md](docs/architecture/SMARTSTORE-CONSOLIDATED-BLUEPRINT.md).
+  - **What it is:** one document, §0 to §12, in the structure the owner asked for: architecture, domain model, schema,
+    security, business flows, hardware layer, API, project structure, code skeletons, non-functional requirements, status
+    registers. Written only from `/docs`, the ADRs, the owner's decisions and the code at `f68fdc3`. It decides nothing.
+  - **Labels:** every part is BUILT, SPECIFIED, DEFERRED or an OPEN QUESTION. Where the request assumed a technology the
+    record does not contain (Redis, a message broker, NestJS, GraphQL, partitioning) the blueprint says so rather than
+    adopting it. Stock reservation, which the request wanted, is deliberately absent (`IV-49`).
+  - **New questions:** `BQ-01` to `BQ-11`, recorded as OQ-034.
+  - **Not changed:** no code, migration, test or owner decision. 437 server tests pass.
+  - **Staging:** BUILD-STATUS and OPEN-QUESTIONS hold another session's uncommitted work, so their staged copies are the
+    committed files plus this step's lines only.
+- 2026-10-02 — **Phase E, step 2: Domain 5's application layer (returns, then refunds).** D5 §10; `OQ-035`.
+  - **Code:** `server/src/modules/returns/returns.ts` and `refunds.ts`, wired in `app.ts`; the CustomerReturn and Refund
+    machines are bound to `POST /transitions`. Nine machines are now bound (Sale, Payment and the card refund path are
+    not). Shared code gained `reasonColumnFor` on a machine, the post-use-case state in a transition's answer, messages
+    for `SS046` to `SS053` with the remainder returned beside the code, and a sale's detail now names its lines'
+    counters and its payments.
+  - **Keys:** every one is named by the specification or D-16, and **none is an open decision**: open and line
+    `Return.Create`; post and cancel `Return.Create`; late approval `Return.Approve`; draft `Sale.Refund`; submit
+    `Sale.Refund`; approve `Sale.Refund.Large.Approve`; pay `Refund.Pay`; cancel and retry `Sale.Refund`. The two edges
+    still `OPEN DECISION`, a return's settle and close, are not built.
+  - **Not built, by choice:** a refund to a card (the provider is not built, so paying one answers
+    `provider_not_available`); reading returns and refunds (no key, OQ-035); settle and close.
+  - **Tests:** `returns.test.ts`, 19, through the routes. Server: 456 pass, and the server typechecks.
+  - **Mutation check:** `plan-d5-app.mjs`, 33 mutations (the new routes, both machines' bindings, the shared hook, the error detail, the sale detail). 31 were detected at once. Two survived, a store predicate on a line added to another store's return and on a refund's sale, because the database's keys refused them with another status; `MS-04` tests (a 404) were added, and both are now detected. **33 of 33**, restored byte for byte.
+  - **Staging:** BUILD-STATUS and OPEN-QUESTIONS hold another session's uncommitted work, so their staged copies are
+    the committed files plus this step's lines only.
+- 2026-10-02 — **Phase E, step 3: card payments and card refunds, through a simulated gateway.** D4 §15, D5 §11; `OQ-036`.
+  - **The gateway is TEST / simulated, and says so:** `PaymentGateway` is the interface (the five commands of `PY-07`, the
+    closed outcomes of `PY-10`, a merchant reference per call); `SimulatedGateway` moves no money. It is marked in its
+    header, in a startup warning, in `SIM-` references, and as `simulated: true` on a payment and a refund. It accepts only
+    `TEST-` tokens, so a real card number is declined and stored nowhere. A token picks the outcome, timeouts included.
+    Nothing outside the gateway files and `main.ts` names it (a test, `PY-08`). A real acquirer is the owner's call.
+  - **A card sale** (`card: { token, amount? }` on `POST /sales`, beside or instead of `cash`): planned and the tender checked
+    first, then authorize, capture and commit (`PY-38`), the provider called between transactions (`PY-36`), resumable by the
+    cart's operation id, never charging twice. Split with cash, the card first. Capturing needs `Payment.Capture` (D-16).
+  - **A card refund:** `POST /refunds/:id/pay` (`Refund.Pay`) and `/retry` (`Sale.Refund`); a failure is held and retryable, a
+    timeout is resolved by asking the provider. The transition endpoint refuses a card refund.
+  - **No permission key is new, and none was open.** The shared test shop moved to `server/test/shop.ts`.
+  - **Not built:** void and the reconciliation job, the provider per store, the card's display fields, offline card, and a
+    failed card refund's cancel, which has no edge (`OQ-036` items 1 and 2).
+  - **Tests:** `payments/card.test.ts`, 24. Server: 480 pass; the server typechecks.
+  - **Mutation check:** `plan-card.mjs`, 29 mutations: the card sale (the steps, the tender, the keys, the concurrency), the card refund (the routes, the keys, the states) and the gateway's own promises. 26 were detected at once. Three survived: a concurrent record guard and a concurrent save (both now proved by a test of two copies of one resumed request, which also found a real race: the loser was told the card was taken and the sale not saved, when it was saved), and a capture-key check made redundant by the route's earlier one (removed). **29 of 29**, restored byte for byte.
+  - **Staging:** BUILD-STATUS and OPEN-QUESTIONS hold another session's uncommitted work, so their staged copies are the
+    committed files plus this step's lines only.
+- 2026-10-02 — **Phase E, step 4: owner decision D-17 (`OQ-035` closed).** D5 §12, D7 §12, OWNER-DECISIONS D-17.
+  - **Item 4:** a drawer refund is paid by someone signed in at the till it was drafted at (`not_at_refund_till`, whole: nothing
+    is held or paid). An application rule in the refund machine's before-hook. A card refund is not affected.
+  - **Item 5:** a draft refund may be withdrawn. Migration `20261002120000_d17_return_refund_view_and_withdraw.sql` adds
+    `Draft → Cancelled` on `cancel`, under `Sale.Refund` with a reason, audited as `Refund.StateChange`. **The owner did not
+    name that key or reason:** it is read from D-16 Q9, and raised for the owner's veto. A draft held nothing, so nothing is
+    released. `ck_refund_submitted_when` gained its one exception (a cancelled refund never approved), because a withdrawn
+    draft was never submitted.
+  - **Items 7 and 8:** `Return.View` and `Refund.View` join the catalogue (122 → 124), granted to every role that held all the
+    others. `GET /stores/:storeId/returns[/:id]` and `/refunds[/:id]`, newest first, paged by document number, filtered by
+    status or sale. No write key reads.
+  - **Tests:** 3 new in `returns.test.ts`; the catalogue counts, the edge contract and the audit table updated. Server: 483
+    pass; the server typechecks.
+  - **Mutation check:** `plan-d17.mjs`, 14 mutations (the reads, their keys and scoping, paging and filters, the payer at the till, the edge and its constraint). 13 were detected at once, one of them (the edge) because the migration then refuses to apply. One survived, a refund read outside its own store; a test of another store's refund now detects it. One is not detectable in a test: the migration's grant of the two keys to roles that already hold every other key, because the test database has no such role when the migration runs (the grant function itself is proved by D-16's test, and the Owner's role by onboarding). **13 of 13 detectable, restored byte for byte.**
+  - **Next, the orphaned payments** (`OQ-036` item 2), in two parts. **A, buildable now, no new key:** void a `Pending` or
+    `Authorized` card payment (`Payment.Void`, `PY-13`, the provider asked outside the transaction), and report payments that
+    need a person (`PY-40`): `Pending` past a window, `Authorized` and never captured, `Captured` on an open checkout with no
+    sale. The report is read under `Payment.View` (existing: "see payments and refunds") by a route and by a command like
+    `ledger:check`, because the scheduler is `BQ-02`. **B, waits for the owner:** what returns the money of a payment that was
+    captured and never became a sale. The payment has no way out but a linked refund, and a refund needs a sale.
+  - **Staging:** BUILD-STATUS, OPEN-QUESTIONS, OWNER-DECISIONS and `onboarding.test.ts` hold another session's uncommitted work, so
+    their staged copies are the committed files plus this step's lines only.
+- 2026-10-02 — **Phase E, step 5: orphaned payments, part A.** D4 §16; `OQ-036` item 2 (part B waits for the owner); `OQ-037`.
+  - **Void:** `POST /stores/:storeId/payments/:id/void` under `Payment.Void` (D-16). A `Pending` or `Authorized` card payment is voided
+    at the provider outside the transaction; one the provider never answered is first asked about, and if it holds nothing a
+    person voids it here, and the answer says so. A provider that does not confirm leaves it unchanged (`void_failed`,
+    `void_pending`). Terminal; its cart is abandoned; the same sale answers `card_voided`. Captured is refunded, never voided.
+  - **Report:** `GET /stores/:storeId/payments/attention?olderThanMinutes=N` under `Payment.View`, and `npm run payments:check --
+    --older-than N [--store id]` (exits non-zero when anything needs a person): `PendingTooLong`, `AuthorizedNotCaptured`,
+    `CapturedNoSale`. It changes nothing. **The window is required and never defaulted** (`OQ-037`).
+  - **No key is new and none was open.** The simulated gateway learned `TEST-VOID-FAIL` and `TEST-VOID-TIMEOUT`.
+  - **Not built:** part B (the three options are in `OQ-036`, for the owner), the scheduler (`BQ-02`), the settlement-file
+    comparison, and the notification.
+  - **Tests:** 10 new in `payments/card.test.ts`, one of them running the command. Server: 493 pass; the server typechecks. The
+    command was also run against the development database, which had nothing to report.
+  - **Mutation check:** `plan-void.mjs`, 18 mutations (the void and its guards, the report, its key, window, scope, age, order and counts). 13 were detected at once. Five survived. One was a real design flaw, found because a survivor asked why the filter existed: the report listed only payments on an open checkout, which would hide a pending payment on an abandoned one, so the filter was removed. Two needed tests (the void racing a capture, and oldest first), one became detectable once the filter was gone, and one (the simulated void's idempotency on the default path) cannot be observed and was dropped. **18 of 18**, restored byte for byte.
+  - **Staging:** BUILD-STATUS and OPEN-QUESTIONS hold another session's uncommitted work, so their staged copies are the committed
+    files plus this step's lines only.
+- 2026-10-02 — **Phase E, step 6: owner decision D-18, the refund of a payment that never became a sale (`OQ-036` item 2, part B).** D5 §13, OWNER-DECISIONS D-18.
+  - **The owner chose option 1 and confirmed the keys:** `Sale.Refund` to issue, `Sale.Refund.Large.Approve` to approve, `Refund.Pay` to pay. **No key is new.**
+  - **Migration `20261002130000_d18_refund_of_a_payment.sql`:** `refund.sale_id` is optional; a refund with no sale names a captured card
+    payment of its store and currency, an amount and a reason, with no return, tax or lines (`ck_refund_sale_or_payment`).
+    `payment.refunded_amount`, written only by the owner's hold trigger, never more than the payment took; entering `Processing` holds it
+    with one conditional increment, as a line is held (`PY-22`, `RR-24`), kept through `Failed` and `Completed`, released only by a
+    cancellation. `SS058` (more than is left), `SS059` (a payment with a sale is refunded through the sale; a payment being refunded
+    cannot become one, even as a draft: `assert_sale_complete()`). `payment_refund_drift()`. A captured payment stays frozen in every other
+    column (`PY-12`).
+  - **Application:** `POST /refunds` with no `saleId` takes `{ clientOperationId, method, paymentId, amount, reasonCodeId }`, strict. The
+    machine, approval, audit, pay and retry routes and the reads are unchanged. Paying one gives its cart up (`card_refunded`). The
+    report keeps a payment until all of it has been given back.
+  - **Read, not written, by the owner (raised for veto, in D-18):** card payments only; partial; a reason; a refund, even a draft, blocks the sale.
+  - **`OQ-036` is closed.** Its item 1, a failed card refund that cannot be cancelled, is not decided by D-18 and is moved to `OQ-038`.
+  - **Tests:** 9 new in `payments/card.test.ts`, including the concurrency proof (five refunds of 1,000 against 3,000: exactly three) and
+    the table's own refusals. Server: 502 pass; the server typechecks. Migrations: 16.
+  - **Mutation check:** `plan-d18.mjs`, 23 mutations: the table's shape (return, tax, reason, store and currency), the sale-or-payment exclusion in both directions, the hold and its release, the frozen payment, the counter's bounds, the drift check, the report, and the application. 22 were detected, the last of them after two tests were added (the table's own refusals, and a payment-bound refund with a stray return). One survived and is equivalent: the reason is required twice, by `ck_refund_sale_or_payment` and by the older `ck_refund_goodwill_reason`, so dropping the first changes nothing. **22 of 22 detectable**, restored byte for byte.
+  - **Staging:** BUILD-STATUS, OPEN-QUESTIONS and OWNER-DECISIONS hold another session's uncommitted work, so their staged copies are the committed files plus this step's lines only.
+- 2026-10-02 — **Phase E, step 7: owner decision D-19, a failed refund can be cancelled (`OQ-038` closed).** D5 §14, OWNER-DECISIONS D-19.
+  - **The owner chose the pattern of D-17:** `Failed → Cancelled` on the refund's `cancel` event, under `Sale.Refund`, with a required reason, audited as `Refund.StateChange`. Cancelling **releases the hold**. **No key is new.**
+  - **Migration `20261002141000_d19_cancel_a_failed_refund.sql`:** the edge, and `apply_refund_hold()` releases a hold on a cancellation from `Processing` or from `Failed`, on the sold lines or, for a refund with no sale, on the payment (D-18). The edge contract and the audit table name the new edge. `Cancelled` is final: it is not retried.
+  - **Tests:** 2 new in `payments/card.test.ts` (a failed refund of a sale, and of a payment with no sale: held through the failure, cancelled with a reason under the key, released, the drift checks empty, the money refundable again). Server: 504 pass; the server typechecks. Migrations: 17.
+  - **Mutation check:** `plan-d19.mjs`, 4 mutations: the edge, its key and reason, and the release of the hold on a payment and on a sold line. All 4 caught; the first because the migration then refuses to apply. **4 of 4**, restored byte for byte.
+  - **Staging:** BUILD-STATUS, OPEN-QUESTIONS and OWNER-DECISIONS hold another session's uncommitted work, so their staged copies are the committed files plus this step's lines only.
