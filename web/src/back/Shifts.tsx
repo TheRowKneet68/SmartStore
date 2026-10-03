@@ -3,6 +3,7 @@ import { Announcer } from '../lib/Announcer.tsx';
 import { api } from '../lib/api.ts';
 import { StatusChip, type Look } from '../lib/Chip.tsx';
 import { formatMoney, type Currency } from '../lib/money.ts';
+import { Moves, type Move } from '../lib/Moves.tsx';
 import { check, problemOf, ProblemNotice, type Problem } from '../lib/Problem.tsx';
 
 /** A shift as the shift screen answers for it (`CD-30`): the figures come only from a submitted count (`CD-31`). */
@@ -42,7 +43,12 @@ const STATUS: Record<string, Look> = {
   Open: ['open', '●', 'Trading'],
   Reconciling: ['counting', '◐', 'Counting'],
   Closed: ['none', '○', 'Closed'],
+  Reopened: ['counting', '◐', 'Reopened'],
 };
+
+const REOPEN_MOVE: Move[] = [
+  { event: 'reopen', label: 'Reopen shift', key_: 'Shift.Reopen', reason: true, ask: 'Reopen this closed shift? A recount will be needed before it can close again.', outcome: 'Shift reopened. The count can begin at the till.' },
+];
 
 const Status = ({ status }: { status: string }) => <StatusChip status={status} looks={STATUS} />;
 
@@ -59,6 +65,10 @@ function nextStep(shift: ShiftAnswers): string {
       return 'The difference needs an acknowledgement with a reason before the shift can close.';
     case 'close':
       return 'Ready to close at the till.';
+    case 'reopen':
+      return shift.closedByName === null ? 'Closed. A manager may reopen it.' : `Closed by ${shift.closedByName}. A manager may reopen it (OQ-033, CD-26).`;
+    case 'recount':
+      return 'Reopened. A recount can now begin at the till.';
     default:
       return shift.closedByName === null ? 'Closed.' : `Closed by ${shift.closedByName}.`;
   }
@@ -70,7 +80,7 @@ function nextStep(shift: ShiftAnswers): string {
  * difference against its allowance, and why, with what happens now. A difference waiting for an acknowledgement can be
  * acknowledged here by someone allowed to (`CD-23`, `BI-25`), so a cashier without the key is not stuck at the till.
  */
-export function ShiftReview({ storeId, currency, canAcknowledge }: { storeId: string; currency: Currency; canAcknowledge: boolean }) {
+export function ShiftReview({ storeId, currency, canAcknowledge, canReopen }: { storeId: string; currency: Currency; canAcknowledge: boolean; canReopen: boolean }) {
   const [filter, setFilter] = useState('');
   const [shifts, setShifts] = useState<ShiftAnswers[] | null>(null);
   const [open, setOpen] = useState<string | null>(null);
@@ -87,7 +97,7 @@ export function ShiftReview({ storeId, currency, canAcknowledge }: { storeId: st
   }, [storeId, filter, open]);
 
   if (open !== null) {
-    return <ShiftDetail storeId={storeId} shiftId={open} money={money} canAcknowledge={canAcknowledge} onBack={() => setOpen(null)} />;
+    return <ShiftDetail storeId={storeId} shiftId={open} money={money} canAcknowledge={canAcknowledge} canReopen={canReopen} onBack={() => setOpen(null)} />;
   }
 
   return (
@@ -167,12 +177,14 @@ function ShiftDetail({
   shiftId,
   money,
   canAcknowledge,
+  canReopen,
   onBack,
 }: {
   storeId: string;
   shiftId: string;
   money: (amount: number) => string;
   canAcknowledge: boolean;
+  canReopen: boolean;
   onBack: () => void;
 }) {
   const [shift, setShift] = useState<(ShiftAnswers & { passes: PassRow[] }) | null>(null);
@@ -275,6 +287,18 @@ function ShiftDetail({
             Acknowledge the difference
           </button>
         </form>
+      )}
+      {shift.next === 'reopen' && (
+        <Moves
+          machine="Shift"
+          subject={shiftId}
+          name={shift.terminalLabel}
+          moves={REOPEN_MOVE}
+          can={(key) => canReopen && key === 'Shift.Reopen'}
+          onSaid={setSaid}
+          onProblem={setProblem}
+          onDone={() => setVersion((v) => v + 1)}
+        />
       )}
       <ProblemNotice problem={problem} />
       <h2>Counts</h2>

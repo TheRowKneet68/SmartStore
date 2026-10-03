@@ -331,7 +331,7 @@ function BackOffice({ store, organization, stores, onTillSet }: { store: Store; 
 
       <div className="panel-area">
         {shown === 'till' && <TillSetup storeId={store.id} canSetUp={store.permissions.includes('Device.View')} onDone={onTillSet} />}
-        {shown === 'shifts' && <ShiftReview storeId={store.id} currency={currency} canAcknowledge={store.permissions.includes('Cash.Variance.Acknowledge')} />}
+        {shown === 'shifts' && <ShiftReview storeId={store.id} currency={currency} canAcknowledge={store.permissions.includes('Cash.Variance.Acknowledge')} canReopen={store.permissions.includes('Shift.Reopen')} />}
         {shown === 'sales' && <Sales storeId={store.id} permissions={store.permissions} currency={currency} />}
         {shown === 'returns' && <Returns storeId={store.id} permissions={store.permissions} onRefund={(id) => (setRefundFrom(id), setSection('refunds'))} />}
         {shown === 'refunds' && <Refunds storeId={store.id} permissions={store.permissions} currency={currency} startFromReturn={refundFrom} startFromPayment={refundPayment} onStarted={() => (setRefundFrom(null), setRefundPayment(null))} />}

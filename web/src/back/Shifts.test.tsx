@@ -54,6 +54,7 @@ const shift = (over: Partial<ShiftAnswers>): ShiftAnswers => ({
   ...over,
 });
 const closed = shift({});
+const closedReopened = shift({ id: 'sh2', status: 'Closed', terminalLabel: 'Till 2', next: 'reopen' });
 const short = shift({ id: 'sh2', status: 'Reconciling', terminalLabel: 'Till 2', closedByName: null, closedAt: null, counted: 2_200, variance: -50, next: 'acknowledge' });
 const uncounted = shift({ id: 'sh3', status: 'Open', terminalLabel: 'Till 3', closedByName: null, closedAt: null, expected: null, counted: null, variance: null, next: 'begin count' });
 const passes = [
@@ -61,7 +62,8 @@ const passes = [
   { id: 'c2', passNumber: 2, countedAmount: 2_200, expectedAmount: 2_250, variance: -50, countedByName: 'Cass Employee', acknowledgedByName: null, reason: null },
 ];
 
-const review = (canAcknowledge = true) => render(<ShiftReview storeId="s1" currency={NPR} canAcknowledge={canAcknowledge} />);
+const TRANSITIONS = 'POST /api/v1/transitions';
+const review = (canAcknowledge = true, canReopen = false) => render(<ShiftReview storeId="s1" currency={NPR} canAcknowledge={canAcknowledge} canReopen={canReopen} />);
 const rowOf = async (till: string) => (await screen.findByText(till)).closest('tr')!;
 
 describe('the shift list (CD-30, CD-31, RT-527, UX-52)', () => {
@@ -137,5 +139,39 @@ describe('one shift (CD-30, CD-23, BI-25, UX-08)', () => {
     expect(calls.find((c) => c.key === ACKNOWLEDGE)?.body, 'the latest count, with the reason').toEqual({ reasonCodeId: 'r1' });
     expect(screen.getByText(/^Drawer short, acknowledged by Mona Employee, /)).toBeTruthy();
     expect(screen.queryByLabelText('Reason for the difference'), 'nothing left to acknowledge').toBeNull();
+  });
+});
+
+describe('shift reopen (OQ-033, CD-26, §22.11)', () => {
+  const DETAIL2 = 'GET /api/v1/stores/s1/shifts/sh2';
+  const reopened = { ...closedReopened, status: 'Reopened', next: 'recount' };
+
+  it('OQ-033, CD-26: without Shift.Reopen the reopen button is absent', async () => {
+    serve({ [LIST]: { body: { items: [closedReopened] } }, [DETAIL2]: { body: { ...closedReopened, passes: [] } } });
+    review(false, false);
+    fireEvent.click(within(await rowOf('Till 2')).getByRole('button'));
+    await screen.findByText(/A manager may reopen it/);
+    expect(screen.queryByRole('button', { name: /reopen shift/i })).toBeNull();
+  });
+
+  it('OQ-033, CD-26: with Shift.Reopen, the button appears, asks for a reason, posts to /transitions, and refreshes the shift', async () => {
+    const calls = serve({
+      [LIST]: { body: { items: [closedReopened] } },
+      [DETAIL2]: [{ body: { ...closedReopened, passes: [] } }, { body: { ...reopened, passes: [] } }],
+      [REASONS]: { body: { items: [{ id: 'r9', code: 'RECOUNT', name: 'Recount required' }] } },
+      [TRANSITIONS]: { body: {} },
+    });
+    review(false, true);
+    fireEvent.click(within(await rowOf('Till 2')).getByRole('button'));
+    await screen.findByText(/A manager may reopen it/);
+    // The trigger button has aria-label "Reopen shift — Till 2"
+    fireEvent.click(screen.getByRole('button', { name: /Reopen shift — Till 2/i }));
+    expect(await screen.findByText(/Reopen this closed shift/)).toBeTruthy();
+    await screen.findByRole('option', { name: /Recount required/i });
+    fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'r9' } });
+    fireEvent.submit(screen.getByRole('button', { name: /^Reopen shift$/ }).closest('form')!);
+    await screen.findByText('Reopened. A recount can now begin at the till.');
+    const t = calls.find((c) => c.key === TRANSITIONS);
+    expect(t?.body).toMatchObject({ machine: 'Shift', event: 'reopen', subject: 'sh2', reasonCodeId: 'r9' });
   });
 });
