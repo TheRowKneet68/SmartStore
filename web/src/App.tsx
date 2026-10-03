@@ -16,6 +16,7 @@ import { ShiftReview } from './back/Shifts.tsx';
 import { PaymentMethods, ReasonCodes } from './back/Setup.tsx';
 import { Stock } from './back/Stock.tsx';
 import { StoreSettings, Tills } from './back/Tills.tsx';
+import { AuditLog } from './back/Audit.tsx';
 import { NotYet, PLANNED, type Planned } from './back/NotYet.tsx';
 import { MyAccount } from './MyAccount.tsx';
 import { TillWork } from './pos/TillWork.tsx';
@@ -262,6 +263,12 @@ const GROUPS: { group: string; entries: Entry[] }[] = [
       { key: 'reasons', label: 'Reason codes', key_: 'Config.Organization', scope: 'organization' },
     ],
   },
+  {
+    group: 'Compliance',
+    entries: [
+      { key: 'audit', label: 'Audit log', key_: 'Audit.View', scope: 'organization' },
+    ],
+  },
 ];
 
 
@@ -344,6 +351,7 @@ function BackOffice({ store, organization, stores, onTillSet }: { store: Store; 
         {shown === 'tills' && <Tills storeId={store.id} permissions={store.permissions} />}
         {shown === 'settings' && <StoreSettings storeId={store.id} canSet={store.permissions.includes('Config.Store')} />}
         {shown === 'reasons' && <ReasonCodes canConfigure={organization.includes('Config.Organization')} />}
+        {shown === 'audit' && <AuditLog permissions={organization} />}
         {gap !== undefined && <NotYet area={gap} />}
       </div>
     </div>

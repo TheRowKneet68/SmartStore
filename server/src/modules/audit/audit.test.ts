@@ -135,6 +135,75 @@ describe('what every audit entry carries from the request (AU-05, AU-10, archite
   });
 });
 
+describe('GET /audit-events (OQ-024, AU-11, RT-292)', () => {
+  it('requires Audit.View — 403 without it', async () => {
+    const org = await insertOrganization(db.app);
+    const staff = await staffWithRoles(org, [['Sale.View']]);
+    const res = await app.inject({ method: 'GET', url: '/api/v1/audit-events', headers: signedInAs(staff.employee, org) });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('returns events newest-first for the caller organisation', async () => {
+    const org = await insertOrganization(db.app);
+    const viewer = await staffWithRoles(org, [['Audit.View']]);
+    // Produce one event in this org by creating an employee via HTTP.
+    const other = await staffWithRoles(org, [['Employee.Create']]);
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/v1/employees',
+      headers: signedInAs(other.employee, org),
+      payload: { employeeNumber: `E-${randomUUID()}`, firstName: 'Ada', lastName: 'Lovelace' },
+    });
+    expect(created.statusCode).toBe(201);
+    const entityId: string = created.json().id;
+
+    const res = await app.inject({ method: 'GET', url: `/api/v1/audit-events?entityId=${entityId}`, headers: signedInAs(viewer.employee, org) });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body).toHaveProperty('items');
+    expect(body.items.length).toBeGreaterThan(0);
+    expect(body.items[0]).toMatchObject({ entityType: 'employee', entityId, actorId: other.employee });
+  });
+
+  it('MS-04: events from another organisation are not visible', async () => {
+    const orgA = await insertOrganization(db.app);
+    const orgB = await insertOrganization(db.app);
+    const viewerB = await staffWithRoles(orgB, [['Audit.View']]);
+    const staffA = await staffWithRoles(orgA, [['Employee.Create']]);
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/v1/employees',
+      headers: signedInAs(staffA.employee, orgA),
+      payload: { employeeNumber: `E-${randomUUID()}`, firstName: 'Eve', lastName: 'Hacker' },
+    });
+    expect(created.statusCode).toBe(201);
+    const entityId: string = created.json().id;
+
+    const res = await app.inject({ method: 'GET', url: `/api/v1/audit-events?entityId=${entityId}`, headers: signedInAs(viewerB.employee, orgB) });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().items).toEqual([]);
+  });
+
+  it('filters by eventType', async () => {
+    const org = await insertOrganization(db.app);
+    const viewer = await staffWithRoles(org, [['Audit.View']]);
+    const staff = await staffWithRoles(org, [['Employee.Create']]);
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/v1/employees',
+      headers: signedInAs(staff.employee, org),
+      payload: { employeeNumber: `E-${randomUUID()}`, firstName: 'Bob', lastName: 'Builder' },
+    });
+    const entityId: string = created.json().id;
+
+    const match = await app.inject({ method: 'GET', url: `/api/v1/audit-events?eventType=Employee.StateChange&entityId=${entityId}`, headers: signedInAs(viewer.employee, org) });
+    expect(match.json().items.length).toBeGreaterThan(0);
+
+    const noMatch = await app.inject({ method: 'GET', url: `/api/v1/audit-events?eventType=Sale.Completed&entityId=${entityId}`, headers: signedInAs(viewer.employee, org) });
+    expect(noMatch.json().items).toEqual([]);
+  });
+});
+
 describe('the chain check (AU-29, AU-30, RT-302, EC-76)', () => {
   it('AU-29, AU-30: an intact chain reports nothing; an event outside the chain is reported, and nothing is repaired', async () => {
     const org = await insertOrganization(db.app);
