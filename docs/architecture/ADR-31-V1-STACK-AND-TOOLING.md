@@ -393,3 +393,25 @@ Across the three runs (p95): scan over HTTP 3.4, 5.1, 7.8 ms; scan in the browse
   refund. The test does not build them. A card sale's cost is its own round trips plus the real provider's latency, which this
   machine cannot show.
 - **The budget is a local-network figure** (§8). The proposed sale-save budget, p95 ≤ 100 ms, is still met, and still not approved.
+
+### Re-measured 2026-10-03 (Phase F: reopen shift, warehouse routes, .env fix)
+
+Node.js v26.7.0. PostgreSQL on localhost. 100,000 variants.
+The perf test now includes a card-sale measurement added in a prior step
+(authorize + capture inline, SimulatedGateway, TEST-APPROVE barcode).
+
+| Measure | n | p50 | p95 | max | Budget |
+|---|---|---|---|---|---|
+| scan-to-cart (HTTP) | 1000 | 3.6 ms | 6.5 ms | 9.3 ms | p95 ≤ 100 ms: **met** |
+| scan-to-cart in the browser (Enter to line drawn) | 200 | 20.8 ms | 25.2 ms | 40.7 ms | p95 ≤ 100 ms: **met** |
+| sale-save, 10 lines, cash | 200 | 52.1 ms | 78.5 ms | 228.0 ms | proposed p95 ≤ 100 ms: met |
+| sale-save, 10 lines, card (SimulatedGateway, TEST-APPROVE) | 100 | 67.5 ms | 88.4 ms | 116.5 ms | proposed p95 ≤ 100 ms: met |
+
+Across the four runs (p95): scan over HTTP 3.4, 5.1, 7.8, 6.5 ms; scan browser 20.6, 24.1, 29.2, 25.2 ms; sale-save cash 27.1, 69.1, 69.8, 78.5 ms.
+
+- **Card-sale first data point:** p50 67.5 ms, p95 88.4 ms with the simulated gateway (zero added latency). The card path
+  does four HTTP round trips (authorize, capture, sale-save, receipt) where cash does two. The extra cost is the second
+  database transaction plus the gateway call; with a real gateway the provider's latency would dominate.
+- **Sale-save (cash) is 78.5 ms p95** — slightly higher than the previous 69.8 ms, within the noise of 200 samples. Consistent
+  with the jump first seen on 2026-10-02; still within the proposed budget. Unchanged code path.
+- **Budget:** proposed p95 ≤ 100 ms for sale-save is met on both cash and card paths and is still not owner-approved.
