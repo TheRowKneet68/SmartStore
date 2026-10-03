@@ -460,6 +460,10 @@ against the standard, so the "UNVERIFIED" caveat below is discharged). The entry
   - *Meanwhile:* a fifth required setting, `LOCK_TIMEOUT_MS`, with no default. It applies to every transaction that
     moves stock (a sale, posting or reversing an adjustment).
 
+**Closed by owner decision D-23, 2026-10-03.** All five values approved as in `.env.example`:
+`SESSION_LIFETIME_MINUTES=15`, `SIGN_IN_FAILURE_LIMIT=4`, `SIGN_IN_FAILURE_WINDOW_MINUTES=2`,
+`QUOTE_MAX_AGE_MINUTES=5`, `LOCK_TIMEOUT_MS=5000`. Leading spaces removed from `.env.example`. No default in code — required env vars.
+
 ### OQ-028 — `Config.Roles` and `Role.Create`/`Role.Edit` overlap
 
 - **Unknown:** which key governs defining roles.
@@ -687,6 +691,8 @@ against the standard, so the "UNVERIFIED" caveat below is discharged). The entry
   does for security policy. A store-level setting would be additive.
 - **Why not answerable from `/docs`:** a configured value is the owner's to set.
 - **Blocked:** a scheduled run (`BQ-02` too).
+
+**Still open.** The owner's 2026-10-03 decisions closed the session-policy values (OQ-027 / D-23) and the sale-save SLO (recorded in D-22 and ADR-31 §16) but did not set the `payments:check` window. `PAYMENTS_OLDER_THAN_MINUTES` remains a required CLI parameter with no approved default.
 
 ### OQ-038 — A failed card refund cannot be cancelled (was `OQ-036` item 1)
 

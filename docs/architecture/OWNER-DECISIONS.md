@@ -635,6 +635,64 @@ cancel from `Failed`. Retry remains the other way out, and `Cancelled` is final.
 
 ---
 
+## D-20 — Shift.Reopen role assignment (`OQ-031`)
+
+**Status:** DECIDED — 2026-10-03 (owner).
+
+**Decision:** Grant `Shift.Reopen` to Manager-level and Owner roles, following the wildcard-group principle of D-01: any role that holds all other `Shift.*` permission keys (`Shift.Close`, `Shift.Manage`, `Shift.Open`) is back-filled the key. The Owner role was already covered by `grant_to_complete_roles` (migration `20261002100000`).
+
+**Applied:** migration `20261003110000_oq031_oq032_manager_keys.sql` (INSERT into `role_permission` for roles with all three other `Shift.*` keys). Closes OQ-031.
+
+---
+
+## D-21 — Employee.Reactivate role assignment (`OQ-032`)
+
+**Status:** DECIDED — 2026-10-03 (owner).
+
+**Decision:** Grant `Employee.Reactivate` to HR-Manager-level and Owner roles, following D-01's wildcard-group principle: any role holding all `Employee.*` keys except `Employee.Terminate` (`Employee.Create`, `Employee.Edit`, `Employee.Password.Reset`, `Employee.StoreAccess.Grant`, `Employee.View`) is back-filled the key. `Employee.Terminate` is explicitly excluded per actors-and-roles §3.13 (the HR Manager does not terminate). The Owner role was already covered by `grant_to_complete_roles`.
+
+**Applied:** same migration `20261003110000_oq031_oq032_manager_keys.sql`. Closes OQ-032.
+
+---
+
+## D-22 — Sale-save performance SLO (`OQ-037`)
+
+**Status:** DECIDED — 2026-10-03 (owner).
+
+**Decision:** The official SLO for sale-save is **p95 ≤ 100 ms**, measured by `npm run perf` on local hardware (the "local-network figure" of ADR-31 §8). This covers both cash and card paths. Latency added by a real card provider is outside this budget and is the provider's responsibility.
+
+As of 2026-10-03: cash p95=78.5 ms, card p95=88.4 ms (SimulatedGateway). Both within the budget.
+
+**Applied:** ADR-31 §16 updated; `npm run perf` is the ongoing measurement tool. Closes OQ-037.
+
+---
+
+## D-23 — Session and rate-limit policy (`OQ-027`)
+
+**Status:** DECIDED — 2026-10-03 (owner).
+
+**Decision:** the five security-policy env vars are approved as documented in `.env.example`:
+
+| Variable | Value |
+|---|---|
+| `SESSION_LIFETIME_MINUTES` | 15 |
+| `SIGN_IN_FAILURE_LIMIT` | 4 |
+| `SIGN_IN_FAILURE_WINDOW_MINUTES` | 2 |
+| `QUOTE_MAX_AGE_MINUTES` | 5 |
+| `LOCK_TIMEOUT_MS` | 5000 |
+
+These are required env vars with no code defaults; the server refuses to start without them (so a deployment cannot accidentally run with insecure values). Closes OQ-027.
+
+---
+
+## D-24 — Real card gateway selection (`OQ-020`)
+
+**Status:** DECIDED — 2026-10-03 (owner). **Decision: deferred.**
+
+**Decision:** the simulated gateway (`SimulatedGateway`) remains in place. Real provider selection (Stripe, Adyen, etc.) requires money, secrets, and an account — the owner's call, not an engineering decision. OQ-020 remains open until the owner selects a provider and supplies credentials.
+
+---
+
 ## Decision log
 
 | ID | Question | Answer | Date |
@@ -658,3 +716,8 @@ cancel from `Failed`. Retry remains the other way out, and `Cancelled` is final.
 | D-17 | Reading returns and refunds; the payer at the till; withdrawing a draft refund (`OQ-035` items 4, 5, 7, 8) | The payer of a drawer refund is signed in at the refund's till. A draft refund may be withdrawn: `Draft → Cancelled` on `cancel`, under `Sale.Refund`, with a reason (read from D-16 Q9; raised for veto). New keys `Return.View` and `Refund.View` (catalogue 122 → 124) | 2026-10-02 |
 | D-18 | The money of a payment that never became a sale (`OQ-036` item 2, part B) | Option 1: a refund tied to a captured card payment, not a sale; the sale and lines are optional on it. Keys: `Sale.Refund` to issue, `Sale.Refund.Large.Approve` to approve, `Refund.Pay` to pay. No new key. Read from option 1, for veto: card payments only, partial, a reason, and a refund (even a draft) blocks the sale | 2026-10-02 |
 | D-19 | A failed refund can be cancelled (`OQ-038`) | The same pattern as D-17: `Failed → Cancelled` on `cancel`, under `Sale.Refund`, with a required reason; cancelling releases the hold. No new key | 2026-10-02 |
+| D-20 | Shift.Reopen role assignment (`OQ-031`) | Grant `Shift.Reopen` to Manager-level and Owner roles, following D-01's wildcard-group principle: any role holding all other `Shift.*` keys (`Shift.Close`, `Shift.Manage`, `Shift.Open`) is back-filled by migration `20261003110000_oq031_oq032_manager_keys.sql`. Closes OQ-031 | 2026-10-03 |
+| D-21 | Employee.Reactivate role assignment (`OQ-032`) | Grant `Employee.Reactivate` to HR-Manager-level and Owner roles, following D-01's wildcard-group principle: any role holding all `Employee.*` keys except `Terminate` (`Employee.Create`, `Employee.Edit`, `Employee.Password.Reset`, `Employee.StoreAccess.Grant`, `Employee.View`) is back-filled by the same migration. Closes OQ-032 | 2026-10-03 |
+| D-22 | Sale-save performance SLO (`OQ-037`) | Official SLO: **p95 ≤ 100 ms** for sale-save (cash and card paths), measured by `npm run perf` on local hardware. As of 2026-10-03: cash p95=78.5 ms, card p95=88.4 ms (SimulatedGateway). Real-provider card latency is outside this budget. Closes OQ-037 | 2026-10-03 |
+| D-23 | Session and rate-limit policy (`OQ-027`) | Approved as documented in `.env.example`: SESSION_LIFETIME_MINUTES=15, SIGN_IN_FAILURE_LIMIT=4, SIGN_IN_FAILURE_WINDOW_MINUTES=2, QUOTE_MAX_AGE_MINUTES=5, LOCK_TIMEOUT_MS=5000. These are required env vars with no defaults; the server refuses to start without them. Closes OQ-027 | 2026-10-03 |
+| D-24 | Real card gateway selection (`OQ-020`) | Deferred. The simulated gateway (`SimulatedGateway`) remains in place for v1 testing. Provider selection (Stripe, Adyen, etc.) and credentials are an owner decision requiring money and secrets; not decided in this session. OQ-020 stays open until the owner selects a provider | 2026-10-03 |

@@ -1652,3 +1652,10 @@ Append-only. One dated line per step, including failed and abandoned attempts.
   - **Item 4 — Phase F perf re-run:** `docs/architecture/ADR-31-V1-STACK-AND-TOOLING.md` §16 updated with 2026-10-03 measurements: scan HTTP p95=6.5 ms (met), scan browser p95=25.2 ms (met), sale-save cash p95=78.5 ms, sale-save card p95=88.4 ms (first card data point — SimulatedGateway).
   - **Item 5 — .env.example leading spaces:** `KEY= 15` → `KEY=15` for all five numeric vars; dotenv parsed them as strings starting with a space, failing startup validation.
   - **Checked:** 513/513 server tests, 279/279 web tests, typecheck clean (server + web).
+- 2026-10-03 — **Owner decisions D-20..D-24 recorded; OQ-031/OQ-032 implemented.**
+  - **D-20 (OQ-031): Shift.Reopen to Manager/Owner.** Migration `20261003110000_oq031_oq032_manager_keys.sql` back-fills `Shift.Reopen` to any role holding all other `Shift.*` keys (Store Manager, Assistant Manager style). 2 new tests in `access.test.ts`.
+  - **D-21 (OQ-032): Employee.Reactivate to HR-Manager/Owner.** Same migration: any role holding all `Employee.*` except `Terminate` gets `Employee.Reactivate`.
+  - **D-22 (OQ-037): Sale-save SLO approved** — p95 ≤ 100 ms for cash and card. Recorded in OWNER-DECISIONS §D-22 and ADR-31 §16.
+  - **D-23 (OQ-027): Session policy approved** — SESSION_LIFETIME_MINUTES=15, SIGN_IN_FAILURE_LIMIT=4, SIGN_IN_FAILURE_WINDOW_MINUTES=2, QUOTE_MAX_AGE_MINUTES=5, LOCK_TIMEOUT_MS=5000. OQ-027 closed.
+  - **D-24 (OQ-020): Real card gateway deferred** — SimulatedGateway stays; provider selection is the owner's when ready.
+  - **Checked:** 515/515 server tests, 279/279 web tests, typecheck clean (server + web).

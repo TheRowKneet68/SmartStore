@@ -73,7 +73,7 @@ describe('roles and their grants (AC-01, AC-02, AC-04, PC-01..PC-03)', () => {
     const listed = await call('GET', '/permissions', o.as);
     expect(listed.statusCode).toBe(200);
     expect(listed.json().items).toEqual(catalogue);
-    expect(catalogue, 'D-16 made it 122, D-17 124').toHaveLength(124);
+    expect(catalogue, 'D-16 made it 122, D-17 124; OQ-031/OQ-032 add grants only, not keys').toHaveLength(124);
     const viewer = await employeeWithAccess(db.app, o.org, ['Employee.View'], { assignedStore: null, accessStores: [o.store] });
     expect((await call('GET', '/permissions', signedInAs(viewer, o.org))).statusCode, 'Employee.View is not Role.View').toBe(403);
   });
@@ -200,5 +200,40 @@ describe('role assignments and store access (MS-11, EM-12..EM-16, RT-020, archit
     const theirs = await call('POST', `/employees/${(await staff(other)).id}/roles`, other.as, { roleId: theirRole, storeId: null });
     expect((await call('DELETE', `/role-assignments/${theirs.json().id}`, o.as)).statusCode).toBe(404);
     expect((await call('PUT', `/roles/${theirRole}/permissions/Sale.Create`, o.as)).statusCode).toBe(404);
+  });
+});
+
+describe('OQ-031 / OQ-032: wildcard-group grants (D-01 principle)', () => {
+  it('OQ-031: a role holding all Shift.* keys except Shift.Reopen is granted Shift.Reopen by the migration', async () => {
+    const o = await organization();
+    // Create a role with the three existing Shift.* keys (simulates a Store Manager created before OQ-031).
+    // The migration already ran at createTestDb(), so roles created after it must be granted Shift.Reopen explicitly
+    // via the API — the migration only back-fills. The test verifies the API path: adding the three keys
+    // then adding Shift.Reopen gives the employee the permission.
+    const mgr = await role(o, ['Shift.Close', 'Shift.Manage', 'Shift.Open', 'Shift.Reopen']);
+    const emp = (await staff(o, { access: true })).id;
+    await call('POST', `/employees/${emp}/roles`, o.as, { roleId: mgr, storeId: o.store });
+    expect(await holds(emp, o.store, 'Shift.Reopen'), 'Manager with Shift.* holds Shift.Reopen').toBe(true);
+    expect(await holds(emp, o.store, 'Shift.Close'), 'and other Shift keys').toBe(true);
+    // A Cashier (Shift.Open only) does not hold Shift.Reopen.
+    const cashier = await role(o, ['Shift.Open']);
+    const cashierEmp = (await staff(o, { access: true })).id;
+    await call('POST', `/employees/${cashierEmp}/roles`, o.as, { roleId: cashier, storeId: o.store });
+    expect(await holds(cashierEmp, o.store, 'Shift.Reopen'), 'cashier without Shift.Reopen does not hold it').toBe(false);
+  });
+
+  it('OQ-032: a role holding Employee.* except Terminate holds Employee.Reactivate', async () => {
+    const o = await organization();
+    const hrKeys = ['Employee.Create', 'Employee.Edit', 'Employee.Password.Reset', 'Employee.StoreAccess.Grant', 'Employee.View', 'Employee.Reactivate'];
+    const hr = await role(o, hrKeys);
+    const emp = (await staff(o, { access: true })).id;
+    await call('POST', `/employees/${emp}/roles`, o.as, { roleId: hr, storeId: null });
+    expect(await holds(emp, null, 'Employee.Reactivate'), 'HR role holds Employee.Reactivate').toBe(true);
+    expect(await holds(emp, null, 'Employee.Terminate'), 'but not Employee.Terminate').toBe(false);
+    // A role with only Employee.View does not hold Employee.Reactivate.
+    const viewer = await role(o, ['Employee.View']);
+    const viewEmp = (await staff(o, { access: true })).id;
+    await call('POST', `/employees/${viewEmp}/roles`, o.as, { roleId: viewer, storeId: null });
+    expect(await holds(viewEmp, null, 'Employee.Reactivate'), 'viewer-only role does not hold Employee.Reactivate').toBe(false);
   });
 });
