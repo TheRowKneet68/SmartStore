@@ -121,6 +121,7 @@ describe('the closed vocabulary and the contract (AU-11, AU-12, D-06, s22)', () 
       ['Shift', '*', 'Open', null, false],
       ['Shift', 'Open', 'Reconciling', 'Shift.StateChange', false],
       ['Shift', 'Reconciling', 'Closed', 'Shift.Close', false],
+      ['Shift', 'Closed', 'Reopened', 'Shift.Reopened', true],
       ['Shift', 'Reopened', 'Reconciling', 'Shift.Close', false],
       ['Device', '*', 'Registered', 'Device.StateChange', false],
       ['Device', 'Registered', 'Active', 'Device.StateChange', false],

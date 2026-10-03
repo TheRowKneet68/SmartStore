@@ -473,6 +473,7 @@ describe('the permission each transition needs (architecture s8.4, SM-02d, D-01)
       key('Shift', '*', 'Open', 'Shift.Open'),
       key('Shift', 'Open', 'Reconciling', 'Shift.Close'),
       key('Shift', 'Reconciling', 'Closed', 'Shift.Close'),
+      key('Shift', 'Closed', 'Reopened', 'Shift.Reopen'),
       key('Shift', 'Reopened', 'Reconciling', 'Shift.Close'),
       key('Device', '*', 'Registered', 'Device.Register'),
       key('Device', 'Registered', 'Active', 'Device.Edit'),

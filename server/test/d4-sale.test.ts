@@ -9,6 +9,7 @@ import {
   insertBarcode,
   insertLocation,
   insertPrice,
+  insertReasonCode,
   insertSettings,
   insertVariant,
   onHand,
@@ -148,12 +149,62 @@ describe('till setup (PT-01..PT-03, CD-01..CD-05, CD-11, BI-39, RT-005)', () => 
     expect(await sqlState(sameCashier)).toBe('23505');
   });
 
-  it('SM-55, OQ-014: the shift moves Open, Reconciling, Closed; no reopen and no un-reconcile in v1', async () => {
+  it('SM-55, OQ-014: Reconciling → Open is drawn but not contracted', async () => {
     const t = await tillWorld(db.app, { stock: 0 });
     const set = (status: string) =>
       db.app.query('UPDATE cash_shift SET status = $2, status_changed_by = $3 WHERE id = $1', [t.shift, status, actor()]);
     await set('Reconciling');
     expect(await sqlState(set('Open')), 'Reconciling -> Open is drawn but not contracted').toBe('SS004');
+  });
+
+  it('OQ-033, SM-55, CD-26: Closed → Reopened requires a reason; sets reopened_by and retains closed_by', async () => {
+    const t = await tillWorld(db.app, { stock: 0 });
+    const reason = await insertReasonCode(db.app, t.org);
+    const closer = actor();
+    await db.app.query(
+      `UPDATE cash_shift SET status = 'Reconciling', status_changed_by = $2 WHERE id = $1`,
+      [t.shift, actor()],
+    );
+    await db.app.query(
+      `INSERT INTO shift_count (cash_shift_id, store_id, organization_id, counted_amount, counted_by) VALUES ($1, $2, $3, 1000, $4)`,
+      [t.shift, t.store, t.org, actor()],
+    );
+    // ClosingFloat is required by assert_shift_close_ready (CD-20).
+    await db.app.query(
+      `INSERT INTO cash_transaction (cash_shift_id, cash_drawer_id, store_id, type, direction, amount, currency_code, created_by)
+       VALUES ($1, $2, $3, 'ClosingFloat', 'Out', 1000, $4, $5)`,
+      [t.shift, t.drawer, t.store, TEST_CURRENCY, actor()],
+    );
+    await db.app.query(
+      `UPDATE cash_shift SET status = 'Closed', closed_by = $2, status_changed_by = $2 WHERE id = $1`,
+      [t.shift, closer],
+    );
+    // Reopen without reason is refused (requires_reason = true on the edge, SS055).
+    const reopener = actor();
+    expect(
+      await sqlState(
+        db.app.query(
+          `UPDATE cash_shift SET status = 'Reopened', reopened_by = $2, reopen_reason_code_id = $3, status_changed_by = $2 WHERE id = $1`,
+          [t.shift, reopener, reason],
+        ),
+      ),
+      'no session reason → SS055',
+    ).toBe('SS055');
+    // Reopen with reason succeeds; closed_by is preserved alongside reopened_by.
+    const reopener2 = actor();
+    await withReason(
+      db.app,
+      reason,
+      `UPDATE cash_shift SET status = 'Reopened', reopened_by = $2, reopen_reason_code_id = $3, status_changed_by = $2 WHERE id = $1`,
+      [t.shift, reopener2, reason],
+    );
+    const { rows } = await db.app.query<{ status: string; closed_by: string; reopened_by: string }>(
+      'SELECT status, closed_by, reopened_by FROM cash_shift WHERE id = $1',
+      [t.shift],
+    );
+    expect(rows[0]!.status).toBe('Reopened');
+    expect(rows[0]!.closed_by).toBe(closer);
+    expect(rows[0]!.reopened_by).toBe(reopener2);
   });
 
   it('CD-19: the cash ledger is append-only, whatever the role', async () => {

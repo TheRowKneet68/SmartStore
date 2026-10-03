@@ -60,7 +60,8 @@ export const shiftMachine: MachineBinding = {
   actorColumn: 'status_changed_by',
   storeColumn: 'store_id',
   organizationColumn: '(SELECT o.organization_id FROM store o WHERE o.id = cash_shift.store_id)',
-  actorColumnsFor: (to) => (to === 'Closed' ? ['closed_by'] : []),
+  actorColumnsFor: (to) => (to === 'Closed' ? ['closed_by'] : to === 'Reopened' ? ['reopened_by'] : []),
+  reasonColumnFor: (to) => (to === 'Reopened' ? 'reopen_reason_code_id' : null),
   payloads: { close: Closing },
   before: (c, shiftId, _from, to, principal, payload) => beforeClose(c, shiftId, to, principal, payload),
 };
@@ -120,7 +121,6 @@ interface ScreenRow {
  * (`counted`), the difference against its threshold (`variance`, `tolerance`), and why (`why`: the reason and who
  * acknowledged it; `next`: what happens now, an event of §22.11 or a step of the close).
  * - The tolerance is zero until the owner sets one (OQ-020).
- * - A closed shift has no next step: reopening is undecided (OQ-014).
  */
 function answers(row: ScreenRow) {
   const { reasonCodeId, reason, acknowledgedBy, acknowledgedByName, acknowledgedAt, ...shift } = row;
@@ -129,7 +129,8 @@ function answers(row: ScreenRow) {
   else if (row.status === 'Reconciling') {
     if (row.counted === null) next = 'count';
     else next = row.variance !== 0 && acknowledgedBy === null ? 'acknowledge' : 'close';
-  }
+  } else if (row.status === 'Closed') next = 'reopen';
+  else if (row.status === 'Reopened') next = 'recount';
   return {
     ...shift,
     tolerance: TOLERANCE,
