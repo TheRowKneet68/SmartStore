@@ -2563,6 +2563,33 @@ COMMENT ON FUNCTION public.stamp_status_change() IS 'Cites: SM-03, RT-353. Stamp
 
 
 --
+-- Name: stamp_stock_count_dates(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.stamp_stock_count_dates() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  IF NEW.status IS DISTINCT FROM OLD.status THEN
+    CASE NEW.status
+      WHEN 'Posted'    THEN NEW.posted_at    := now();
+      WHEN 'Cancelled' THEN NEW.cancelled_at := now();
+      ELSE NULL;
+    END CASE;
+  END IF;
+  RETURN NEW;
+END
+$$;
+
+
+--
+-- Name: FUNCTION stamp_stock_count_dates(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.stamp_stock_count_dates() IS 'Cites: SM-03, IV-28, IV-25. Sets posted_at / cancelled_at in the same row write that sets the _by column.';
+
+
+--
 -- Name: stock_adjustment_before_write(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -8947,6 +8974,62 @@ COMMENT ON TRIGGER tg_stock_adjustment_state_machine ON public.stock_adjustment 
 
 
 --
+-- Name: stock_count tg_stock_count_audit; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_stock_count_audit AFTER INSERT OR UPDATE OF status ON public.stock_count FOR EACH ROW EXECUTE FUNCTION public.audit_state_transition('StockCount');
+
+
+--
+-- Name: TRIGGER tg_stock_count_audit ON stock_count; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_stock_count_audit ON public.stock_count IS 'Cites: AU-01, AU-12, D-06. Records Inventory.CountStateChange on creation and every edge.';
+
+
+--
+-- Name: stock_count tg_stock_count_dates; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_stock_count_dates BEFORE UPDATE OF status ON public.stock_count FOR EACH ROW EXECUTE FUNCTION public.stamp_stock_count_dates();
+
+
+--
+-- Name: TRIGGER tg_stock_count_dates ON stock_count; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_stock_count_dates ON public.stock_count IS 'Cites: SM-03, IV-28. Timestamps posted_at and cancelled_at together with their _by columns.';
+
+
+--
+-- Name: stock_count tg_stock_count_state_machine; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_stock_count_state_machine BEFORE INSERT OR UPDATE OF status ON public.stock_count FOR EACH ROW EXECUTE FUNCTION public.enforce_state_transition('StockCount', 'status');
+
+
+--
+-- Name: TRIGGER tg_stock_count_state_machine ON stock_count; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_stock_count_state_machine ON public.stock_count IS 'Cites: SM-02, SM-06, D-09. A stock count is created Open and moves only along the four edges of state-machines §22.17.';
+
+
+--
+-- Name: stock_count tg_stock_count_status_stamp; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER tg_stock_count_status_stamp BEFORE UPDATE OF status ON public.stock_count FOR EACH ROW EXECUTE FUNCTION public.stamp_status_change();
+
+
+--
+-- Name: TRIGGER tg_stock_count_status_stamp ON stock_count; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TRIGGER tg_stock_count_status_stamp ON public.stock_count IS 'Cites: SM-03, RT-353. Server time for each status change.';
+
+
+--
 -- Name: store tg_store_deactivation; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -12101,4 +12184,5 @@ INSERT INTO public.schema_migrations (version) VALUES
     ('20261002141000'),
     ('20261003100000'),
     ('20261003110000'),
-    ('20261004090000');
+    ('20261004090000'),
+    ('20261004091000');

@@ -342,6 +342,27 @@ Step 3 rules, given by the owner on 2026-10-01 with "start Step 3":
     removed (see the log).
   - **Two schema gaps found and reported, not fixed** (the brief excluded migrations). See Next.
 
+- 2026-10-04 — **Stock Counts domain (IV-25..IV-30, SM-81..SM-84, RT-071, D-09).** SCHEMA + APPLICATION LAYER + **TESTED** (7 new tests, 522 passing).
+  - **Schema** (`20261004090000_d8_stock_count.sql`, committed `4dcdd2c`): `stock_count` and `stock_count_line`
+    tables; the four-state machine (Open → Posted, Open → Cancelled, Posted → Reversed) inserted into
+    `state_machine_state`/`state_machine_edge`; `COUNT_VARIANCE_IN/OUT/REVERSAL` types added to
+    `inventory_movement_type`; `stock_count_id` and `stock_count_line_id` added to `inventory_movement`; the
+    one-cause constraint updated to a 4-way check.
+  - **Triggers and grants** (`20261004091000_d8_stock_count_triggers.sql`): `stamp_stock_count_dates()` function
+    stamps `posted_at`/`cancelled_at` together with the corresponding `_by` column; `tg_stock_count_dates`,
+    `tg_stock_count_status_stamp`, `tg_stock_count_state_machine` and `tg_stock_count_audit` registered (SM-02,
+    SM-03, AU-01, AU-12); GRANT statements for `smartstore_app` added (the d8 schema migration omitted them).
+  - **Application** (`server/src/modules/inventory/stock-counts.ts`): list and detail, create, add line
+    (expected_quantity frozen from the live ledger balance at line-add time — IV-26), enter counted quantity
+    (negative rejected — IV-29; variance without reason rejected — IV-28; movement_type and direction derived and
+    stored on the line). `movedSinceSnapshot` flag on each line: EXISTS check for non-COUNT movements after
+    `line.created_at` (IV-27, SM-83). `stockCountMachine` bound to the transition endpoint: `before` hook checks
+    all lines counted and variance lines have reason codes before posting; `after` hook writes `COUNT_VARIANCE_IN/OUT`
+    on posting and `COUNT_VARIANCE_REVERSAL` (compensating, never editing) on reversal (SM-81, SM-82, IV-30).
+  - All three edges have `requires_reason=true`; the audit trigger enforces it (AU-12, SS055).
+  - **Gaps fixed:** d8 schema migration omitted state-machine triggers (enforce, audit, stamp) and runtime GRANTs —
+    both corrected in the triggers migration rather than by touching the committed d8 migration.
+
 ## In progress
 
 **Finishing v1, on the owner's brief of 2026-10-01** (phases A to F; see Next).
@@ -1659,3 +1680,22 @@ Append-only. One dated line per step, including failed and abandoned attempts.
   - **D-23 (OQ-027): Session policy approved** — SESSION_LIFETIME_MINUTES=15, SIGN_IN_FAILURE_LIMIT=4, SIGN_IN_FAILURE_WINDOW_MINUTES=2, QUOTE_MAX_AGE_MINUTES=5, LOCK_TIMEOUT_MS=5000. OQ-027 closed.
   - **D-24 (OQ-020): Real card gateway deferred** — SimulatedGateway stays; provider selection is the owner's when ready.
   - **Checked:** 515/515 server tests, 279/279 web tests, typecheck clean (server + web).
+- 2026-10-04 — **Stock Count domain schema** (`db/migrations/20261004090000_d8_stock_count.sql`, commit `4dcdd2c`).
+  - `stock_count` and `stock_count_line` tables; four-state machine (Open/Posted/Cancelled/Reversed) in
+    `state_machine_state` / `state_machine_edge`; `COUNT_VARIANCE_IN/OUT/REVERSAL` movement types; `stock_count_id` and
+    `stock_count_line_id` added to `inventory_movement`; one-cause constraint extended to four-way. Full citation set:
+    IV-25..IV-30, SM-81..SM-84, RT-071, D-09.
+- 2026-10-04 — **Stock Count domain: triggers, GRANTs, and application layer** (522 tests passing, 7 new).
+  - **Root cause of d8 migration gap:** the `d8_stock_count.sql` migration created the tables but omitted (a) the three
+    state-machine triggers every owned table needs (`enforce_state_transition`, `audit_state_transition`,
+    `stamp_status_change`) and (b) runtime GRANTs for `smartstore_app`. The correction migration
+    `20261004091000_d8_stock_count_triggers.sql` adds all four triggers (including a new `stamp_stock_count_dates()`
+    function that stamps `posted_at`/`cancelled_at`) and the column-level GRANTs.
+  - **Three bugs fixed during testing:**
+    (1) `readCount` query did not SELECT `direction` from `stock_count_line`; test expected it in the response.
+    (2) `reverseCountMovements` set `reverses_movement_id` on `COUNT_VARIANCE_REVERSAL` rows, violating constraint
+        `ck_inventory_movement_reversal` (`reverses_movement_id` requires `movement_type = 'REVERSAL'`). Removed.
+    (3) IV-27 test used `movementType: 'ADJUSTMENT_IN'` which is not a valid `AdjustmentLine` type (enum is
+        DAMAGE/EXPIRY/LOSS/FOUND). Changed to `FOUND`.
+    (4) Test expected `expectedQuantity: '0'` but column returns `'0.0000'` (numeric(19,4)). Updated.
+  - Checked: 522/522 server tests.

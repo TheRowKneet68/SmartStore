@@ -19,7 +19,7 @@ afterAll(async () => {
 });
 
 type Headers = Record<string, string>;
-const call = (method: 'GET' | 'POST' | 'DELETE', url: string, as: Headers, payload?: object) =>
+const call = (method: 'GET' | 'POST' | 'PUT' | 'DELETE', url: string, as: Headers, payload?: object) =>
   app.inject({ method, url: `/api/v1${url}`, headers: as, ...(payload ? { payload } : {}) });
 async function ok(method: 'POST' | 'DELETE', url: string, as: Headers, payload?: object) {
   const response = await call(method, url, as, payload);
@@ -267,5 +267,146 @@ describe('warehouses and storage locations (RT-003, MS-15, MS-17, RT-057, WH-01,
     const other = await store();
     const wh = await ok('POST', '/warehouses', other.owner, { kind: 'Central', code: 'WH-X', name: 'Other' });
     expect((await call('GET', `/warehouses/${wh.id}/storage-locations`, s.owner)).statusCode).toBe(404);
+  });
+});
+
+describe('stock counts (IV-25..IV-30, SM-81..SM-84, RT-071, D-09)', () => {
+  // All StockCount transitions have requires_reason=true in state_machine_edge; the audit trigger
+  // reads smartstore.reason_code_id set by auditContext.  Always pass s.reason (IV-28, AU-12).
+  const countMove = (as: Headers, subject: string, event: string, reasonCodeId: string) =>
+    call('POST', '/transitions', as, { machine: 'StockCount', event, subject, reasonCodeId });
+
+  it('IV-25: creates an Open count; Inventory.Count.Create required', async () => {
+    const s = await store();
+    const noKey = await s.staff([]);
+    expect((await call('POST', `/stores/${s.storeId}/stock-counts`, noKey, { scope: 'Location' })).statusCode).toBe(403);
+    const res = await call('POST', `/stores/${s.storeId}/stock-counts`, s.owner, { scope: 'Location', note: 'Test count' });
+    expect(res.statusCode).toBe(201);
+    const body = res.json();
+    expect(body).toMatchObject({ status: 'Open', scope: 'Location', note: 'Test count', lines: [] });
+    expect(body.documentNumber).toBeDefined();
+  });
+
+  it('IV-26: expected_quantity frozen from current ledger balance when the line is added', async () => {
+    const s = await store();
+    const count = (await call('POST', `/stores/${s.storeId}/stock-counts`, s.owner, { scope: 'Location' })).json();
+    const withLine = (await call('POST', `/stores/${s.storeId}/stock-counts/${count.id}/lines`, s.owner,
+      { variantId: s.variant, locationId: s.location })).json();
+    expect(withLine.lines).toHaveLength(1);
+    // No stock loaded yet: balance is zero (IV-26)
+    expect(withLine.lines[0]).toMatchObject({ expectedQuantity: '0.0000', countedQuantity: null, movedSinceSnapshot: false });
+    // Duplicate line is refused
+    const dup = await call('POST', `/stores/${s.storeId}/stock-counts/${count.id}/lines`, s.owner,
+      { variantId: s.variant, locationId: s.location });
+    expect(dup.statusCode).toBeGreaterThanOrEqual(400);
+  });
+
+  it('IV-28, IV-29: entering counted quantity — negative rejected; variance requires reason; zero-variance accepted; IN/OUT direction set', async () => {
+    const s = await store();
+    const count = (await call('POST', `/stores/${s.storeId}/stock-counts`, s.owner, { scope: 'Location' })).json();
+    const withLine = (await call('POST', `/stores/${s.storeId}/stock-counts/${count.id}/lines`, s.owner,
+      { variantId: s.variant, locationId: s.location })).json();
+    const lineId = withLine.lines[0].id;
+
+    // IV-29: negative rejected by schema validation
+    expect((await call('PUT', `/stores/${s.storeId}/stock-counts/${count.id}/lines/${lineId}`, s.owner,
+      { countedQuantity: '-1' })).statusCode).toBe(400);
+
+    // IV-28: variance without reason rejected
+    expect((await call('PUT', `/stores/${s.storeId}/stock-counts/${count.id}/lines/${lineId}`, s.owner,
+      { countedQuantity: '5' })).json().error.code).toBe('missing_reason');
+
+    // zero-variance (count = 0 = expected): no reason needed
+    expect((await call('PUT', `/stores/${s.storeId}/stock-counts/${count.id}/lines/${lineId}`, s.owner,
+      { countedQuantity: '0' })).statusCode).toBe(200);
+
+    // variance with reason: accepted; COUNT_VARIANCE_IN because counted > expected
+    const res = (await call('PUT', `/stores/${s.storeId}/stock-counts/${count.id}/lines/${lineId}`, s.owner,
+      { countedQuantity: '3', reasonCodeId: s.reason })).json();
+    expect(res.lines[0]).toMatchObject({ countedQuantity: '3.0000', movementType: 'COUNT_VARIANCE_IN', direction: 'In' });
+  });
+
+  it('IV-27, SM-83: movedSinceSnapshot flag appears after a movement to the counted location', async () => {
+    const s = await store();
+    const approver = await s.staff(['Inventory.Adjust.Large.Approve']);
+    const count = (await call('POST', `/stores/${s.storeId}/stock-counts`, s.owner, { scope: 'Location' })).json();
+    await call('POST', `/stores/${s.storeId}/stock-counts/${count.id}/lines`, s.owner,
+      { variantId: s.variant, locationId: s.location });
+
+    const before = (await call('GET', `/stores/${s.storeId}/stock-counts/${count.id}`, s.owner)).json();
+    expect(before.lines[0].movedSinceSnapshot).toBe(false);
+
+    // Post an adjustment so an inventory_movement lands after the count line's created_at
+    const adj = (await call('POST', `/stores/${s.storeId}/adjustments`, s.owner, { reasonCodeId: s.reason })).json();
+    await ok('POST', `/stores/${s.storeId}/adjustments/${adj.id}/lines`, s.owner,
+      { variantId: s.variant, locationId: s.location, movementType: 'FOUND', quantity: '3' });
+    await move(s.owner, adj.id, 'submit');
+    await move(approver, adj.id, 'approve');
+    await move(s.owner, adj.id, 'post');
+
+    const after = (await call('GET', `/stores/${s.storeId}/stock-counts/${count.id}`, s.owner)).json();
+    expect(after.lines[0].movedSinceSnapshot).toBe(true);
+  });
+
+  it('IV-28: posting refused when any line is uncounted; zero-variance count posts without movements', async () => {
+    const s = await store();
+    const count = (await call('POST', `/stores/${s.storeId}/stock-counts`, s.owner, { scope: 'Location' })).json();
+    const withLine = (await call('POST', `/stores/${s.storeId}/stock-counts/${count.id}/lines`, s.owner,
+      { variantId: s.variant, locationId: s.location })).json();
+    const lineId = withLine.lines[0].id;
+
+    // before hook rejects posting with uncounted line
+    expect((await countMove(s.owner, count.id, 'post', s.reason)).json().error.code).toBe('uncounted_lines');
+
+    // enter zero-variance and post: no movements written, state becomes Posted
+    await call('PUT', `/stores/${s.storeId}/stock-counts/${count.id}/lines/${lineId}`, s.owner, { countedQuantity: '0' });
+    expect((await countMove(s.owner, count.id, 'post', s.reason)).json().state).toBe('Posted');
+    const n = await db.app.query<{ n: number }>(
+      'SELECT count(*)::int AS n FROM inventory_movement WHERE stock_count_id = $1', [count.id],
+    );
+    expect(n.rows[0]!.n).toBe(0);
+  });
+
+  it('SM-81, IV-30: posting writes COUNT_VARIANCE_IN movement; SM-82: reverse writes COUNT_VARIANCE_REVERSAL', async () => {
+    const s = await store();
+    const count = (await call('POST', `/stores/${s.storeId}/stock-counts`, s.owner, { scope: 'Location' })).json();
+    const withLine = (await call('POST', `/stores/${s.storeId}/stock-counts/${count.id}/lines`, s.owner,
+      { variantId: s.variant, locationId: s.location })).json();
+    await call('PUT', `/stores/${s.storeId}/stock-counts/${count.id}/lines/${withLine.lines[0].id}`, s.owner,
+      { countedQuantity: '5', reasonCodeId: s.reason });
+
+    expect((await countMove(s.owner, count.id, 'post', s.reason)).json().state).toBe('Posted');
+    expect(await onHand(s)).toBe('5.0000');
+
+    const posted = await db.app.query<{ movement_type: string; direction: string; quantity: string }>(
+      'SELECT movement_type, direction, quantity::text FROM inventory_movement WHERE stock_count_id = $1 ORDER BY seq',
+      [count.id],
+    );
+    expect(posted.rows).toEqual([{ movement_type: 'COUNT_VARIANCE_IN', direction: 'In', quantity: '5.0000' }]);
+
+    // SM-82: reverse compensates with COUNT_VARIANCE_REVERSAL
+    expect((await countMove(s.owner, count.id, 'reverse', s.reason)).json().state).toBe('Reversed');
+    expect(await onHand(s)).toBe('0.0000');
+    const all = await db.app.query<{ movement_type: string; direction: string }>(
+      'SELECT movement_type, direction FROM inventory_movement WHERE stock_count_id = $1 ORDER BY seq',
+      [count.id],
+    );
+    expect(all.rows).toEqual([
+      { movement_type: 'COUNT_VARIANCE_IN', direction: 'In' },
+      { movement_type: 'COUNT_VARIANCE_REVERSAL', direction: 'Out' },
+    ]);
+  });
+
+  it('D-09: cancel sets Cancelled; listing filters by status', async () => {
+    const s = await store();
+    const count = (await call('POST', `/stores/${s.storeId}/stock-counts`, s.owner, { scope: 'Location' })).json();
+    expect((await countMove(s.owner, count.id, 'cancel', s.reason)).json().state).toBe('Cancelled');
+    expect((await call('GET', `/stores/${s.storeId}/stock-counts/${count.id}`, s.owner)).json().status).toBe('Cancelled');
+
+    const open = (await call('POST', `/stores/${s.storeId}/stock-counts`, s.owner, { scope: 'Location' })).json();
+    const listOpen = (await call('GET', `/stores/${s.storeId}/stock-counts?status=Open`, s.owner)).json();
+    expect(listOpen.items.every((i: { status: string }) => i.status === 'Open')).toBe(true);
+    expect(listOpen.items.some((i: { id: string }) => i.id === open.id)).toBe(true);
+    expect(listOpen.items.some((i: { id: string }) => i.id === count.id)).toBe(false);
   });
 });
