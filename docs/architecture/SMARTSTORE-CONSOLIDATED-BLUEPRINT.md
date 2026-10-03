@@ -1476,6 +1476,7 @@ interface for them would be an architectural choice, which this document may not
 | Contended aggregates use a row lock; no global serializable | `ADR-25`, `ADR-26` | BUILT; READ COMMITTED with explicit locks, bounded lock wait (`IV-23`) |
 | Scan to cart: **p95 ≤ 100 ms** on the local setup (the owner's figure) | ADR-31 §16 | Measured p95 **5.1 ms** over HTTP and **24.1 ms** in the browser, over a 100,000-variant catalogue |
 | Sale save, 10-line cash cart | ADR-31 §16 | **No budget approved.** p95 ≤ 100 ms is *proposed* for the owner; measured p95 **69.1 ms** (an earlier run gave 27.1 ms on the same code, and the rise is unexplained, per BUILD-STATUS) |
+| Sale save, 10-line card cart (SimulatedGateway, authorize + capture inline) | ADR-31 §16 | **No budget approved.** Measured p95 **70.6 ms** over a 10,000-variant catalogue (2026-10-03). The SimulatedGateway is in-process, so this measures the persistence cost and not provider latency. |
 | The 100 ms budget is a local-network figure; a cloud round trip adds latency the server cannot remove | ADR-31 §16 | A client-side price cache is the remedy, deferred with offline |
 | Throughput, concurrent tills, sales per day, database size | | **OPEN QUESTION:** no number is stated in the record. The owner's list names "safe concurrent sales" and "safe concurrent stock updates" (master goal), which are proved by tests (50 concurrent returns, 10 concurrent refunds, concurrent sales and shift opens), not sized |
 | Partitioning or archival of the three append-only ledgers | | `BQ-01` |
@@ -1488,7 +1489,7 @@ interface for them would be an architectural choice, which this document may not
   written exactly its lines (`SS022`).
 - **Provider I/O outside a transaction**, and a timeout is reconciled, not assumed (`PY-36`, `HD-17`, `HD-20`).
 - **The ledger is checkable**: `npm run ledger:check` recomputes the balances from the movements and reports a difference without
-  correcting it; `npm run audit:check` verifies the audit chain. **Neither is scheduled**: there is no job runner (`BQ-02`).
+  correcting it; `npm run audit:check` verifies the audit chain. **Both are now schedulable** via `npm run checks:run`; see `docs/operations/SCHEDULED-CHECKS.md`. The outbox and notification delivery remain deferred (`BQ-02`).
 - **Migrations** are forward-only, applied as the owner role, and a migration that is wrong is fixed by a new one (`ADR-31`).
   The compatibility-window rule for a till fleet (§27.2) has no till to protect yet.
 - **A terminal is a data-loss risk and this is an accepted v1 risk** (§26.3): a shift cannot close with an unsynced outbox without

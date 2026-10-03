@@ -125,7 +125,8 @@ try {
       )).rows[0]!.id;
       await setup.query(`UPDATE pos_terminal SET status = 'Active', status_changed_by = $2 WHERE id = $1`, [till, by]);
       await setup.query(`INSERT INTO cash_drawer (store_id, pos_terminal_id, label, currency_code) VALUES ($1, $2, 'Drawer 1', 'XTS')`, [store, till]);
-      cashier = await employeeWithAccess(setup as never, org, ['Sale.Create', 'Shift.Open'], { assignedStore: store, accessStores: [store] });
+      // Payment.Capture is required by completeCardSale (D-16), checked before the provider is asked.
+      cashier = await employeeWithAccess(setup as never, org, ['Sale.Create', 'Shift.Open', 'Payment.Capture'], { assignedStore: store, accessStores: [store] });
     } finally {
       await setup.query(`SELECT set_config('smartstore.actor_id', '', false)`);
       setup.release();
