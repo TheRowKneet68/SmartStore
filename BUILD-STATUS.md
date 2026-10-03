@@ -1634,3 +1634,6 @@ Append-only. One dated line per step, including failed and abandoned attempts.
   - **What is in the commit:** `server/src/cli/run-checks.ts`: runs `ledger:check`, `audit:check`, and `payments:check` in sequence; exits non-zero if any fails; `--older-than` configurable (env `PAYMENTS_OLDER_THAN_MINUTES`, default 60). `npm run checks:run` added to `server/package.json`. `docs/operations/SCHEDULED-CHECKS.md`: what each check does, recommended frequency, what to do when one fails, and ready-to-paste examples for Linux cron, systemd timer, and Windows Task Scheduler.
   - **BQ-02 status:** the integrity-check scheduling problem is resolved for production. The outbox and notification delivery remain deferred (no broker named in ADR-31).
   - **Checked:** server typecheck clean, 504/504 server tests.
+- 2026-10-03 — **Perf script: card-sale measurement added.**
+  - **What is in the commit:** `server/test/perf/perf.ts`: adds a card-sale measurement (10 lines, `TEST-APPROVE` via SimulatedGateway, authorize + capture inline); adds the `CARD` payment method to the perf store setup; reports card-sale p50/p95/max alongside the existing cash-sale row; controlled by `PERF_CARD_SALES` (default 100). Numbers in the ADR-31 §16 perf table will be updated after the next run.
+  - **Checked:** server typecheck clean.
