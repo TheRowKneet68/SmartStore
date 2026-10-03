@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { Announcer } from '../lib/Announcer.tsx';
 import { api } from '../lib/api.ts';
+import { changesOf, useList } from '../lib/form.ts';
 import { check, problemOf, ProblemNotice, type Problem } from '../lib/Problem.tsx';
 
 interface Unit {
@@ -24,44 +25,37 @@ interface Brand {
   name: string;
 }
 
+/** A category as `/categories` returns one: a name, where it sits under, and its order (`PR-04`..`PR-06`). */
+export interface Category {
+  id: string;
+  parentId: string | null;
+  name: string;
+  sortOrder: number;
+  archivedAt: string | null;
+}
+
 type Said = (outcome: string) => void;
 
-/** The fields of `next` that differ from `was`: an edit sends only what changed. */
-const changesOf = <T extends object>(was: T, next: Partial<T>): Partial<T> =>
-  Object.fromEntries(Object.entries(next).filter(([key, value]) => value !== was[key as keyof T])) as Partial<T>;
-
 /**
- * The catalogue's reference data (product-domain §3, §4, §6; D2 §3): units, tax categories with their rates, and
- * brands. Each is seen with its view key and changed with its edit key, held organization-wide: `Product.*` for units
- * and brands, `Tax.*` for tax categories (actors-and-roles §2.1). None of the three can be archived: `/docs` gives them
- * no archive (OQ-031).
+ * The catalogue's reference data (product-domain §3, §4, §6, §9; D2 §3): units, tax categories with their rates,
+ * categories and brands. Each is seen with its view key and changed with its edit key, held organization-wide:
+ * `Product.*` for units, categories and brands, `Tax.*` for tax categories (actors-and-roles §2.1). Units, tax categories
+ * and brands cannot be archived: `/docs` gives them no archive (OQ-031). A category can, and keeping the row is what
+ * lets products still point at it.
  */
 export function ReferenceData({ permissions }: { permissions: string[] }) {
   const can = (key: string) => permissions.includes(key);
   const [said, setSaid] = useState('');
   return (
     <section className="panel" aria-labelledby="reference-title">
-      <h1 id="reference-title">Units, tax and brands</h1>
+      <h1 id="reference-title">Units, tax, categories and brands</h1>
       {can('Product.View') && <Units canAdd={can('Product.Create')} canEdit={can('Product.Edit')} onSaid={setSaid} />}
       {can('Tax.View') && <TaxCategories canEdit={can('Tax.Edit')} onSaid={setSaid} />}
+      {can('Product.View') && <Categories canAdd={can('Product.Create')} canEdit={can('Product.Edit')} onSaid={setSaid} />}
       {can('Product.View') && <Brands canAdd={can('Product.Create')} canEdit={can('Product.Edit')} onSaid={setSaid} />}
       <Announcer text={said} />
     </section>
   );
-}
-
-/** Reads a list, again after each change made here. */
-function useList<T>(path: string) {
-  const [items, setItems] = useState<T[] | null>(null);
-  const [problem, setProblem] = useState<Problem | null>(null);
-  const [version, setVersion] = useState(0);
-  useEffect(() => {
-    api<{ items: T[] }>('GET', path).then(
-      (r) => setItems(r.items),
-      (e: unknown) => setProblem(problemOf(e)),
-    );
-  }, [path, version]);
-  return { items, problem, setProblem, reload: () => setVersion((v) => v + 1) };
 }
 
 // ------------------------------------------------------------------ units (PR-14, PR-15, RT-491)
@@ -365,6 +359,161 @@ function RateForm({ category, onSaved, onCancel }: { category: TaxCategory; onSa
       </label>
       <div className="actions">
         <button type="submit">Add the rate</button>
+        <button type="button" onClick={onCancel}>
+          Cancel
+        </button>
+      </div>
+      <ProblemNotice problem={problem} />
+    </form>
+  );
+}
+
+// ------------------------------------------------------------------ categories (PR-04..PR-06, RT-026)
+
+/**
+ * The catalogue's categories: one name, one parent or none, and an explicit order (`PR-04`..`PR-06`, `RT-026`). A cycle is
+ * refused by the database (`SS006`), so a category cannot be its own ancestor; the screen does not offer it. Archiving
+ * keeps the row, because products still point at it.
+ */
+function Categories({ canAdd, canEdit, onSaid }: { canAdd: boolean; canEdit: boolean; onSaid: Said }) {
+  const { items, problem, setProblem, reload } = useList<Category>('/categories');
+  const [editing, setEditing] = useState<Category | 'new' | null>(null);
+  const live = (items ?? []).filter((c) => c.archivedAt === null);
+  const saved = (outcome: string) => (setEditing(null), setProblem(null), onSaid(outcome), reload());
+
+  return (
+    <>
+      <h2>Categories</h2>
+      <ProblemNotice problem={problem} />
+      {items === null ? (
+        problem === null && <p role="status">Loading…</p>
+      ) : live.length === 0 ? (
+        <p>No categories yet. A product needs one.</p>
+      ) : (
+        <table className="records">
+          <caption className="visually-hidden">Categories, with what each sits under and its order</caption>
+          <thead>
+            <tr>
+              <th scope="col">Name</th>
+              <th scope="col">Under</th>
+              <th scope="col" className="num">
+                Order
+              </th>
+              {canEdit && (
+                <th scope="col">
+                  <span className="visually-hidden">Change</span>
+                </th>
+              )}
+            </tr>
+          </thead>
+          <tbody>
+            {live.map((c) => (
+              <tr key={c.id}>
+                <td>{c.name}</td>
+                <td>{c.parentId === null ? '—' : (live.find((p) => p.id === c.parentId)?.name ?? 'another category')}</td>
+                <td className="num">{c.sortOrder}</td>
+                {canEdit && (
+                  <td>
+                    <button type="button" onClick={() => setEditing(c)} aria-label={`Change the category ${c.name}`}>
+                      Change
+                    </button>{' '}
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          await api('POST', `/categories/${c.id}/archive`, {});
+                          saved(`${c.name} was archived. Products still pointing at it keep it.`);
+                        } catch (e) {
+                          setProblem(problemOf(e));
+                        }
+                      }}
+                      aria-label={`Archive the category ${c.name}`}
+                    >
+                      Archive
+                    </button>
+                  </td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {editing !== null ? (
+        <CategoryForm category={editing === 'new' ? null : editing} others={live} onSaved={saved} onCancel={() => setEditing(null)} />
+      ) : (
+        canAdd && (
+          <div className="actions">
+            <button type="button" onClick={() => setEditing('new')}>
+              Add a category
+            </button>
+          </div>
+        )
+      )}
+    </>
+  );
+}
+
+function CategoryForm({
+  category,
+  others,
+  onSaved,
+  onCancel,
+}: {
+  category: Category | null;
+  others: Category[];
+  onSaved: Said;
+  onCancel: () => void;
+}) {
+  const [name, setName] = useState(category?.name ?? '');
+  const [parentId, setParent] = useState(category?.parentId ?? '');
+  const [sortOrder, setOrder] = useState(String(category?.sortOrder ?? 0));
+  const [problem, setProblem] = useState<Problem | null>(null);
+  const save = async (event: FormEvent) => {
+    event.preventDefault();
+    if (name.trim() === '') return setProblem(check('Enter the category name.'));
+    const order = Number(sortOrder);
+    if (!Number.isInteger(order)) return setProblem(check('The order is a whole number.'));
+    const fields = { name: name.trim(), parentId: parentId === '' ? null : parentId, sortOrder: order };
+    try {
+      if (category === null) {
+        await api('POST', '/categories', fields);
+        onSaved(`The category ${name.trim()} was added.`);
+      } else {
+        const changes = changesOf(category, fields);
+        if (Object.keys(changes).length === 0) return setProblem(check('Nothing has changed.'));
+        await api('PATCH', `/categories/${category.id}`, changes);
+        onSaved(`The category ${name.trim()} was changed.`);
+      }
+    } catch (e) {
+      setProblem(problemOf(e));
+    }
+  };
+  return (
+    <form onSubmit={save} aria-labelledby="category-form-title">
+      <h3 id="category-form-title">{category === null ? 'Add a category' : `Change the category ${category.name}`}</h3>
+      <label>
+        Name
+        <input autoComplete="off" value={name} onChange={(e) => setName(e.target.value)} />
+      </label>
+      <label>
+        Sits under (leave empty for a top-level category)
+        <select value={parentId} onChange={(e) => setParent(e.target.value)}>
+          <option value="">Top level</option>
+          {others
+            .filter((c) => c.id !== category?.id)
+            .map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+        </select>
+      </label>
+      <label>
+        Order among its siblings
+        <input inputMode="numeric" autoComplete="off" value={sortOrder} onChange={(e) => setOrder(e.target.value)} />
+      </label>
+      <div className="actions">
+        <button type="submit">{category === null ? 'Add the category' : 'Save the change'}</button>
         <button type="button" onClick={onCancel}>
           Cancel
         </button>

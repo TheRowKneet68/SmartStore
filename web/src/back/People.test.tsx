@@ -24,6 +24,7 @@ const person = (over: Partial<Person>): Person => ({
   lastName: 'Shah',
   preferredName: null,
   status: 'Active',
+  statusChangedAt: '2026-10-01T09:00:00.000Z',
   hasLogin: false,
   ...over,
 });
@@ -178,5 +179,205 @@ describe('one person (EM-02, EM-04, EM-12..EM-16, MS-11)', () => {
     fireEvent.click(screen.getByRole('button', { name: "Take away Cass Shah's access to Main street" }));
     expect(await screen.findByText('Cass Shah can no longer work in Main street. They were signed out, so it applies at once.')).toBeTruthy();
     await vi.waitFor(() => expect(screen.queryByRole('cell', { name: 'Main street' })).toBeNull());
+  });
+});
+
+/**
+ * A person's employment (state-machines §22.9, `EM-08`, `EM-10`). Leave and archiving record a reason (`SS055`), the other
+ * two do not, and each is offered only with the key its edge names (`UX-08`). Coming back is `reactivate`: from leave under
+ * `Employee.Edit` with no reason, after a suspension under `Employee.Reactivate` with one (owner decision D-16, Q4 and Q5).
+ * Suspending and terminating end their sessions at once (`EM-16`), and the outcome says so.
+ */
+describe("a person's employment (EM-08, EM-10, EM-16, SS055, SM-50, D-16)", () => {
+  const REASONS = 'GET /api/v1/reason-codes';
+  const reasons = { body: { items: [{ id: 'r1', code: 'SICK', name: 'Sick leave' }] } };
+  const KEYS = [...ALL, 'Employee.Edit', 'Employee.Terminate'];
+  const nameOf = (p: Person) => `${p.preferredName ?? p.firstName} ${p.lastName}`;
+  const openWith = async (permissions: string[], who: Person) => {
+    serve({
+      [LIST]: { body: { items: [who], next: null } },
+      [`GET /api/v1/employees/${who.id}`]: { body: who },
+      [`GET /api/v1/employees/${who.id}/stores`]: { body: { items: [] } },
+      [`GET /api/v1/employees/${who.id}/roles`]: { body: { items: [] } },
+      [ROLES]: { body: { items: [] } },
+      [REASONS]: reasons,
+      'POST /api/v1/transitions': { body: { ok: true } },
+    });
+    show(permissions);
+    const name = nameOf(who);
+    fireEvent.click(within((await screen.findByText(name)).closest('tr')!).getByRole('button', { name: `Open ${name}` }));
+    await screen.findByRole('heading', { name });
+  };
+
+  it('an active person is offered leave, suspension and termination, each naming what it does', async () => {
+    await openWith(KEYS, cass);
+    expect(screen.getByRole('button', { name: 'Put on leave — Cass Shah' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Suspend — Cass Shah' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'End their employment — Cass Shah' })).toBeTruthy();
+  });
+
+  it('leave records a reason: nothing is sent until one is chosen, and the reason goes with it', async () => {
+    const calls = serve({
+      [LIST]: { body: { items: [cass], next: null } },
+      [CASS]: { body: cass },
+      [CASS_STORES]: { body: { items: [] } },
+      [CASS_ROLES]: { body: { items: [] } },
+      [ROLES]: { body: { items: [] } },
+      [REASONS]: reasons,
+      'POST /api/v1/transitions': { body: { ok: true } },
+    });
+    show(KEYS);
+    await openCass();
+    fireEvent.click(await screen.findByRole('button', { name: 'Put on leave — Cass Shah' }));
+    expect(screen.getByText(/Their sign-in becomes read-only until they come back/), 'the question says the consequence').toBeTruthy();
+
+    submit('Put on leave');
+    expect((await screen.findByRole('alert')).textContent).toBe('Choose the reason, so the record says why.');
+    expect(calls.some((c) => c.key === 'POST /api/v1/transitions'), 'nothing sent').toBe(false);
+
+    fireEvent.change(await screen.findByLabelText('Reason'), { target: { value: 'r1' } });
+    submit('Put on leave');
+    await vi.waitFor(() =>
+      expect(calls.find((c) => c.key === 'POST /api/v1/transitions')?.body).toEqual({
+        machine: 'Employee',
+        event: 'leave',
+        subject: 'e1',
+        reasonCodeId: 'r1',
+      }),
+    );
+    expect(await screen.findByText('They are on leave. Their sign-in is now read-only.')).toBeTruthy();
+  });
+
+  it('suspending asks the question and sends no reason, and says they were signed out', async () => {
+    const calls = serve({
+      [LIST]: { body: { items: [cass], next: null } },
+      [CASS]: { body: cass },
+      [CASS_STORES]: { body: { items: [] } },
+      [CASS_ROLES]: { body: { items: [] } },
+      [ROLES]: { body: { items: [] } },
+      'POST /api/v1/transitions': { body: { ok: true } },
+    });
+    show(KEYS);
+    await openCass();
+    fireEvent.click(await screen.findByRole('button', { name: 'Suspend — Cass Shah' }));
+    expect(screen.getByText(/They are signed out at once and cannot sign in again/)).toBeTruthy();
+    expect(screen.queryByLabelText('Reason'), 'this edge records no reason, so none is asked for (SS055)').toBeNull();
+    submit('Suspend');
+    await vi.waitFor(() =>
+      expect(calls.find((c) => c.key === 'POST /api/v1/transitions')?.body).toEqual({ machine: 'Employee', event: 'suspend', subject: 'e1' }),
+    );
+    expect(await screen.findByText('They are suspended and were signed out.')).toBeTruthy();
+  });
+
+  it('Employee.Edit does not end an employment, and ending it is only offered from Active or On leave', async () => {
+    await openWith(['Employee.View', 'Employee.Edit'], cass);
+    expect(screen.queryByRole('button', { name: /End their employment/ }), 'Employee.Terminate is its own key').toBeNull();
+    expect(screen.getByRole('button', { name: 'Put on leave — Cass Shah' })).toBeTruthy();
+  });
+
+  it('a person on leave is offered coming back and termination, not a second leave', async () => {
+    await openWith(KEYS, mona);
+    expect(screen.getByRole('button', { name: 'End their employment — Mona Lee' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Bring back from leave — Mona Lee' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Put on leave/ })).toBeNull();
+  });
+
+  it('D-16 Q4: back from leave is Employee.Edit, asks the question, records no reason, and sends the reactivate event', async () => {
+    const calls = serve({
+        [LIST]: { body: { items: [mona], next: null } },
+        [`GET /api/v1/employees/e2`]: { body: mona },
+        [`GET /api/v1/employees/e2/stores`]: { body: { items: [] } },
+        [`GET /api/v1/employees/e2/roles`]: { body: { items: [] } },
+        [ROLES]: { body: { items: [] } },
+        [REASONS]: reasons,
+        'POST /api/v1/transitions': { body: { ok: true } },
+      });
+    show(KEYS);
+    fireEvent.click(within((await screen.findByText('Mona Lee')).closest('tr')!).getByRole('button', { name: 'Open Mona Lee' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Bring back from leave — Mona Lee' }));
+    expect(screen.getByText(/Their sign-in works fully again/)).toBeTruthy();
+    expect(screen.queryByLabelText('Reason'), 'this edge records no reason, so none is asked for (SS055)').toBeNull();
+    submit('Bring back from leave');
+    await vi.waitFor(() => expect(calls.find((c) => c.key === 'POST /api/v1/transitions')?.body).toEqual({ machine: 'Employee', event: 'reactivate', subject: 'e2' }));
+    expect(await screen.findByText('They are back from leave. Their sign-in works fully again.')).toBeTruthy();
+  });
+
+  it('D-16 Q4: without Employee.Edit a person on leave cannot be brought back from here', async () => {
+    await openWith(['Employee.View', 'Employee.Terminate'], mona);
+    expect(screen.queryByRole('button', { name: /Bring back from leave/ })).toBeNull();
+  });
+
+  describe('after a suspension (D-16 Q5)', () => {
+    const sam = person({ id: 'e3', employeeNumber: 'E3', firstName: 'Sam', lastName: 'Ode', status: 'Suspended', hasLogin: true });
+    const openSam = async () => {
+      fireEvent.click(within((await screen.findByText('Sam Ode')).closest('tr')!).getByRole('button', { name: 'Open Sam Ode' }));
+      await screen.findByRole('heading', { name: 'Sam Ode' });
+    };
+
+    it('reactivating is Employee.Reactivate, asks for a reason, and sends it with the event', async () => {
+      const calls = serve({
+        [LIST]: { body: { items: [sam], next: null } },
+        [`GET /api/v1/employees/e3`]: { body: sam },
+        [`GET /api/v1/employees/e3/stores`]: { body: { items: [] } },
+        [`GET /api/v1/employees/e3/roles`]: { body: { items: [] } },
+        [ROLES]: { body: { items: [] } },
+        [REASONS]: reasons,
+        'POST /api/v1/transitions': { body: { ok: true } },
+      });
+      show([...KEYS, 'Employee.Reactivate']);
+      await openSam();
+      fireEvent.click(await screen.findByRole('button', { name: 'Reactivate — Sam Ode' }));
+      submit('Reactivate');
+      expect((await screen.findByRole('alert')).textContent).toBe('Choose the reason, so the record says why.');
+      expect(calls.some((c) => c.key === 'POST /api/v1/transitions'), 'nothing sent until a reason is chosen').toBe(false);
+      fireEvent.change(await screen.findByLabelText('Reason'), { target: { value: 'r1' } });
+      submit('Reactivate');
+      await vi.waitFor(() =>
+        expect(calls.find((c) => c.key === 'POST /api/v1/transitions')?.body).toEqual({ machine: 'Employee', event: 'reactivate', subject: 'e3', reasonCodeId: 'r1' }),
+      );
+      expect(await screen.findByText('They are active again and can sign in.')).toBeTruthy();
+    });
+
+    it('Employee.Edit does not restore suspended access: without Employee.Reactivate there is no way back, and the screen says whose key it is', async () => {
+      serve({
+        [LIST]: { body: { items: [sam], next: null } },
+        [`GET /api/v1/employees/e3`]: { body: sam },
+        [`GET /api/v1/employees/e3/stores`]: { body: { items: [] } },
+        [`GET /api/v1/employees/e3/roles`]: { body: { items: [] } },
+        [ROLES]: { body: { items: [] } },
+        [REASONS]: reasons,
+        'POST /api/v1/transitions': { body: { ok: true } },
+      });
+      show(KEYS);
+      await openSam();
+      expect(screen.queryByRole('button', { name: /Reactivate/ })).toBeNull();
+      expect(screen.getByText(/needs its own permission, Employee\.Reactivate/)).toBeTruthy();
+    });
+  });
+
+  it('a terminated person can be archived, with a reason, and an archived record ends', async () => {
+    const calls = serve({
+      [LIST]: { body: { items: [cass], next: null } },
+      [CASS]: { body: { ...cass, status: 'Terminated' } },
+      [CASS_STORES]: { body: { items: [] } },
+      [CASS_ROLES]: { body: { items: [] } },
+      [ROLES]: { body: { items: [] } },
+      [REASONS]: reasons,
+      'POST /api/v1/transitions': { body: { ok: true } },
+    });
+    show(KEYS);
+    await openCass();
+    fireEvent.click(await screen.findByRole('button', { name: 'Archive the record — Cass Shah' }));
+    expect(screen.getByText(/nothing moves it back/)).toBeTruthy();
+    fireEvent.change(await screen.findByLabelText('Reason'), { target: { value: 'r1' } });
+    submit('Archive the record');
+    await vi.waitFor(() =>
+      expect(calls.find((c) => c.key === 'POST /api/v1/transitions')?.body).toEqual({
+        machine: 'Employee',
+        event: 'archive',
+        subject: 'e1',
+        reasonCodeId: 'r1',
+      }),
+    );
   });
 });

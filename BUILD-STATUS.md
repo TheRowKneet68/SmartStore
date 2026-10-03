@@ -1328,6 +1328,42 @@ Append-only. One dated line per step, including failed and abandoned attempts.
     comes before calling it a regression. Appended to ADR-31 as a dated re-measurement.
   - **The list** names the release blockers (`GAP-044`, `GATE-Q2-LICENCE`, `GAP-038`) and the owner answers that
     unblock building. It also lists the engineering left, and what v1 leaves out by decision.
+- 2026-10-02 — **The tills' and people's states, on the owner's brief to finish the UI.**
+  - **One shared component, `web/src/lib/Moves.tsx`, draws every state edge on a screen.** The edge, the key it names,
+    and whether its contract records a reason are data; the machine in the database still decides what is legal
+    (`SM-06`), so the screen offers only what is allowed from where the record stands.
+  - **Every move asks its question first (`UX-03`)**, not only the dangerous-sounding ones. The earlier version sent a
+    reasonless move on the click alone, which was wrong: suspending a person signs them out at once (`EM-16`), so it
+    is asked like any other.
+  - **A reason is asked for exactly when the edge records one (`SS055`)** — disabling a till, retiring a till, putting a
+    person on leave, archiving a person — and nothing is sent until one is chosen. The reasons are read when a
+    question that needs one opens, so a screen that never asks fetches nothing (it was fetching once per till row).
+  - **Reactivating is `OPEN DECISION` and refuses everyone (OQ-025), so neither screen offers it**; each says why, in
+    words, where the button would have been. The old tills screen offered a Disabled to Active button that always
+    failed.
+  - **Permissions are per edge, not per screen** (`UX-08`): `Device.Edit` retires but does not disable, `Device.Disable`
+    does the reverse, and `Employee.Terminate` is the only key that ends an employment.
+  - `People.tsx` also shows when a person's status last changed, from the new `statusChangedAt` on `Person`.
+  - **Tests:** 10 added across `Tills.test.tsx` and `People.test.tsx`, for the reason being required, the keys being
+    separate, the OpenDecision edge being absent, and the suspended/retired states ending. Web is now 153 of 160
+    passing, and the 7 failures are still only the other session's uncommitted `Products.test.tsx`.
+  - `.ask` in `styles.css` gives the question its own weight, in the warn colour beside a symbol, never colour alone.
+  - **Not committed:** the working tree also holds the other session's uncommitted work, so the paths here are
+    unstaged for the owner to commit.
+- 2026-10-02 — **My account: a person can change their own password.**
+  - The route has been there and no screen used it. `web/src/MyAccount.tsx`, reached from the person's own name on the
+    bar, at the till as well as away from it.
+  - **It is not behind a permission, and that is the rule, not a shortcut** (`EM-03`): the actor is the session, so the
+    request names no employee and there is no id to change. It is the one screen in the product with no key.
+  - **What it says is what `/docs` says:** the current password must be right and a wrong one is recorded as a failed
+    sign-in (`SM-49`), so the screen says to check rather than to guess; nothing reads a password back afterwards,
+    including for an administrator (`EM-04`), so every box is cleared once it has been used; and the new password is
+    typed twice, so a mistyped one cannot lock anyone out.
+  - **No rule about the shape of a password was invented.** The server takes two non-empty strings and sets no
+    complexity rule, so the screen checks only that both are filled and that the two boxes agree.
+  - **Not claimed:** a change here does not end the person's other sessions, and the screen does not say it does.
+  - 6 tests in `web/src/MyAccount.test.tsx`. Web is now 159 of 166 passing, the same 7 failures in the other session's
+    uncommitted `Products.test.tsx`, and the web typecheck fails only in `Products.test.tsx` and `Setup.test.tsx`.
 - 2026-10-02 — **Owner decision D-16: the permission keys, recorded in the documentation only.**
   - The owner answered `PERMISSION-KEY-PROPOSAL.md` Q1–Q14, and asked for three things in order: record the answers,
     update the catalogue, state-machine and actor-role documents, then report the affected files and rule IDs before
@@ -1569,3 +1605,12 @@ Append-only. One dated line per step, including failed and abandoned attempts.
   - **Checked before committing:** each of the web files' diffs is only a currency fixture change; all 504 server tests pass; the web suite passes (209 tests) and typechecks in a **clean checkout of HEAD** with these files applied.
   - **Not included, by the owner's instruction:** `AGENTS.md` (stale, left uncommitted), every new web screen, `App.tsx` and its test, `People`, `Reference`, `Tills`, `Products` and the rest of the other session's working tree. Their BUILD-STATUS entries (the shared move component, My account) stay uncommitted with them.
   - **Staging:** BUILD-STATUS holds that session's two further entries, so its staged copy is the committed file plus this entry only.
+- 2026-10-03 — **Cleanup of the other session's web work, steps 3 and 4 (working tree only; nothing staged or committed).**
+  - **The 7 failing `Products` tests are fixed by changing the tests, not the screen.** Mechanical: replies wrapped as `{ body: … }` for `serve()`, an invalid `exact` option removed, and `Setup.test.tsx` reads `c.key.startsWith('DELETE')` instead of a `.method` the helper does not record. Real mismatch: recording a cost needs `Product.Edit` beside `Product.Cost.View` (the server's rule), so the cost test now renders with the right key sets. A test that raced the units fetch now waits for the option before choosing it (it failed once in three runs).
+  - **Three screens brought up to D-16:** `People` offers `reactivate` from leave (`Employee.Edit`, no reason) and from suspension (`Employee.Reactivate`, with a reason); `Tills` offers `activate` on a disabled till (`Device.Disable`, with a reason); `Sales` requests the receipt only with `Sale.Create` (D-16 Q13) and tells a `Sale.View`-only reader whose work it is instead of asking and being refused. Each had a test asserting the old "OPEN DECISION, refuses everyone" behaviour; those now assert the new behaviour, and each new path has a test for the key that does not hold it.
+  - **Checked:** the web suite passes (274 tests, six runs in a row) and typechecks. Not run in a real browser.
+  - **Still uncommitted at that point:** every new screen, `App.tsx` grouped navigation, `Moves.tsx`, `form.ts`, `MyAccount`, `AGENTS.md` (stale, left alone).
+- 2026-10-03 — **Web Group 1: shared form helpers, Moves component, People (D-16), Reference (categories), and styles.**
+  - **What is in the commit:** `lib/form.ts` (`changesOf`, `useList`, `when` helpers moved out of `Reference.tsx`); `lib/Moves.tsx` (renders state-machine moves with UX-08 key guard, UX-03 question, optional reason, posts `/transitions`); `People.tsx` updated for D-16 Q4/Q5 (reactivate from leave = `Employee.Edit`, no reason; reactivate after suspension = `Employee.Reactivate`, requires reason); `Reference.tsx` adds the `Categories` panel (`/categories`, `PR-04`–`PR-06`), moves `changesOf`/`useList` to `form.ts`; `styles.css` adds `.ask` styles for Moves, `.backoffice`/`.groups` styles for the navigation (used by later commits); tests updated for all four files.
+  - **Checked:** web suite 274/274, typecheck clean. Verified in a clean checkout of HEAD with these files applied.
+  - **Still uncommitted:** `Products`, `Sales`, `Stock`, `Adjustments`, `Setup`, `Tills` and their tests; `App.tsx` grouped navigation; `MyAccount`; `AGENTS.md` (stale, left alone).

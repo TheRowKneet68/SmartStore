@@ -217,6 +217,27 @@ form.panel > button[type='submit'],
   margin-top: 1.25rem;
 }
 
+/* The question a move asks before it sends anything (UX-03), standing in for the button it replaced. */
+.ask {
+  flex: 1 1 100%;
+  padding: 0.85rem 1rem;
+  background: var(--warn-tint);
+  border: 2px solid var(--warn);
+  border-left-width: 8px;
+  border-radius: var(--radius);
+}
+
+.ask .lede {
+  margin: 0 0 0.5rem;
+  color: var(--warn);
+  font-weight: 600;
+}
+
+.ask button[type='submit'] {
+  width: auto;
+  margin-top: 0;
+}
+
 /* ------------------------------------------------------------------ the status bar (UX-35) */
 
 .bar {
@@ -718,6 +739,67 @@ input[type='checkbox'] {
 .tabs button[aria-current='page'] {
   border-bottom-color: var(--ink);
   font-weight: 800;
+}
+
+/*
+ * Away from the till the areas stand in groups down the side, the way the product groups them, rather than as one long
+ * row. The group name is a heading above its entries, and the entry shown is marked by a thick left edge and bold
+ * text, not by colour alone (`UX-52`). Nothing animates (`UX-33`).
+ */
+.backoffice {
+  display: grid;
+  grid-template-columns: minmax(12rem, 16rem) 1fr;
+  gap: 1.5rem;
+  align-items: start;
+  max-width: 80rem;
+  margin: 1rem auto 0;
+}
+
+@media (max-width: 60rem) {
+  .backoffice {
+    grid-template-columns: 1fr;
+  }
+}
+
+.groups {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  padding: 0.75rem;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: 0.5rem;
+}
+
+.group-name {
+  margin: 0 0 0.35rem;
+  color: var(--ink-muted);
+  font-size: 0.85rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.groups button {
+  display: block;
+  width: 100%;
+  margin: 0.2rem 0;
+  padding: 0.6rem 0.5rem;
+  border-color: transparent;
+  border-left: 5px solid transparent;
+  border-radius: 0.25rem;
+  background: transparent;
+  text-align: left;
+}
+
+.groups button[aria-current='page'] {
+  border-left-color: var(--ink);
+  background: var(--paper);
+  font-weight: 800;
+}
+
+.panel-area {
+  min-width: 0;
 }
 
 /* ------------------------------------------------------------------ tables of records */

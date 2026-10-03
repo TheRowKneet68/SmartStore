@@ -2,6 +2,8 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { Announcer } from '../lib/Announcer.tsx';
 import { api } from '../lib/api.ts';
 import { StatusChip, type Look } from '../lib/Chip.tsx';
+import { when } from '../lib/form.ts';
+import { Moves, type Move } from '../lib/Moves.tsx';
 import { check, problemOf, ProblemNotice, type Problem } from '../lib/Problem.tsx';
 
 /** An employee as the server answers for one (employee-domain §2). */
@@ -12,6 +14,7 @@ export interface Person {
   lastName: string;
   preferredName: string | null;
   status: string;
+  statusChangedAt: string | null;
   hasLogin: boolean;
 }
 
@@ -52,6 +55,82 @@ const STATUS: Record<string, Look> = {
 };
 
 const nameOf = (p: Person) => `${p.preferredName ?? p.firstName} ${p.lastName}`;
+
+/**
+ * What may happen to a person's employment, as events on the Employee machine (§22.9). The server decides which edge is
+ * legal (`SM-06`) and checks the key each edge names.
+ *
+ * Coming back is `reactivate` on two edges, each with its own key (owner decision D-16, Q4 and Q5): back from leave is
+ * `Employee.Edit` and records no reason; reactivating after a suspension is `Employee.Reactivate`, a key of its own so that
+ * delegating ordinary editing does not delegate restoring suspended access, and it records a reason (`SS055`, `SM-50`).
+ * `UX-08` says an absent permission is hidden, not shown greyed out.
+ *
+ * Suspending ends their sessions at once, and terminating does too (EM-16, architecture §7.1): the outcome says so, so
+ * nobody is surprised by being signed out.
+ */
+const NEXT: Record<string, Move[]> = {
+  Active: [
+    {
+      event: 'leave',
+      label: 'Put on leave',
+      key_: 'Employee.Edit',
+      reason: true,
+      ask: 'Put this person on leave? Their sign-in becomes read-only until they come back.',
+      outcome: 'They are on leave. Their sign-in is now read-only.',
+    },
+    {
+      event: 'suspend',
+      label: 'Suspend',
+      key_: 'Employee.Edit',
+      ask: 'Suspend this person? They are signed out at once and cannot sign in again.',
+      outcome: 'They are suspended and were signed out.',
+    },
+    {
+      event: 'terminate',
+      label: 'End their employment',
+      key_: 'Employee.Terminate',
+      ask: 'End this employment? It cannot be undone from here; the record is archived afterwards.',
+      outcome: 'Their employment is ended. They were signed out.',
+    },
+  ],
+  OnLeave: [
+    {
+      event: 'reactivate',
+      label: 'Bring back from leave',
+      key_: 'Employee.Edit',
+      ask: 'Bring this person back from leave? Their sign-in works fully again.',
+      outcome: 'They are back from leave. Their sign-in works fully again.',
+    },
+    {
+      event: 'terminate',
+      label: 'End their employment',
+      key_: 'Employee.Terminate',
+      ask: 'End this employment? It cannot be undone from here; the record is archived afterwards.',
+      outcome: 'Their employment is ended. They were signed out.',
+    },
+  ],
+  Suspended: [
+    {
+      event: 'reactivate',
+      label: 'Reactivate',
+      key_: 'Employee.Reactivate',
+      reason: true,
+      ask: 'Reactivate this person? They can sign in again.',
+      outcome: 'They are active again and can sign in.',
+    },
+  ],
+  Terminated: [
+    {
+      event: 'archive',
+      label: 'Archive the record',
+      key_: 'Employee.Edit',
+      reason: true,
+      ask: 'Archive this person’s record? It is the end of their life in SmartStore; nothing moves it back.',
+      outcome: 'The record is archived.',
+    },
+  ],
+  Archived: [],
+};
 
 /**
  * The organization's people, for someone who may see employee records (`Employee.View`). Employees are organization-wide,
@@ -231,8 +310,33 @@ function PersonDetail({ id, can, stores, onBack }: { id: string; can: (key: stri
       <h1 id="person-title">{name}</h1>
       <p>
         <StatusChip status={person.status} looks={STATUS} /> Employee number {person.employeeNumber}
+        {person.statusChangedAt !== null && ` · status last changed ${when(person.statusChangedAt)}`}
       </p>
       <ProblemNotice problem={problem} />
+
+      <h2>Employment</h2>
+      <p className="hint">
+        These change whether this person can work here. Putting someone on leave makes their sign-in read-only; suspending
+        or ending their employment signs them out at once, and their shift must be closed first.
+      </p>
+      <Moves
+        machine="Employee"
+        subject={person.id}
+        name={name}
+        moves={NEXT[person.status] ?? []}
+        can={can}
+        onSaid={(outcome) => {
+          setSaid(outcome);
+          setProblem(null);
+          setVersion((v) => v + 1);
+        }}
+        onProblem={setProblem}
+        onDone={() => setVersion((v) => v + 1)}
+      />
+      {person.status === 'Suspended' && !can('Employee.Reactivate') && (
+        <p className="hint">Reactivating a suspended person needs its own permission, Employee.Reactivate. Ask someone who holds it.</p>
+      )}
+      {person.status === 'Archived' && <p className="hint">Archived is the end of their record. Nothing moves it back.</p>}
 
       {can('Employee.Password.Reset') && <SignInForm person={person} change={change} />}
 
