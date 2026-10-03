@@ -1618,3 +1618,7 @@ Append-only. One dated line per step, including failed and abandoned attempts.
   - **What is in the commit:** `Tills.tsx` + test: device management (register, activate, disable, re-enable, retire) and the `StoreSettings` panel (return window, tax rounding); D-16 Q6 wired — putting a disabled till back uses `Device.Disable` with a required reason (`HD-32`, `SS055`); uses `Moves.tsx` from Group 1. `Setup.tsx` + test: reason codes (`BI-25`, `IV-33`, `SS024`) and payment methods (`PY-03`, `PY-05`, `SS045`); uses `form.ts` from Group 1.
   - **Checked:** 240/240 web tests in staged-only mode, typecheck clean.
   - **Still uncommitted:** `Products`, `Sales`, `Stock`, `Adjustments` and their tests; `App.tsx` grouped navigation; `MyAccount`; `AGENTS.md` (stale, left alone).
+- 2026-10-03 — **Web Group 3: Stock balances, Adjustments (draft/approve/post).**
+  - **What is in the commit:** `Stock.tsx` + test: read-only view of stock balances per location (`IV-01`, `IV-02`, `IV-17`); uses `useList`/`when` from `form.ts`. `Adjustments.tsx` + test: create a draft adjustment, add lines, submit for approval, approve (with `Stock.Adjust.Approve`), post; state-machine moves via `Moves.tsx`; uses `useProductHits` to search products by barcode/name (`IV-33`, `SM-*`, `SS055`).
+  - **Checked:** 251/251 web tests in staged-only mode, typecheck clean.
+  - **Still uncommitted:** `Products`, `Sales` and their tests; `App.tsx` grouped navigation; `MyAccount`; `AGENTS.md` (stale, left alone).
