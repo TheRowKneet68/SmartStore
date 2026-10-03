@@ -2,14 +2,22 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { api, ApiError, type Workspace } from './lib/api.ts';
 import { parseMoney, type Currency } from './lib/money.ts';
 import { check, problemOf, ProblemNotice, type Problem } from './lib/Problem.tsx';
+import { Adjustments } from './back/Adjustments.tsx';
 import { People } from './back/People.tsx';
 import { Prices } from './back/Prices.tsx';
+import { Products } from './back/Products.tsx';
 import { PaymentsAttention } from './back/PaymentsAttention.tsx';
 import { ReferenceData } from './back/Reference.tsx';
 import { Refunds } from './back/Refunds.tsx';
 import { Returns } from './back/Returns.tsx';
 import { Roles } from './back/Roles.tsx';
+import { Sales } from './back/Sales.tsx';
 import { ShiftReview } from './back/Shifts.tsx';
+import { PaymentMethods, ReasonCodes } from './back/Setup.tsx';
+import { Stock } from './back/Stock.tsx';
+import { StoreSettings, Tills } from './back/Tills.tsx';
+import { NotYet, PLANNED, type Planned } from './back/NotYet.tsx';
+import { MyAccount } from './MyAccount.tsx';
 import { TillWork } from './pos/TillWork.tsx';
 import { BeginCount, CountDrawer } from './pos/ShiftClose.tsx';
 
@@ -103,6 +111,7 @@ function SignIn({ onSignedIn }: { onSignedIn: (w: Workspace) => void }) {
 
 function SignedIn({ workspace, onSignedOut }: { workspace: Workspace; onSignedOut: () => void }) {
   const [shift, setShift] = useState<TillShift | null | undefined>(undefined);
+  const [account, setAccount] = useState(false);
   const signOut = async () => {
     await api('DELETE', '/session').catch(() => undefined);
     onSignedOut();
@@ -115,13 +124,25 @@ function SignedIn({ workspace, onSignedOut }: { workspace: Workspace; onSignedOu
         <span className="brand">SmartStore</span>
         <span className="where">{where}</span>
         {workspace.terminal !== null && <DrawerState shift={shift} />}
-        <span className="who">{workspace.employee.name}</span>
+        {/* `EM-03`: changing your own password takes no permission, so it is offered to everyone, from anywhere.
+            Their own name is the way in, which is what a person recognises as themselves. */}
+        <button
+          type="button"
+          className="quiet who"
+          aria-expanded={account}
+          aria-label={`My account — ${workspace.employee.name}`}
+          onClick={() => setAccount((open) => !open)}
+        >
+          {workspace.employee.name}
+        </button>
         <button type="button" onClick={signOut}>
           Sign out
         </button>
       </header>
       <main>
-        {store === undefined ? (
+        {account ? (
+          <MyAccount name={workspace.employee.name} />
+        ) : store === undefined ? (
           // UX-07, MS-05: no store access is an empty workspace with an explanation, not an error.
           <section className="panel narrow">
             <h1>No store yet</h1>
@@ -176,55 +197,156 @@ type Store = Workspace['stores'][number];
  * shifts needs Cash.Count.View and setting up a till Device.View, in the store. People and roles are the
  * organization's, so they need Employee.View and Role.View held organization-wide. With none, the page says so.
  */
+interface Entry {
+  key: string;
+  label: string;
+  /** The permission whose presence makes this area this person's to have (`UX-05`, `UX-08`). */
+  key_: string;
+  /** `store` keys are held per store, `organization` keys organization-wide (OQ-025 item 6). */
+  scope: 'store' | 'organization';
+}
+
+/**
+ * The back office, grouped as the specification groups it, each area present only with the permission that opens it.
+ * The grouping is: selling, the catalogue, stock, money, people, and setup. A group with nothing this person may do is not
+ * shown at all (`UX-08`), and the list is the product's, so an area the specification requires but the build lacks
+ * still appears — under "Not built yet", where it says so (`UX-08`, `UX-57`).
+ */
+const GROUPS: { group: string; entries: Entry[] }[] = [
+  {
+    group: 'Sell',
+    entries: [
+      { key: 'till', label: 'Set up this browser as a till', key_: 'Device.View', scope: 'store' },
+      { key: 'shifts', label: 'Shifts', key_: 'Cash.Count.View', scope: 'store' },
+      { key: 'sales', label: 'Sales and receipts', key_: 'Sale.View', scope: 'store' },
+      { key: 'returns', label: 'Returns', key_: 'Return.View', scope: 'store' },
+      { key: 'refunds', label: 'Refunds', key_: 'Refund.View', scope: 'store' },
+    ],
+  },
+  {
+    group: 'Catalogue',
+    entries: [
+      { key: 'products', label: 'Products', key_: 'Product.View', scope: 'organization' },
+      { key: 'prices', label: 'Prices', key_: 'Price.View', scope: 'organization' },
+      { key: 'reference', label: 'Units, tax, categories and brands', key_: 'Product.View', scope: 'organization' },
+    ],
+  },
+  {
+    group: 'Stock',
+    entries: [
+      { key: 'stock', label: 'Stock on hand', key_: 'Inventory.View', scope: 'store' },
+      { key: 'ledger', label: 'Movement ledger', key_: 'Inventory.Ledger.View', scope: 'store' },
+      { key: 'adjustments', label: 'Corrections and write-offs', key_: 'Inventory.View', scope: 'store' },
+      { key: 'opening', label: 'Opening stock', key_: 'Inventory.View', scope: 'store' },
+    ],
+  },
+  {
+    group: 'Money',
+    entries: [
+      { key: 'attention', label: 'Card payments to check', key_: 'Payment.View', scope: 'store' },
+      { key: 'payments', label: 'Payment methods', key_: 'Payment.Method.Configure', scope: 'organization' },
+    ],
+  },
+  {
+    group: 'People',
+    entries: [
+      { key: 'people', label: 'People', key_: 'Employee.View', scope: 'organization' },
+      { key: 'roles', label: 'Roles', key_: 'Role.View', scope: 'organization' },
+    ],
+  },
+  {
+    group: 'Setup',
+    entries: [
+      { key: 'tills', label: 'Tills', key_: 'Device.View', scope: 'store' },
+      { key: 'settings', label: 'Store settings', key_: 'Config.Store', scope: 'store' },
+      { key: 'reasons', label: 'Reason codes', key_: 'Config.Organization', scope: 'organization' },
+    ],
+  },
+];
+
+
+
+/**
+ * Away from a till: only the work this person may do is offered, and nothing they may not (`UX-05`, `UX-08`). The
+ * catalogue, the people and the payment methods are the organization's, so they need their keys held organization-wide;
+ * the rest are the store's. With no area at all, the page says so rather than showing an empty shell.
+ */
 function BackOffice({ store, organization, stores, onTillSet }: { store: Store; organization: string[]; stores: Store[]; onTillSet: () => void }) {
-  const sections = [
-    ...(store.permissions.includes('Cash.Count.View') ? [['shifts', 'Shifts'] as const] : []),
-    ...(store.permissions.includes('Device.View') ? [['till', 'Till set-up'] as const] : []),
-    ...(store.permissions.includes('Return.View') ? [['returns', 'Returns'] as const] : []),
-    ...(store.permissions.includes('Refund.View') ? [['refunds', 'Refunds'] as const] : []),
-    ...(store.permissions.includes('Payment.View') ? [['attention', 'Card payments to check'] as const] : []),
-    ...(organization.includes('Employee.View') ? [['people', 'People'] as const] : []),
-    ...(organization.includes('Role.View') ? [['roles', 'Roles'] as const] : []),
-    ...(organization.includes('Product.View') || organization.includes('Tax.View') ? [['reference', 'Units, tax and brands'] as const] : []),
-    ...(organization.includes('Product.View') && organization.includes('Price.View') ? [['prices', 'Prices'] as const] : []),
-  ];
-  const [section, setSection] = useState<string>(sections[0]?.[0] ?? 'till');
+  const keys = (scope: Entry['scope']) => (scope === 'store' ? store.permissions : organization);
+  const groups = GROUPS.map((g) => ({ ...g, entries: g.entries.filter((e) => keys(e.scope).includes(e.key_)) })).filter((g) => g.entries.length > 0);
+  // The areas with no route are listed when this person has the key that would open them, and never otherwise.
+  const gaps = PLANNED.filter((a) => keys(a.scope).includes(a.key_));
+  const gapKey = (area: Planned) => `gap:${area.name}`;
+  const [section, setSection] = useState<string | null>(null);
   // A refund of a posted return starts on the Returns screen and opens on the Refunds screen.
   const [refundFrom, setRefundFrom] = useState<string | null>(null);
   // A refund of a captured payment with no sale starts on the payments report and opens on the Refunds screen (D-18).
   const [refundPayment, setRefundPayment] = useState<string | null>(null);
   const currency = { code: store.currencyCode, exponent: store.minorUnitExponent };
+  const shown = section ?? groups[0]?.entries[0]?.key ?? (gaps[0] !== undefined ? gapKey(gaps[0]) : null);
+  if (shown === null) {
+    return (
+      <section className="panel narrow">
+        <h1>Nothing here yet</h1>
+        <p>
+          Your role has none of the keys that open a back-office area, so there is nothing to show. A manager can give you
+          access; the list of keys is under Roles.
+        </p>
+      </section>
+    );
+  }
+  const gap = gaps.find((a) => shown === gapKey(a));
   return (
-    <>
-      {sections.length > 1 && (
-        <nav className="tabs" aria-label="Back office">
-          {sections.map(([key, label]) => (
-            <button key={key} type="button" aria-current={section === key ? 'page' : undefined} onClick={() => setSection(key)}>
-              {label}
-            </button>
-          ))}
-        </nav>
-      )}
-      {section === 'shifts' ? (
-        <ShiftReview storeId={store.id} currency={currency} canAcknowledge={store.permissions.includes('Cash.Variance.Acknowledge')} />
-      ) : section === 'returns' ? (
-        <Returns storeId={store.id} permissions={store.permissions} onRefund={(id) => (setRefundFrom(id), setSection('refunds'))} />
-      ) : section === 'refunds' ? (
-        <Refunds storeId={store.id} permissions={store.permissions} currency={currency} startFromReturn={refundFrom} startFromPayment={refundPayment} onStarted={() => (setRefundFrom(null), setRefundPayment(null))} />
-      ) : section === 'attention' ? (
-        <PaymentsAttention storeId={store.id} permissions={store.permissions} currency={currency} onRefund={(id) => (setRefundPayment(id), setSection('refunds'))} />
-      ) : section === 'people' ? (
-        <People permissions={organization} stores={stores} />
-      ) : section === 'roles' ? (
-        <Roles permissions={organization} />
-      ) : section === 'reference' ? (
-        <ReferenceData permissions={organization} />
-      ) : section === 'prices' ? (
-        <Prices permissions={organization} currency={currency} />
-      ) : (
-        <TillSetup storeId={store.id} canSetUp={store.permissions.includes('Device.View')} onDone={onTillSet} />
-      )}
-    </>
+    <div className="backoffice">
+      <nav className="groups" aria-label="Back office">
+        {groups.map((g) => (
+          <div key={g.group} role="group" aria-label={g.group}>
+            <p className="group-name">{g.group}</p>
+            {g.entries.map((e) => (
+              <button key={e.key} type="button" aria-current={shown === e.key ? 'page' : undefined} onClick={() => setSection(e.key)}>
+                {e.label}
+              </button>
+            ))}
+          </div>
+        ))}
+        {gaps.length > 0 && (
+          <div role="group" aria-label="Not built yet">
+            <p className="group-name">Not built yet</p>
+            {gaps.map((a) => (
+              <button key={a.name} type="button" aria-current={shown === gapKey(a) ? 'page' : undefined} onClick={() => setSection(gapKey(a))}>
+                {a.name}
+                <span className="visually-hidden"> — specified but not built</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </nav>
+
+      <div className="panel-area">
+        {shown === 'till' && <TillSetup storeId={store.id} canSetUp={store.permissions.includes('Device.View')} onDone={onTillSet} />}
+        {shown === 'shifts' && <ShiftReview storeId={store.id} currency={currency} canAcknowledge={store.permissions.includes('Cash.Variance.Acknowledge')} />}
+        {shown === 'sales' && <Sales storeId={store.id} permissions={store.permissions} currency={currency} />}
+        {shown === 'returns' && <Returns storeId={store.id} permissions={store.permissions} onRefund={(id) => (setRefundFrom(id), setSection('refunds'))} />}
+        {shown === 'refunds' && <Refunds storeId={store.id} permissions={store.permissions} currency={currency} startFromReturn={refundFrom} startFromPayment={refundPayment} onStarted={() => (setRefundFrom(null), setRefundPayment(null))} />}
+        {shown === 'attention' && <PaymentsAttention storeId={store.id} permissions={store.permissions} currency={currency} onRefund={(id) => (setRefundPayment(id), setSection('refunds'))} />}
+        {shown === 'products' && <Products permissions={organization} currency={currency} />}
+        {shown === 'prices' && <Prices permissions={organization} currency={currency} />}
+        {shown === 'reference' && <ReferenceData permissions={organization} />}
+        {shown === 'stock' && <Stock storeId={store.id} permissions={store.permissions} startOn="balances" />}
+        {shown === 'ledger' && <Stock storeId={store.id} permissions={store.permissions} startOn="ledger" />}
+        {shown === 'adjustments' && <Adjustments storeId={store.id} permissions={store.permissions} startOn="adjustments" />}
+        {shown === 'opening' && <Adjustments storeId={store.id} permissions={store.permissions} startOn="opening-balances" />}
+        {shown === 'payments' && (
+          <PaymentMethods storeId={store.id} storeName={store.name} canSetAtStore={store.permissions.includes('Payment.Method.Configure')} />
+        )}
+        {shown === 'people' && <People permissions={organization} stores={stores} />}
+        {shown === 'roles' && <Roles permissions={organization} />}
+        {shown === 'tills' && <Tills storeId={store.id} permissions={store.permissions} />}
+        {shown === 'settings' && <StoreSettings storeId={store.id} canSet={store.permissions.includes('Config.Store')} />}
+        {shown === 'reasons' && <ReasonCodes canConfigure={organization.includes('Config.Organization')} />}
+        {gap !== undefined && <NotYet area={gap} />}
+      </div>
+    </div>
   );
 }
 

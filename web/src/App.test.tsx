@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App.tsx';
 
@@ -7,7 +7,7 @@ import { App } from './App.tsx';
  * the `api` module, so the screen, the client and the server's response shapes run together.
  */
 
-const store = { id: 's1', code: 'S1', name: 'High Street', currencyCode: 'GBP', minorUnitExponent: 2, permissions: ['Sale.Create', 'Shift.Open'] };
+const store = { id: 's1', code: 'S1', name: 'High Street', currencyCode: 'NPR', minorUnitExponent: 2, permissions: ['Sale.Create', 'Shift.Open'] };
 const atTill = {
   employee: { id: 'e1', name: 'Ada Cashier', readOnly: false },
   organization: { id: 'o1', name: 'Corner Shop', permissions: [] },
@@ -48,7 +48,7 @@ describe('the till shell (UX-35, UX-52, UX-07, UX-08)', () => {
     render(<App />);
     const words = await screen.findByText('No open shift');
     expect(words.closest('.chip')?.querySelector('[aria-hidden="true"]')?.textContent).toBe('○');
-    expect(screen.getByLabelText('Counted opening float (GBP)')).toBeTruthy();
+    expect(screen.getByLabelText('Counted opening float (NPR)')).toBeTruthy();
   });
 
   it('UX-35, UX-33, BI-39: a shift being counted is shown as "Counting the drawer", and the till offers no sale', async () => {
@@ -76,7 +76,7 @@ describe('the till shell (UX-35, UX-52, UX-07, UX-08)', () => {
         variantId: 'v1',
         description: 'Oat milk',
         barcode: '012345678905',
-        price: { amount: 1_250, currencyCode: 'GBP', minorUnitExponent: 2 },
+        price: { amount: 1_250, currencyCode: 'NPR', minorUnitExponent: 2 },
         quote: 'signed-quote',
       },
     });
@@ -102,7 +102,7 @@ describe('the till shell (UX-35, UX-52, UX-07, UX-08)', () => {
         variantId: 'v1',
         description: 'Oat milk',
         barcode: '012345678905',
-        price: { amount: 1_250, currencyCode: 'GBP', minorUnitExponent: 2 },
+        price: { amount: 1_250, currencyCode: 'NPR', minorUnitExponent: 2 },
         quote: 'signed-quote',
       },
     });
@@ -142,19 +142,21 @@ describe('the till shell (UX-35, UX-52, UX-07, UX-08)', () => {
     serve({ 'GET /api/v1/session': manager, 'GET /api/v1/stores/s1/shifts': { items: [] } });
     render(<App />);
     expect(await screen.findByRole('heading', { name: 'Shifts' })).toBeTruthy();
-    expect(screen.queryByRole('navigation', { name: 'Back office' }), 'one section needs no tabs').toBeNull();
+    const areas = within(await screen.findByRole('navigation', { name: 'Back office' }));
+    expect([...areas.queryAllByRole('button')].map((b) => b.textContent), 'only the one they may use').toEqual(['Shifts']);
     expect(screen.queryByText('Set up this browser as a till')).toBeNull();
   });
 
-  it('UX-05, UX-52: with both, the sections are tabs, and the one shown is marked in text weight and underline, not colour alone', async () => {
+  it('UX-05, UX-52: with both, the sections are grouped, and the one shown is marked in text weight and a thick edge, not colour alone', async () => {
     const manager = { ...atTill, terminal: null, stores: [{ ...store, permissions: ['Cash.Count.View', 'Device.View'] }] };
     serve({ 'GET /api/v1/session': manager, 'GET /api/v1/stores/s1/shifts': { items: [] }, 'GET /api/v1/stores/s1/terminals': { items: [] } });
     render(<App />);
     const tabs = await screen.findByRole('navigation', { name: 'Back office' });
-    expect(screen.getByRole('button', { name: 'Shifts' }).getAttribute('aria-current')).toBe('page');
-    fireEvent.click(screen.getByRole('button', { name: 'Till set-up' }));
-    expect(await screen.findByRole('heading', { name: 'Set up this browser as a till' })).toBeTruthy();
-    expect(tabs.querySelector('[aria-current="page"]')?.textContent).toBe('Till set-up');
+    expect(within(tabs).getByRole('button', { name: 'Set up this browser as a till' }).getAttribute('aria-current')).toBe('page');
+    expect(within(tabs).getByText('Sell'), 'the group is named').toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Shifts' }));
+    expect(await screen.findByRole('heading', { name: 'Shifts' })).toBeTruthy();
+    expect(tabs.querySelector('[aria-current="page"]')?.textContent).toBe('Shifts');
   });
 
   it('UX-05, UX-08: Employee.View and Role.View held organization-wide add People and Roles, and only those', async () => {
@@ -178,9 +180,8 @@ describe('the till shell (UX-35, UX-52, UX-07, UX-08)', () => {
     const accountant = { ...atTill, terminal: null, organization: { ...atTill.organization, permissions: ['Tax.View'] }, stores: [{ ...store, permissions: ['Cash.Count.View'] }] };
     serve({ 'GET /api/v1/session': accountant, 'GET /api/v1/stores/s1/shifts': { items: [] }, 'GET /api/v1/tax-categories': { items: [] } });
     render(<App />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Units, tax and brands' }));
-    expect(await screen.findByRole('heading', { name: 'Tax categories' })).toBeTruthy();
-    expect(screen.queryByRole('heading', { name: 'Units' }), 'no Product.View: no units or brands').toBeNull();
+    expect(await screen.findByRole('heading', { name: 'Shifts' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Units, tax/ }), 'the catalogue needs Product.View').toBeNull();
   });
 
   it('UX-05, UX-08, D-17: Return.View held in the store adds Returns, and only that', async () => {
@@ -251,6 +252,26 @@ describe('the till shell (UX-35, UX-52, UX-07, UX-08)', () => {
     render(<App />);
     expect(await screen.findByRole('heading', { name: 'Shifts' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Card payments to check' })).toBeNull();
+  });
+
+  it('UX-08: an area the specification requires but the build lacks is listed, and says so rather than pretending', async () => {
+    const owner = { ...atTill, terminal: null, organization: { ...atTill.organization, permissions: ['Report.View'] }, stores: [{ ...store, permissions: ['Cash.Count.View'] }] };
+    serve({ 'GET /api/v1/session': owner, 'GET /api/v1/stores/s1/shifts': { items: [] } });
+    render(<App />);
+    const areas = await screen.findByRole('navigation', { name: 'Back office' });
+    expect(within(areas).getByText('Not built yet')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /^Reports/ }));
+    expect(await screen.findByRole('heading', { name: 'Reports' })).toBeTruthy();
+    expect(screen.getByText(/specified but not built yet/i)).toBeTruthy();
+    expect(screen.queryByRole('textbox'), 'nothing that takes input and loses it').toBeNull();
+  });
+
+  it('UX-08: an area whose key this person does not hold is not listed at all', async () => {
+    const cashier = { ...atTill, terminal: null, stores: [{ ...store, permissions: ['Cash.Count.View'] }] };
+    serve({ 'GET /api/v1/session': cashier, 'GET /api/v1/stores/s1/shifts': { items: [] } });
+    render(<App />);
+    const areas = await screen.findByRole('navigation', { name: 'Back office' });
+    expect([...areas.querySelectorAll('button')].map((b) => b.textContent)).toEqual(['Shifts']);
   });
 
   it('UX-07, MS-05: an employee with no store access sees an empty workspace that says who to ask', async () => {
