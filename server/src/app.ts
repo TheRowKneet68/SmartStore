@@ -15,6 +15,7 @@ import { sessionAuthenticator, type SessionPolicy } from './modules/identity/ses
 import { adjustmentMachine, adjustmentRoutes } from './modules/inventory/adjustments.ts';
 import { reasonRoutes } from './modules/inventory/reasons.ts';
 import { stockRoutes } from './modules/inventory/stock.ts';
+import { warehouseRoutes } from './modules/inventory/warehouses.ts';
 import { refundMachine, refundRoutes } from './modules/returns/refunds.ts';
 import { returnMachine, returnRoutes } from './modules/returns/returns.ts';
 import { organizationRoutes } from './modules/organization/routes.ts';
@@ -81,6 +82,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   await app.register(refundRoutes, { ...v1, gateway: options.gateway, lockTimeoutMs: options.lockTimeoutMs });
   await app.register(auditRoutes, v1);
   await app.register(reasonRoutes, v1);
+  await app.register(warehouseRoutes, v1);
   await app.register(adjustmentRoutes, v1);
   await app.register(stockRoutes, v1);
   await app.register(transitionRoutes, {

@@ -229,3 +229,43 @@ describe("a store's stock, and only its own (IV-01, IV-06, MS-02, MS-16, IV-09)"
     expect((await call('GET', `/stores/${other}/adjustments/${doc.id}`, both)).statusCode).toBe(404);
   });
 });
+
+describe('warehouses and storage locations (RT-003, MS-15, MS-17, RT-057, WH-01, WH-03, WH-04)', () => {
+  it('RT-003, MS-15: requires Config.Organization; creates a store-attached warehouse with its default location', async () => {
+    const s = await store();
+    const nobody = await s.staff([]);
+    expect((await call('POST', '/warehouses', nobody, { kind: 'StoreAttached', code: 'WH-A', name: 'Attached', storeId: s.storeId })).statusCode).toBe(403);
+    const wh = await ok('POST', '/warehouses', s.owner, { kind: 'StoreAttached', code: 'WH-A', name: 'Attached', storeId: s.storeId });
+    expect(wh.id).toBeDefined();
+    expect(wh.defaultLocationId).toBeDefined();
+    const list = (await call('GET', '/warehouses', s.owner)).json();
+    expect(list.items.some((w: { id: string }) => w.id === wh.id)).toBe(true);
+  });
+
+  it('RT-003, MS-15: creates a central warehouse; storeId not allowed for Central', async () => {
+    const s = await store();
+    const bad = await call('POST', '/warehouses', s.owner, { kind: 'Central', code: 'WH-C', name: 'Central', storeId: s.storeId });
+    expect(bad.statusCode).toBe(422);
+    const central = await ok('POST', '/warehouses', s.owner, { kind: 'Central', code: 'WH-C', name: 'Central' });
+    expect(central.id).toBeDefined();
+  });
+
+  it('MS-17, WH-03, WH-04: lists storage locations; creates a new location under a warehouse', async () => {
+    const s = await store();
+    const wh = await ok('POST', '/warehouses', s.owner, { kind: 'StoreAttached', code: 'WH-B', name: 'Store B', storeId: s.storeId });
+    const locs = (await call('GET', `/warehouses/${wh.id}/storage-locations`, s.owner)).json();
+    expect(locs.items).toHaveLength(1);
+    expect(locs.items[0].locationType).toBe('Default');
+    const extra = await ok('POST', `/warehouses/${wh.id}/storage-locations`, s.owner, { code: 'RCV', name: 'Receiving', locationType: 'Receiving', isSellable: false });
+    expect(extra.id).toBeDefined();
+    const after = (await call('GET', `/warehouses/${wh.id}/storage-locations`, s.owner)).json();
+    expect(after.items).toHaveLength(2);
+  });
+
+  it('MS-04: a warehouse from another org is not visible', async () => {
+    const s = await store();
+    const other = await store();
+    const wh = await ok('POST', '/warehouses', other.owner, { kind: 'Central', code: 'WH-X', name: 'Other' });
+    expect((await call('GET', `/warehouses/${wh.id}/storage-locations`, s.owner)).statusCode).toBe(404);
+  });
+});
