@@ -502,6 +502,11 @@ describe('the permission each transition needs (architecture s8.4, SM-02d, D-01)
       key('Employee', 'Active', 'Terminated', 'Employee.Terminate'),
       key('Employee', 'OnLeave', 'Terminated', 'Employee.Terminate'),
       key('Employee', 'Terminated', 'Archived', 'Employee.Edit'),
+      // StockCount (D-09, IV-25..IV-30, SM-81, SM-82, SM-83)
+      key('StockCount', '*',      'Open',      'Inventory.Count.Create'),
+      key('StockCount', 'Open',   'Posted',    'Inventory.Count.Post'),
+      key('StockCount', 'Posted', 'Reversed',  'Inventory.Count.Post'),
+      key('StockCount', 'Open',   'Cancelled', 'Inventory.Count.Create'),
     ];
     const { rows } = await db.app.query<{ machine: string; from_state: string; to_state: string; rule: string | null; key: string | null }>(
       `SELECT machine, '*' AS from_state, state AS to_state, creation_permission_rule AS rule, creation_permission_key AS key

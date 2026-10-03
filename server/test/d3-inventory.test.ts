@@ -59,7 +59,7 @@ describe('movement types (RT-058, IV-11, IV-12, IV-13, BI-12)', () => {
     expect(find('TRANSFER_IN', 'In')?.stock_class).toBe('Conserves');
     expect(find('REVERSAL', 'In')?.stock_class).toBeNull();
     expect(find('REVERSAL', 'Out')?.stock_class).toBeNull();
-    expect(rows).toHaveLength(17);
+    expect(rows).toHaveLength(18); // 17 + COUNT_VARIANCE_REVERSAL (SM-82, state-machines §22.17)
     expect(rows.some((r) => /SET|RESERVATION/.test(r.code)), 'IV-11, IV-13: no set-stock or reservation type').toBe(false);
   });
 

@@ -2867,8 +2867,10 @@ CREATE TABLE public.cash_shift (
     status text DEFAULT 'Open'::text NOT NULL,
     status_changed_at timestamp with time zone DEFAULT now() NOT NULL,
     status_changed_by uuid NOT NULL,
+    reopened_by uuid,
+    reopen_reason_code_id uuid,
     CONSTRAINT ck_cash_shift_closed CHECK (((closed_at IS NULL) = (closed_by IS NULL))),
-    CONSTRAINT ck_cash_shift_closed_when CHECK (((status = 'Closed'::text) = (closed_by IS NOT NULL))),
+    CONSTRAINT ck_cash_shift_closed_when CHECK (((status <> 'Closed'::text) OR (closed_by IS NOT NULL))),
     CONSTRAINT ck_cash_shift_status CHECK ((status = ANY (ARRAY['Open'::text, 'Reconciling'::text, 'Closed'::text, 'Reopened'::text])))
 );
 
@@ -2878,6 +2880,20 @@ CREATE TABLE public.cash_shift (
 --
 
 COMMENT ON TABLE public.cash_shift IS 'Cites: CD-02, CD-03, CD-05, BI-39, RT-005, SM-55, SM-58. The till shift: a drawer''s money for one cashier''s session. It stores only who, when, where and its status; every amount is derived from its cash transactions and sales (cash-management s2).';
+
+
+--
+-- Name: COLUMN cash_shift.reopened_by; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.cash_shift.reopened_by IS 'Cites: OQ-033, CD-26. Set when the shift transitions Closed → Reopened; identifies the manager who authorised the reopen.';
+
+
+--
+-- Name: COLUMN cash_shift.reopen_reason_code_id; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.cash_shift.reopen_reason_code_id IS 'Cites: OQ-033, CD-26. Reason given at reopen; required because every reopen is exceptional and must be audited (state-machines s22.11).';
 
 
 --
@@ -2891,7 +2907,7 @@ COMMENT ON CONSTRAINT ck_cash_shift_closed ON public.cash_shift IS 'Cites: CD-20
 -- Name: CONSTRAINT ck_cash_shift_closed_when ON cash_shift; Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON CONSTRAINT ck_cash_shift_closed_when ON public.cash_shift IS 'Cites: CD-20, SM-57. A shift records who closed it exactly when it is Closed.';
+COMMENT ON CONSTRAINT ck_cash_shift_closed_when ON public.cash_shift IS 'Cites: CD-20, SM-57, OQ-033. A Closed shift always records its closer; closed_by persists through subsequent Reopened status.';
 
 
 --
@@ -3433,8 +3449,11 @@ END) STORED,
     customer_return_id uuid,
     customer_return_line_id uuid,
     disposition text,
+    stock_count_id uuid,
+    stock_count_line_id uuid,
     CONSTRAINT ck_inventory_movement_adjustment_pair CHECK (((stock_adjustment_id IS NULL) = (stock_adjustment_line_id IS NULL))),
-    CONSTRAINT ck_inventory_movement_one_cause CHECK ((num_nonnulls(stock_adjustment_line_id, sale_line_id, customer_return_line_id) = 1)),
+    CONSTRAINT ck_inventory_movement_count_pair CHECK (((stock_count_id IS NULL) = (stock_count_line_id IS NULL))),
+    CONSTRAINT ck_inventory_movement_one_cause CHECK ((num_nonnulls(stock_adjustment_line_id, sale_line_id, customer_return_line_id, stock_count_line_id) = 1)),
     CONSTRAINT ck_inventory_movement_positive CHECK ((quantity > (0)::numeric)),
     CONSTRAINT ck_inventory_movement_return_triple CHECK ((num_nulls(customer_return_id, customer_return_line_id, disposition) = ANY (ARRAY[0, 3]))),
     CONSTRAINT ck_inventory_movement_reversal CHECK (((movement_type = 'REVERSAL'::text) = (reverses_movement_id IS NOT NULL))),
@@ -3464,10 +3483,17 @@ COMMENT ON CONSTRAINT ck_inventory_movement_adjustment_pair ON public.inventory_
 
 
 --
+-- Name: CONSTRAINT ck_inventory_movement_count_pair ON inventory_movement; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_inventory_movement_count_pair ON public.inventory_movement IS 'Cites: BI-03. A count movement always names both the count and the line.';
+
+
+--
 -- Name: CONSTRAINT ck_inventory_movement_one_cause ON inventory_movement; Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON CONSTRAINT ck_inventory_movement_one_cause ON public.inventory_movement IS 'Cites: BI-03, RT-060, IV-14. Exactly one causing document line: an adjustment line, a sale line or a return line. Later domains add their line columns to this count.';
+COMMENT ON CONSTRAINT ck_inventory_movement_one_cause ON public.inventory_movement IS 'Cites: BI-03. Every movement has exactly one document-line cause.';
 
 
 --
@@ -3529,7 +3555,7 @@ CREATE TABLE public.inventory_movement_type (
 -- Name: TABLE inventory_movement_type; Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON TABLE public.inventory_movement_type IS 'Cites: RT-058, IV-11, IV-12, IV-13, BI-12. The closed movement-type enumeration with each type''s direction and whether it creates, destroys or conserves total stock. REVERSAL takes either direction and inherits the inverted class of what it reverses. There is no set-stock type (IV-13) and no reservation type (IV-11).';
+COMMENT ON TABLE public.inventory_movement_type IS 'Cites: IV-06, IV-07, RT-056. Movement vocabulary.';
 
 
 --
@@ -4225,7 +4251,7 @@ CREATE TABLE public.role_permission (
 -- Name: TABLE role_permission; Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON TABLE public.role_permission IS 'Cites: AC-02, PC-01, D-01, RT-020. A permission granted to a role: an exact catalogue key, never a pattern. Removing it records a revocation and keeps the row, so a role''s before and after permission sets are always recoverable.';
+COMMENT ON TABLE public.role_permission IS 'Cites: AC-01, AC-02, D-01, D-16, OQ-031, OQ-032. A role''s permission grants. Revoked grants are kept for audit; a new grant replaces a revoked one.';
 
 
 --
@@ -4731,6 +4757,150 @@ COMMENT ON TABLE public.stock_balance IS 'Cites: BI-02, IV-08, RT-056, RT-057, M
 --
 
 COMMENT ON CONSTRAINT ck_stock_balance_count ON public.stock_balance IS 'Cites: IV-02. A stock item exists only because a movement created it.';
+
+
+--
+-- Name: stock_count; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.stock_count (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    store_id uuid NOT NULL,
+    organization_id uuid NOT NULL,
+    document_number bigint NOT NULL,
+    scope text NOT NULL,
+    status text DEFAULT 'Open'::text NOT NULL,
+    note public.nonblank_text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    created_by uuid NOT NULL,
+    snapshot_at timestamp with time zone DEFAULT now() NOT NULL,
+    posted_at timestamp with time zone,
+    posted_by uuid,
+    cancelled_at timestamp with time zone,
+    cancelled_by uuid,
+    status_changed_at timestamp with time zone DEFAULT now() NOT NULL,
+    status_changed_by uuid NOT NULL,
+    CONSTRAINT ck_stock_count_cancelled CHECK (((cancelled_at IS NULL) = (cancelled_by IS NULL))),
+    CONSTRAINT ck_stock_count_posted CHECK (((posted_at IS NULL) = (posted_by IS NULL))),
+    CONSTRAINT ck_stock_count_posted_when CHECK (((status <> ALL (ARRAY['Posted'::text, 'Reversed'::text])) OR (posted_by IS NOT NULL))),
+    CONSTRAINT ck_stock_count_scope CHECK ((scope = ANY (ARRAY['Location'::text, 'MultiLocation'::text]))),
+    CONSTRAINT ck_stock_count_status CHECK ((status = ANY (ARRAY['Open'::text, 'Posted'::text, 'Cancelled'::text, 'Reversed'::text])))
+);
+
+
+--
+-- Name: TABLE stock_count; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.stock_count IS 'Cites: IV-25, IV-26, IV-27, IV-28, IV-29, IV-30, SM-81, SM-82, SM-83, SM-84, RT-071, D-09. A count document. Lines are entered while Open; posting writes COUNT_VARIANCE movements; the sheet is immutable after posting. snapshot_at is frozen at creation (IV-26).';
+
+
+--
+-- Name: CONSTRAINT ck_stock_count_cancelled ON stock_count; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_stock_count_cancelled ON public.stock_count IS 'Cites: SM-03, IV-25. A cancellation records who cancelled and when, together.';
+
+
+--
+-- Name: CONSTRAINT ck_stock_count_posted ON stock_count; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_stock_count_posted ON public.stock_count IS 'Cites: SM-03, IV-28. A posting records who posted and when, together.';
+
+
+--
+-- Name: CONSTRAINT ck_stock_count_posted_when ON stock_count; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_stock_count_posted_when ON public.stock_count IS 'Cites: IV-28. A Posted or Reversed count records who posted it.';
+
+
+--
+-- Name: CONSTRAINT ck_stock_count_scope ON stock_count; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_stock_count_scope ON public.stock_count IS 'Cites: IV-25, RT-071. A count covers a single location or a named set of locations.';
+
+
+--
+-- Name: CONSTRAINT ck_stock_count_status ON stock_count; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_stock_count_status ON public.stock_count IS 'Cites: D-09, IV-25. Exactly four states owned by inventory-domain section 8.3.';
+
+
+--
+-- Name: stock_count_document_number_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.stock_count ALTER COLUMN document_number ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.stock_count_document_number_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: stock_count_line; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.stock_count_line (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    stock_count_id uuid NOT NULL,
+    store_id uuid NOT NULL,
+    organization_id uuid NOT NULL,
+    variant_id uuid NOT NULL,
+    storage_location_id uuid NOT NULL,
+    expected_quantity numeric(18,4) NOT NULL,
+    counted_quantity numeric(18,4),
+    reason_code_id uuid,
+    movement_type text,
+    direction text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_stock_count_line_counted_positive CHECK (((counted_quantity IS NULL) OR (counted_quantity >= (0)::numeric))),
+    CONSTRAINT ck_stock_count_line_movement CHECK (((movement_type IS NULL) = (direction IS NULL))),
+    CONSTRAINT ck_stock_count_line_movement_type CHECK (((movement_type IS NULL) OR (movement_type = ANY (ARRAY['COUNT_VARIANCE_IN'::text, 'COUNT_VARIANCE_OUT'::text])))),
+    CONSTRAINT ck_stock_count_line_reason CHECK (((counted_quantity IS NULL) OR (counted_quantity = expected_quantity) OR (reason_code_id IS NOT NULL)))
+);
+
+
+--
+-- Name: TABLE stock_count_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.stock_count_line IS 'Cites: IV-25, IV-26, IV-27, IV-28, IV-29, SM-81. One line per (variant, location). expected_quantity is frozen at creation. counted_quantity is NULL until the counter enters it. Variance lines require a reason_code_id (IV-28). Counted quantity is never negative (IV-29).';
+
+
+--
+-- Name: CONSTRAINT ck_stock_count_line_counted_positive ON stock_count_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_stock_count_line_counted_positive ON public.stock_count_line IS 'Cites: IV-29, BI-05. A count is an observation and is never negative.';
+
+
+--
+-- Name: CONSTRAINT ck_stock_count_line_movement ON stock_count_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_stock_count_line_movement ON public.stock_count_line IS 'Cites: IV-25, SM-81. movement_type and direction travel together; both null or both set.';
+
+
+--
+-- Name: CONSTRAINT ck_stock_count_line_movement_type ON stock_count_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_stock_count_line_movement_type ON public.stock_count_line IS 'Cites: IV-28, SM-81. A posted variance uses COUNT_VARIANCE_IN or COUNT_VARIANCE_OUT.';
+
+
+--
+-- Name: CONSTRAINT ck_stock_count_line_reason ON stock_count_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT ck_stock_count_line_reason ON public.stock_count_line IS 'Cites: IV-28. Every variance line carries a reason code; zero-variance lines do not.';
 
 
 --
@@ -5636,6 +5806,22 @@ ALTER TABLE ONLY public.stock_adjustment_line
 
 ALTER TABLE ONLY public.stock_balance
     ADD CONSTRAINT pk_stock_balance PRIMARY KEY (variant_id, storage_location_id);
+
+
+--
+-- Name: stock_count pk_stock_count; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.stock_count
+    ADD CONSTRAINT pk_stock_count PRIMARY KEY (id);
+
+
+--
+-- Name: stock_count_line pk_stock_count_line; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.stock_count_line
+    ADD CONSTRAINT pk_stock_count_line PRIMARY KEY (id);
 
 
 --
@@ -6749,6 +6935,36 @@ COMMENT ON CONSTRAINT uq_stock_adjustment_number ON public.stock_adjustment IS '
 
 
 --
+-- Name: stock_count_line uq_stock_count_line; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.stock_count_line
+    ADD CONSTRAINT uq_stock_count_line UNIQUE (stock_count_id, variant_id, storage_location_id);
+
+
+--
+-- Name: CONSTRAINT uq_stock_count_line ON stock_count_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_stock_count_line ON public.stock_count_line IS 'Cites: IV-25, IV-26. One line per variant and location per count sheet.';
+
+
+--
+-- Name: stock_count uq_stock_count_number; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.stock_count
+    ADD CONSTRAINT uq_stock_count_number UNIQUE (store_id, document_number);
+
+
+--
+-- Name: CONSTRAINT uq_stock_count_number ON stock_count; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT uq_stock_count_number ON public.stock_count IS 'Cites: RT-071, BI-42. The document number is unique per store and never reused.';
+
+
+--
 -- Name: storage_location uq_storage_location_code; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7258,6 +7474,48 @@ CREATE INDEX ix_stock_balance_location ON public.stock_balance USING btree (stor
 --
 
 COMMENT ON INDEX public.ix_stock_balance_location IS 'Cites: IV-20, RT-068. Reads stock per location, for the per-location negative-stock report.';
+
+
+--
+-- Name: ix_stock_count_line_count; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_stock_count_line_count ON public.stock_count_line USING btree (stock_count_id);
+
+
+--
+-- Name: INDEX ix_stock_count_line_count; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.ix_stock_count_line_count IS 'Cites: IV-25, IV-27. Supports reading all lines of a count sheet.';
+
+
+--
+-- Name: ix_stock_count_line_variant; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_stock_count_line_variant ON public.stock_count_line USING btree (variant_id, storage_location_id);
+
+
+--
+-- Name: INDEX ix_stock_count_line_variant; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.ix_stock_count_line_variant IS 'Cites: IV-27, SM-83. Supports flagging counts that contain a recently moved variant.';
+
+
+--
+-- Name: ix_stock_count_store_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_stock_count_store_status ON public.stock_count USING btree (store_id, status, created_at DESC);
+
+
+--
+-- Name: INDEX ix_stock_count_store_status; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.ix_stock_count_store_status IS 'Cites: RT-071, IV-25. Supports listing counts by store and status.';
 
 
 --
@@ -8840,6 +9098,36 @@ CREATE CONSTRAINT TRIGGER tg_warehouse_default_location AFTER INSERT ON public.w
 --
 
 COMMENT ON TRIGGER tg_warehouse_default_location ON public.warehouse IS 'Cites: MS-17, RT-057. Checked at commit, so the warehouse and its Default location are created together.';
+
+
+--
+-- Name: cash_shift cash_shift_reopen_reason_code_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cash_shift
+    ADD CONSTRAINT cash_shift_reopen_reason_code_id_fkey FOREIGN KEY (reopen_reason_code_id) REFERENCES public.reason_code(id);
+
+
+--
+-- Name: CONSTRAINT cash_shift_reopen_reason_code_id_fkey ON cash_shift; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT cash_shift_reopen_reason_code_id_fkey ON public.cash_shift IS 'Cites: OQ-033, CD-26. The reason given at reopen must exist; liveness is checked at the trigger level (SS024).';
+
+
+--
+-- Name: cash_shift cash_shift_reopened_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cash_shift
+    ADD CONSTRAINT cash_shift_reopened_by_fkey FOREIGN KEY (reopened_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT cash_shift_reopened_by_fkey ON cash_shift; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT cash_shift_reopened_by_fkey ON public.cash_shift IS 'Cites: OQ-033, CD-26. The employee who authorised the reopen must be a known employee of record.';
 
 
 --
@@ -11573,6 +11861,216 @@ COMMENT ON CONSTRAINT fk_warehouse_store ON public.warehouse IS 'Cites: RT-003, 
 
 
 --
+-- Name: inventory_movement inventory_movement_stock_count_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.inventory_movement
+    ADD CONSTRAINT inventory_movement_stock_count_id_fkey FOREIGN KEY (stock_count_id) REFERENCES public.stock_count(id);
+
+
+--
+-- Name: CONSTRAINT inventory_movement_stock_count_id_fkey ON inventory_movement; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT inventory_movement_stock_count_id_fkey ON public.inventory_movement IS 'Cites: BI-03, IV-28. The count this movement was posted from.';
+
+
+--
+-- Name: inventory_movement inventory_movement_stock_count_line_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.inventory_movement
+    ADD CONSTRAINT inventory_movement_stock_count_line_id_fkey FOREIGN KEY (stock_count_line_id) REFERENCES public.stock_count_line(id);
+
+
+--
+-- Name: CONSTRAINT inventory_movement_stock_count_line_id_fkey ON inventory_movement; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT inventory_movement_stock_count_line_id_fkey ON public.inventory_movement IS 'Cites: BI-03, IV-28. The count line this movement was posted from.';
+
+
+--
+-- Name: stock_count stock_count_cancelled_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.stock_count
+    ADD CONSTRAINT stock_count_cancelled_by_fkey FOREIGN KEY (cancelled_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT stock_count_cancelled_by_fkey ON stock_count; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT stock_count_cancelled_by_fkey ON public.stock_count IS 'Cites: BI-23, EM-11, AU-05. Who cancelled it is an employee of record.';
+
+
+--
+-- Name: stock_count stock_count_created_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.stock_count
+    ADD CONSTRAINT stock_count_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT stock_count_created_by_fkey ON stock_count; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT stock_count_created_by_fkey ON public.stock_count IS 'Cites: BI-23, EM-11, AU-05. Who created it is an employee of record.';
+
+
+--
+-- Name: stock_count_line stock_count_line_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.stock_count_line
+    ADD CONSTRAINT stock_count_line_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organization(id);
+
+
+--
+-- Name: CONSTRAINT stock_count_line_organization_id_fkey ON stock_count_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT stock_count_line_organization_id_fkey ON public.stock_count_line IS 'Cites: RT-001, MS-01. A count line belongs to one organization.';
+
+
+--
+-- Name: stock_count_line stock_count_line_reason_code_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.stock_count_line
+    ADD CONSTRAINT stock_count_line_reason_code_id_fkey FOREIGN KEY (reason_code_id) REFERENCES public.reason_code(id);
+
+
+--
+-- Name: CONSTRAINT stock_count_line_reason_code_id_fkey ON stock_count_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT stock_count_line_reason_code_id_fkey ON public.stock_count_line IS 'Cites: IV-28, RT-071. A variance line names the reason from the configured list.';
+
+
+--
+-- Name: stock_count_line stock_count_line_stock_count_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.stock_count_line
+    ADD CONSTRAINT stock_count_line_stock_count_id_fkey FOREIGN KEY (stock_count_id) REFERENCES public.stock_count(id);
+
+
+--
+-- Name: CONSTRAINT stock_count_line_stock_count_id_fkey ON stock_count_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT stock_count_line_stock_count_id_fkey ON public.stock_count_line IS 'Cites: IV-25, RT-071. A line belongs to exactly one count sheet.';
+
+
+--
+-- Name: stock_count_line stock_count_line_storage_location_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.stock_count_line
+    ADD CONSTRAINT stock_count_line_storage_location_id_fkey FOREIGN KEY (storage_location_id) REFERENCES public.storage_location(id);
+
+
+--
+-- Name: CONSTRAINT stock_count_line_storage_location_id_fkey ON stock_count_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT stock_count_line_storage_location_id_fkey ON public.stock_count_line IS 'Cites: IV-25, RT-071. A count line targets one storage location.';
+
+
+--
+-- Name: stock_count_line stock_count_line_store_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.stock_count_line
+    ADD CONSTRAINT stock_count_line_store_id_fkey FOREIGN KEY (store_id) REFERENCES public.store(id);
+
+
+--
+-- Name: CONSTRAINT stock_count_line_store_id_fkey ON stock_count_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT stock_count_line_store_id_fkey ON public.stock_count_line IS 'Cites: RT-001, MS-16. A count line carries its store for movement attribution.';
+
+
+--
+-- Name: stock_count_line stock_count_line_variant_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.stock_count_line
+    ADD CONSTRAINT stock_count_line_variant_id_fkey FOREIGN KEY (variant_id) REFERENCES public.product_variant(id);
+
+
+--
+-- Name: CONSTRAINT stock_count_line_variant_id_fkey ON stock_count_line; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT stock_count_line_variant_id_fkey ON public.stock_count_line IS 'Cites: IV-25, RT-071. A count line targets one product variant.';
+
+
+--
+-- Name: stock_count stock_count_organization_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.stock_count
+    ADD CONSTRAINT stock_count_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES public.organization(id);
+
+
+--
+-- Name: CONSTRAINT stock_count_organization_id_fkey ON stock_count; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT stock_count_organization_id_fkey ON public.stock_count IS 'Cites: RT-001, MS-01. A stock count belongs to one organization.';
+
+
+--
+-- Name: stock_count stock_count_posted_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.stock_count
+    ADD CONSTRAINT stock_count_posted_by_fkey FOREIGN KEY (posted_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT stock_count_posted_by_fkey ON stock_count; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT stock_count_posted_by_fkey ON public.stock_count IS 'Cites: BI-23, EM-11, AU-05. Who posted it is an employee of record.';
+
+
+--
+-- Name: stock_count stock_count_status_changed_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.stock_count
+    ADD CONSTRAINT stock_count_status_changed_by_fkey FOREIGN KEY (status_changed_by) REFERENCES public.employee(id);
+
+
+--
+-- Name: CONSTRAINT stock_count_status_changed_by_fkey ON stock_count; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT stock_count_status_changed_by_fkey ON public.stock_count IS 'Cites: BI-23, EM-11, AU-05. Who last changed status is an employee of record.';
+
+
+--
+-- Name: stock_count stock_count_store_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.stock_count
+    ADD CONSTRAINT stock_count_store_id_fkey FOREIGN KEY (store_id) REFERENCES public.store(id);
+
+
+--
+-- Name: CONSTRAINT stock_count_store_id_fkey ON stock_count; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON CONSTRAINT stock_count_store_id_fkey ON public.stock_count IS 'Cites: RT-001, MS-01. A stock count belongs to one store.';
+
+
+--
 -- PostgreSQL database dump complete
 --
 
@@ -11600,4 +12098,7 @@ INSERT INTO public.schema_migrations (version) VALUES
     ('20261002100000'),
     ('20261002120000'),
     ('20261002130000'),
-    ('20261002141000');
+    ('20261002141000'),
+    ('20261003100000'),
+    ('20261003110000'),
+    ('20261004090000');

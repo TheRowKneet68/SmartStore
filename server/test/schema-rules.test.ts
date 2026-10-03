@@ -48,6 +48,9 @@ const SCOPE: Record<string, 'tenant' | 'organization' | 'store' | 'reference' | 
   inventory_movement_type: 'reference',
   stock_adjustment: 'store',
   stock_adjustment_line: 'store',
+  // Domain 8. IV-25: a count sheet is a store document.
+  stock_count: 'store',
+  stock_count_line: 'store',
   inventory_transaction: 'store',
   inventory_movement: 'store', // MS-16: every movement is attributed to the store that is its reason
   // MS-17, D-03: a stock item is a variant at a location and never a store's; its store is its location's.
