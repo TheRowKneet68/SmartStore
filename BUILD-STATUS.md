@@ -342,6 +342,7 @@ Step 3 rules, given by the owner on 2026-10-01 with "start Step 3":
     removed (see the log).
   - **Two schema gaps found and reported, not fixed** (the brief excluded migrations). See Next.
 
+- 2026-10-04 — **Stock Transfers domain (IV-39..IV-45, RT-078..RT-080, SM-77).** SCHEMA + APPLICATION LAYER + **TESTED** (5 new tests, 527 passing). Migration `20261004110000_d9_stock_transfer.sql`. Two-step transfer through a Transit location: Dispatch writes TRANSFER_OUT from source + TRANSFER_IN to transit; Receive writes TRANSFER_OUT from transit + TRANSFER_IN to destination. Separation of duties (RT-080): dispatcher ≠ receiver, enforced by DB constraint and route hook.
 - 2026-10-04 — **Stock Counts domain (IV-25..IV-30, SM-81..SM-84, RT-071, D-09).** SCHEMA + APPLICATION LAYER + **TESTED** (7 new tests, 522 passing).
   - **Schema** (`20261004090000_d8_stock_count.sql`, committed `4dcdd2c`): `stock_count` and `stock_count_line`
     tables; the four-state machine (Open → Posted, Open → Cancelled, Posted → Reversed) inserted into
@@ -1699,3 +1700,25 @@ Append-only. One dated line per step, including failed and abandoned attempts.
         DAMAGE/EXPIRY/LOSS/FOUND). Changed to `FOUND`.
     (4) Test expected `expectedQuantity: '0'` but column returns `'0.0000'` (numeric(19,4)). Updated.
   - Checked: 522/522 server tests.
+- 2026-10-04 — **Stock Transfers domain: schema, application layer, and tests** (IV-39..IV-45, RT-078..RT-080, SM-77;
+  527 tests passing, 5 new). Migration `20261004110000_d9_stock_transfer.sql`.
+  - **Schema:** `stock_transfer` and `stock_transfer_line` tables; the seven-state StockTransfer machine
+    (Draft/PendingApproval/Approved/InTransit/PartiallyReceived/Received/Cancelled/Rejected/Closed) with
+    `TRANSFER_OUT` and `TRANSFER_IN` movement types; `stock_transfer_id` and `stock_transfer_line_id` columns added to
+    `inventory_movement`; the one-cause constraint extended again.
+  - **Application** (`server/src/modules/inventory/stock-transfers.ts`): create (Draft), add/remove lines,
+    `dispatch` transition (writes TRANSFER_OUT from source + TRANSFER_IN to transit in one transaction),
+    `receive_all` transition (writes TRANSFER_OUT from transit + TRANSFER_IN to destination); `RT-080` separation of
+    duties (dispatched_by ≠ received_by) enforced by DB constraint and by the `before` hook.
+  - **State-machine rows:** `d7-employee.test.ts` contract updated for all 10 StockTransfer edges (SM-77,
+    IV-39..IV-45, RT-078..RT-080, OQ-039).
+  - **Bugs fixed during testing:**
+    (1) `stock_transfer_line` was missing `created_at` column; `readTransfer()` ordered by it.
+    (2) `smartstore_app` had no DELETE grant on `stock_transfer_line`; route needed it to remove Draft lines.
+    (3) Draft state row was missing `creation_permission_rule`/`creation_permission_key`; d7 contract test caught it.
+    (4) Table comment used range notation (`IV-39..IV-45`); citation checker requires individual IDs.
+    (5) Constraint `ck_stock_transfer_sep_approve` cited `SEP-08 (AP-29)`, not a valid rule ID; fixed to `IV-42`.
+    (6) ~30 constraints lacked `COMMENT ON CONSTRAINT ... IS 'Cites: ...'`; all added.
+    (7) `inventory.test.ts` dispatch/receive test seeded stock with `dispatcher` employee (lacks `Inventory.Adjust`);
+        stock seeding steps changed to use `s.owner`.
+  - Checked: 527/527 server tests.

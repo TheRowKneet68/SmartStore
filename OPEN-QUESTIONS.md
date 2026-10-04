@@ -1,6 +1,6 @@
 # Open Questions
 
-**Last updated:** 2026-10-01
+**Last updated:** 2026-10-04
 
 Unresolved questions and owner inputs. Anything here must not stall engineering: resolve what you can from
 `/docs`, work around what you can design around, and keep going.
@@ -706,6 +706,43 @@ against the standard, so the "UNVERIFIED" caveat below is discharged). The entry
 
 - **Closed by owner decision D-19, 2026-10-02.** The owner decided the same pattern as D-17: a failed refund is cancelled under `Sale.Refund`
   with a required reason, and cancelling releases the hold. Built as `Failed → Cancelled` on `cancel` (D5 §14). No key is new.
+
+### OQ-039 — Stock Transfer: three permission keys not in the catalogue, and the Transit location source
+
+- **Unknown (A) — approve, close, reject permission keys.**
+  - `state-machines.md §22.18` lists three edges as `OPEN DECISION`:
+    - `PendingApproval → Approved` (event: approve)
+    - `PartiallyReceived/Received → Closed` (event: close)
+    - `PendingApproval → Rejected` (event: reject)
+  - The 117-key catalogue (`d7_employee_role_permission.sql`) has `Inventory.Transfer.Create`,
+    `Inventory.Transfer.Dispatch`, and `Inventory.Transfer.Receive` but no key for approve, close or reject.
+  - The analogous adjustment machine uses `Inventory.Adjust.Large.Approve`; an `Inventory.Transfer.Approve` is
+    the obvious candidate for approve. There is no obvious analogue for close or reject.
+  - **Blocked:** a submitted transfer is stuck at `PendingApproval` until the approve key is named. The
+    dispatch/receive flow is unreachable in the application. Close and reject are also unreachable.
+  - **Meanwhile:** the three edges are registered in the database as `OpenDecision`; the server refuses them for
+    everyone until you name a key. The schema, the dispatch/receive routes, and the tests that do not cross an
+    `OpenDecision` edge are built.
+  - **Recommended:** A `Inventory.Transfer.Approve` (new, parallels `Inventory.Adjust.Large.Approve`),
+    `Inventory.Transfer.Create` for close (the creator closes their own document), `Inventory.Transfer.Create`
+    for reject (matches the adjust pattern where the submitter can also cancel). One question per edge; tick one
+    box per row in a reply.
+  - **Tick boxes — approve:** [ ] A new key `Inventory.Transfer.Approve`  [ ] `Inventory.Adjust.Large.Approve`
+    (reuse)  [ ] other: ______
+  - **Tick boxes — close:** [ ] `Inventory.Transfer.Create` (reuse)  [ ] a new key  [ ] other: ______
+  - **Tick boxes — reject:** [ ] `Inventory.Transfer.Create` (reuse)  [ ] a new key  [ ] other: ______
+
+- **Unknown (B) — which Transit location a transfer uses.**
+  - IV-39 says "Dispatch decrements the source and increments the `Transit` location", but does not say how the
+    application finds the Transit location: auto-derive (e.g., the store's single Transit location), or explicit
+    (the user specifies it when creating the transfer).
+  - The current implementation takes `transitLocationId` explicitly in the create body and validates
+    `location_type = 'Transit'`. If the owner prefers auto-derivation, the create body field is removed and the
+    route looks up the organization's Transit location.
+  - **Blocked:** nothing — explicit is workable. Auto-derivation is additive.
+  - **Meanwhile:** `transitLocationId` is a required field in `POST /stores/:storeId/stock-transfers`.
+
+**Still open.**
 
 ## How to use this file
 

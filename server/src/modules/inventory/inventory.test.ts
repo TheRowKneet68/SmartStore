@@ -410,3 +410,184 @@ describe('stock counts (IV-25..IV-30, SM-81..SM-84, RT-071, D-09)', () => {
     expect(listOpen.items.some((i: { id: string }) => i.id === count.id)).toBe(false);
   });
 });
+
+describe('stock transfers (IV-39..IV-45, RT-078..RT-080, SM-77)', () => {
+  // Helper: insert a Transit storage_location for tests via db.owner (bypasses smartstore_app column grants).
+  async function insertTransitLocation(organizationId: string, warehouseId: string): Promise<string> {
+    const { rows } = await db.owner.query<{ id: string }>(
+      `INSERT INTO storage_location (organization_id, warehouse_id, warehouse_kind, code, name, location_type, is_sellable)
+       VALUES ($1, $2, 'StoreAttached', 'TRANSIT', 'Transit', 'Transit', false) RETURNING id`,
+      [organizationId, warehouseId],
+    );
+    return rows[0]!.id;
+  }
+
+  // Helper: approve a transfer directly via db.owner to bypass the OpenDecision gate (OQ-039).
+  async function approveDirectly(transferId: string, approverId: string): Promise<void> {
+    await db.owner.query(
+      `UPDATE stock_transfer SET status = 'Approved', approved_by = $2, status_changed_by = $2 WHERE id = $1`,
+      [transferId, approverId],
+    );
+  }
+
+  const xferMove = (as: Headers, subject: string, event: string) =>
+    call('POST', '/transitions', as, { machine: 'StockTransfer', event, subject });
+
+  it('IV-39: create a draft transfer; add and remove lines; validate transit location type', async () => {
+    const s = await store();
+    const creator = await s.staff(['Inventory.Transfer.Create']);
+    const { warehouseId: wh2, defaultLocationId: toLoc } = await insertWarehouse(db.app, s.organizationId, s.storeId);
+    const transitLoc = await insertTransitLocation(s.organizationId, s.warehouseId);
+
+    // non-Transit location is refused
+    const bad = await call('POST', `/stores/${s.storeId}/stock-transfers`, creator, {
+      fromLocationId: s.location, toLocationId: toLoc, transitLocationId: s.location,
+    });
+    expect(bad.json().error.code).toBe('invalid_transit');
+
+    const doc = (await call('POST', `/stores/${s.storeId}/stock-transfers`, creator, {
+      fromLocationId: s.location, toLocationId: toLoc, transitLocationId: transitLoc, note: 'Test move',
+    })).json();
+    expect(doc).toMatchObject({ status: 'Draft', documentNumber: expect.any(Number), lines: [] });
+    expect(doc.transitLocation).toBe('Transit');
+
+    const withLine = (await call('POST', `/stores/${s.storeId}/stock-transfers/${doc.id}/lines`, creator,
+      { variantId: s.variant, quantity: '3' })).json();
+    expect(withLine.lines).toHaveLength(1);
+    expect(withLine.lines[0]).toMatchObject({ quantity: '3.0000', receivedQuantity: '0.0000' });
+
+    // duplicate variant is refused (unique constraint)
+    const dup = await call('POST', `/stores/${s.storeId}/stock-transfers/${doc.id}/lines`, creator,
+      { variantId: s.variant, quantity: '1' });
+    expect(dup.statusCode).toBe(409);
+
+    const removed = (await call('DELETE', `/stores/${s.storeId}/stock-transfers/${doc.id}/lines/${withLine.lines[0].id}`, creator)).json();
+    expect(removed.lines).toHaveLength(0);
+
+    // list
+    const list = (await call('GET', `/stores/${s.storeId}/stock-transfers`, creator)).json();
+    expect(list.items.some((i: { id: string }) => i.id === doc.id)).toBe(true);
+    void wh2;
+  });
+
+  it('IV-43, SM-77a: submit → PendingApproval; cancel from Draft → Cancelled', async () => {
+    const s = await store();
+    const creator = await s.staff(['Inventory.Transfer.Create']);
+    const { defaultLocationId: toLoc } = await insertWarehouse(db.app, s.organizationId, s.storeId);
+    const transitLoc = await insertTransitLocation(s.organizationId, s.warehouseId);
+
+    const doc = (await call('POST', `/stores/${s.storeId}/stock-transfers`, creator, {
+      fromLocationId: s.location, toLocationId: toLoc, transitLocationId: transitLoc,
+    })).json();
+    await call('POST', `/stores/${s.storeId}/stock-transfers/${doc.id}/lines`, creator,
+      { variantId: s.variant, quantity: '5' });
+
+    expect((await xferMove(creator, doc.id, 'submit')).json().state).toBe('PendingApproval');
+
+    // lines are locked in PendingApproval
+    const late = await call('POST', `/stores/${s.storeId}/stock-transfers/${doc.id}/lines`, creator,
+      { variantId: s.variant, quantity: '1' });
+    expect(late.json().error.code).toBe('not_found'); // assertDraft fails → 404
+
+    // approve is OpenDecision — refused with specific code
+    const refused = (await xferMove(creator, doc.id, 'approve')).json();
+    expect(refused.error.code).toBe('not_permitted');
+
+    // cancel from Draft works
+    const doc2 = (await call('POST', `/stores/${s.storeId}/stock-transfers`, creator, {
+      fromLocationId: s.location, toLocationId: toLoc, transitLocationId: transitLoc,
+    })).json();
+    expect((await xferMove(creator, doc2.id, 'cancel')).json().state).toBe('Cancelled');
+  });
+
+  it('IV-39, IV-40, IV-41, RT-079: dispatch writes TRANSFER_OUT/IN; receive writes the return pair; balances settle', async () => {
+    const s = await store();
+    const dispatcher = await s.staff(['Inventory.Transfer.Create', 'Inventory.Transfer.Dispatch']);
+    const receiver   = await s.staff(['Inventory.Transfer.Receive']);
+    const { defaultLocationId: toLoc } = await insertWarehouse(db.app, s.organizationId, s.storeId);
+    const transitLoc = await insertTransitLocation(s.organizationId, s.warehouseId);
+
+    // Seed 10 units at the source location using the owner (IV-39 needs stock to dispatch)
+    const adj = (await ok('POST', `/stores/${s.storeId}/adjustments`, s.owner, { reasonCodeId: s.reason })).id;
+    await ok('POST', `/stores/${s.storeId}/adjustments/${adj}/lines`, s.owner, { variantId: s.variant, locationId: s.location, countedQuantity: '10' });
+    await call('POST', '/transitions', s.owner, { machine: 'StockAdjustment', event: 'submit', subject: adj });
+    await call('POST', '/transitions', s.owner, { machine: 'StockAdjustment', event: 'approve', subject: adj });
+    await call('POST', '/transitions', s.owner, { machine: 'StockAdjustment', event: 'post', subject: adj });
+
+    const doc = (await call('POST', `/stores/${s.storeId}/stock-transfers`, dispatcher, {
+      fromLocationId: s.location, toLocationId: toLoc, transitLocationId: transitLoc,
+    })).json();
+    await call('POST', `/stores/${s.storeId}/stock-transfers/${doc.id}/lines`, dispatcher,
+      { variantId: s.variant, quantity: '4' });
+    await xferMove(dispatcher, doc.id, 'submit');
+    const approverEmpId = await employeeWithAccess(db.app, s.organizationId, [], { assignedStore: s.storeId, accessStores: [s.storeId] });
+    await approveDirectly(doc.id, approverEmpId);
+
+    expect((await xferMove(dispatcher, doc.id, 'dispatch')).json().state).toBe('InTransit');
+
+    // movements: TRANSFER_OUT from source + TRANSFER_IN to transit
+    const { rows: afterDispatch } = await db.app.query(
+      `SELECT storage_location_id, movement_type, direction, quantity::text
+       FROM inventory_movement WHERE stock_transfer_id = $1 ORDER BY movement_type, direction`,
+      [doc.id],
+    );
+    expect(afterDispatch).toEqual(expect.arrayContaining([
+      expect.objectContaining({ movement_type: 'TRANSFER_OUT', direction: 'Out', storage_location_id: s.location, quantity: '4.0000' }),
+      expect.objectContaining({ movement_type: 'TRANSFER_IN',  direction: 'In',  storage_location_id: transitLoc, quantity: '4.0000' }),
+    ]));
+
+    expect((await xferMove(receiver, doc.id, 'receive_all')).json().state).toBe('Received');
+
+    // after receive: two more movements (TRANSFER_OUT from transit, TRANSFER_IN to dest)
+    const { rows: afterReceive } = await db.app.query(
+      `SELECT storage_location_id, movement_type, direction, quantity::text
+       FROM inventory_movement WHERE stock_transfer_id = $1 ORDER BY movement_type, direction, storage_location_id`,
+      [doc.id],
+    );
+    expect(afterReceive).toHaveLength(4);
+    expect(afterReceive).toEqual(expect.arrayContaining([
+      expect.objectContaining({ movement_type: 'TRANSFER_IN',  direction: 'In',  storage_location_id: toLoc,      quantity: '4.0000' }),
+      expect.objectContaining({ movement_type: 'TRANSFER_OUT', direction: 'Out', storage_location_id: transitLoc, quantity: '4.0000' }),
+    ]));
+
+    // received_quantity is stamped on each line (IV-41)
+    const detail = (await call('GET', `/stores/${s.storeId}/stock-transfers/${doc.id}`, dispatcher)).json();
+    expect(detail.lines[0].receivedQuantity).toBe('4.0000');
+  });
+
+  it('RT-080: receive_all is refused when the receiver is the dispatcher', async () => {
+    const s = await store();
+    const both = await s.staff(['Inventory.Transfer.Create', 'Inventory.Transfer.Dispatch', 'Inventory.Transfer.Receive']);
+    const { defaultLocationId: toLoc } = await insertWarehouse(db.app, s.organizationId, s.storeId);
+    const transitLoc = await insertTransitLocation(s.organizationId, s.warehouseId);
+
+    const doc = (await call('POST', `/stores/${s.storeId}/stock-transfers`, both, {
+      fromLocationId: s.location, toLocationId: toLoc, transitLocationId: transitLoc,
+    })).json();
+    await call('POST', `/stores/${s.storeId}/stock-transfers/${doc.id}/lines`, both,
+      { variantId: s.variant, quantity: '1' });
+    await xferMove(both, doc.id, 'submit');
+    const approverEmpId = await employeeWithAccess(db.app, s.organizationId, [], { assignedStore: s.storeId, accessStores: [s.storeId] });
+    await approveDirectly(doc.id, approverEmpId);
+    await xferMove(both, doc.id, 'dispatch');
+    const refused = (await xferMove(both, doc.id, 'receive_all')).json();
+    expect(refused.error.code).toBe('sep_of_duties');
+  });
+
+  it('IV-44, MS-04: a transfer is store-scoped; another store\'s employee cannot see or mutate it', async () => {
+    const s  = await store();
+    const s2 = await store();
+    const c1 = await s.staff(['Inventory.Transfer.Create']);
+    const c2 = await s2.staff(['Inventory.Transfer.Create']);
+    const { defaultLocationId: toLoc } = await insertWarehouse(db.app, s.organizationId, s.storeId);
+    const transitLoc = await insertTransitLocation(s.organizationId, s.warehouseId);
+
+    const doc = (await call('POST', `/stores/${s.storeId}/stock-transfers`, c1, {
+      fromLocationId: s.location, toLocationId: toLoc, transitLocationId: transitLoc,
+    })).json();
+
+    expect((await call('GET', `/stores/${s2.storeId}/stock-transfers/${doc.id}`, c2)).statusCode).toBe(404);
+    expect((await call('POST', `/stores/${s2.storeId}/stock-transfers/${doc.id}/lines`, c2,
+      { variantId: s.variant, quantity: '1' })).statusCode).toBe(404);
+  });
+});

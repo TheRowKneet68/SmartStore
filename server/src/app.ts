@@ -15,6 +15,7 @@ import { sessionAuthenticator, type SessionPolicy } from './modules/identity/ses
 import { adjustmentMachine, adjustmentRoutes } from './modules/inventory/adjustments.ts';
 import { reasonRoutes } from './modules/inventory/reasons.ts';
 import { stockCountMachine, stockCountRoutes } from './modules/inventory/stock-counts.ts';
+import { stockTransferMachine, stockTransferRoutes } from './modules/inventory/stock-transfers.ts';
 import { stockRoutes } from './modules/inventory/stock.ts';
 import { warehouseRoutes } from './modules/inventory/warehouses.ts';
 import { refundMachine, refundRoutes } from './modules/returns/refunds.ts';
@@ -86,10 +87,11 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   await app.register(warehouseRoutes, v1);
   await app.register(adjustmentRoutes, v1);
   await app.register(stockCountRoutes, v1);
+  await app.register(stockTransferRoutes, v1);
   await app.register(stockRoutes, v1);
   await app.register(transitionRoutes, {
     ...v1,
-    machines: [employeeMachine, productMachine, deviceMachine, adjustmentMachine, shiftMachine, returnMachine, refundMachine, stockCountMachine],
+    machines: [employeeMachine, productMachine, deviceMachine, adjustmentMachine, shiftMachine, returnMachine, refundMachine, stockCountMachine, stockTransferMachine],
     lockTimeoutMs: options.lockTimeoutMs,
   });
 

@@ -51,6 +51,9 @@ const SCOPE: Record<string, 'tenant' | 'organization' | 'store' | 'reference' | 
   // Domain 8. IV-25: a count sheet is a store document.
   stock_count: 'store',
   stock_count_line: 'store',
+  // IV-39: a stock transfer is a store document; its lines are attributed to the same store.
+  stock_transfer: 'store',
+  stock_transfer_line: 'store',
   inventory_transaction: 'store',
   inventory_movement: 'store', // MS-16: every movement is attributed to the store that is its reason
   // MS-17, D-03: a stock item is a variant at a location and never a store's; its store is its location's.
@@ -100,6 +103,7 @@ const DELETE_ALLOWED: Record<string, string> = {
   stock_adjustment_line: 'overview s3.6: draft document lines never submitted; the trigger allows Draft only',
   customer_return_line: 'overview s3.6: draft document lines never posted; the trigger allows Draft only',
   refund_line: 'overview s3.6: draft document lines never submitted; the trigger allows Draft only',
+  stock_transfer_line: 'IV-39: lines are removable while the transfer is Draft; assertDraft enforces this',
 };
 
 /** Tables whose rows are history: the application role may read and insert, never update or delete. */

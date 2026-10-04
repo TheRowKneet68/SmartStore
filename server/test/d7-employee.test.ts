@@ -445,6 +445,7 @@ describe('the permission each transition needs (architecture s8.4, SM-02d, D-01)
     const key = (machine: string, from: string, to: string, k: string): Row => [machine, from, to, 'Key', k];
     const system = (machine: string, from: string, to: string): Row => [machine, from, to, 'System', null];
     const none = (machine: string, to: string): Row => [machine, '*', to, null, null];
+    const openDecision = (machine: string, from: string, to: string): Row => [machine, from, to, 'OpenDecision', null];
     const contract: Row[] = [
       none('Product', 'Draft'),
       key('Product', 'Draft', 'Active', 'Product.Edit'),
@@ -507,6 +508,17 @@ describe('the permission each transition needs (architecture s8.4, SM-02d, D-01)
       key('StockCount', 'Open',   'Posted',    'Inventory.Count.Post'),
       key('StockCount', 'Posted', 'Reversed',  'Inventory.Count.Post'),
       key('StockCount', 'Open',   'Cancelled', 'Inventory.Count.Create'),
+      // StockTransfer (SM-77, IV-39..IV-45, RT-078..RT-080, OQ-039)
+      key('StockTransfer', '*',                 'Draft',           'Inventory.Transfer.Create'),
+      key('StockTransfer', 'Draft',             'PendingApproval', 'Inventory.Transfer.Create'),
+      key('StockTransfer', 'Draft',             'Cancelled',       'Inventory.Transfer.Create'),
+      openDecision('StockTransfer', 'PendingApproval',   'Approved'),
+      openDecision('StockTransfer', 'PendingApproval',   'Rejected'),
+      key('StockTransfer', 'Approved',          'InTransit',       'Inventory.Transfer.Dispatch'),
+      key('StockTransfer', 'InTransit',         'Received',        'Inventory.Transfer.Receive'),
+      key('StockTransfer', 'PartiallyReceived', 'Received',        'Inventory.Transfer.Receive'),
+      openDecision('StockTransfer', 'Received',          'Closed'),
+      openDecision('StockTransfer', 'PartiallyReceived', 'Closed'),
     ];
     const { rows } = await db.app.query<{ machine: string; from_state: string; to_state: string; rule: string | null; key: string | null }>(
       `SELECT machine, '*' AS from_state, state AS to_state, creation_permission_rule AS rule, creation_permission_key AS key
