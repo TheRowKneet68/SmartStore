@@ -17,6 +17,7 @@ import { reasonRoutes } from './modules/inventory/reasons.ts';
 import { stockCountMachine, stockCountRoutes } from './modules/inventory/stock-counts.ts';
 import { stockTransferMachine, stockTransferRoutes } from './modules/inventory/stock-transfers.ts';
 import { stockRoutes } from './modules/inventory/stock.ts';
+import { customerMachine, customerRoutes } from './modules/customers/customers.ts';
 import { warehouseRoutes } from './modules/inventory/warehouses.ts';
 import { refundMachine, refundRoutes } from './modules/returns/refunds.ts';
 import { returnMachine, returnRoutes } from './modules/returns/returns.ts';
@@ -89,9 +90,10 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   await app.register(stockCountRoutes, v1);
   await app.register(stockTransferRoutes, v1);
   await app.register(stockRoutes, v1);
+  await app.register(customerRoutes, v1);
   await app.register(transitionRoutes, {
     ...v1,
-    machines: [employeeMachine, productMachine, deviceMachine, adjustmentMachine, shiftMachine, returnMachine, refundMachine, stockCountMachine, stockTransferMachine],
+    machines: [employeeMachine, productMachine, deviceMachine, adjustmentMachine, shiftMachine, returnMachine, refundMachine, stockCountMachine, stockTransferMachine, customerMachine],
     lockTimeoutMs: options.lockTimeoutMs,
   });
 

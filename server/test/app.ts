@@ -32,9 +32,10 @@ export async function sessionApp(db: TestDb, policy: SessionPolicy = TEST_SESSIO
  * of a route need not sign in first. Everything after the session lookup (the permission check, the handlers) runs
  * for real; `sessionApp` tests the session lookup itself.
  */
-export async function testApp(db: TestDb, options: { quoteMaxAgeMinutes?: number; gateway?: PaymentGateway } = {}): Promise<FastifyInstance> {
+export async function testApp(db: TestDb, options: { quoteMaxAgeMinutes?: number; gateway?: PaymentGateway; logger?: boolean } = {}): Promise<FastifyInstance> {
   return buildApp({
     pool: serverPool(db),
+    logger: options.logger ?? false,
     gateway: options.gateway ?? new SimulatedGateway(),
     session: TEST_SESSION_POLICY,
     quoteMaxAgeMinutes: options.quoteMaxAgeMinutes ?? TEST_QUOTE_MAX_AGE_MINUTES,
