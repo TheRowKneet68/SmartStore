@@ -70,7 +70,7 @@ schema; details in the domain documents:
 | NoSale, pay-in/out, safe drops, cash adjustments | `RT-143`, `CD-15`..`CD-17` | D4 — v1 cash types are opening float, change, closing float |
 | Denomination counts | `CD-27`..`CD-29`, `UX-32` | D4 — counts are totals in v1 |
 | Shift reopen | `CD-26`, `SM-56` | D4 — permission `OPEN DECISION` (OQ-014) |
-| Customer management | `CU-02`..`CU-38` | D4 — only the walk-in record exists |
+| Customer management | `CU-02`..`CU-38` | D4 — basic lifecycle built (CU-01, CU-04..CU-10, CU-34, CU-37); linking a customer to a new sale (`POST /sales`) not yet wired |
 | Device telemetry | `SM-60a`, `PT-04`, `HD-16` | D4 — terminal status is the lifecycle only |
 | Goodwill return with no sale | `RR-09`, `RT-476` | D5 — every v1 return names its sale's lines; a goodwill refund (with a reason) covers money without goods |
 | Store credit and gift-card refunds | `RR-07`, `RR-26`..`RR-29`, `PY-28`, `RT-158`, `RT-162`, `RT-522` | D5 — deferred with credit; v1 refunds to the original tender or in cash |
@@ -1722,3 +1722,18 @@ Append-only. One dated line per step, including failed and abandoned attempts.
     (7) `inventory.test.ts` dispatch/receive test seeded stock with `dispatcher` employee (lacks `Inventory.Adjust`);
         stock seeding steps changed to use `s.owner`.
   - Checked: 527/527 server tests.
+- 2026-10-04 — **Customer domain: schema and application layer** (CU-01, CU-04..CU-10, CU-34, CU-37, SM-45;
+  538 tests passing, 11 new). Migrations `20261004120000_d10_customer_basic.sql` and `20261004130000_d10b_customer_drop_phone_unique.sql`.
+  - **Schema (d10):** `customer` table (organization-scoped, walk-in flag, status machine Active/OnHold/CreditBlocked/Closed, phone/email, marketing consent with timestamp); walk-in row created by `tg_org_create_walk_in` trigger on organization insert; CustomerAccount state-machine edges for SM-45a..SM-45c, CU-09, CU-10 (`Customer.Create`, `Customer.Edit`, `Customer.Credit.Grant`; `CreditBlocked → Active` is `OPEN DECISION`). Non-unique indexes on phone and email (uniqueness is app-level only, CU-04/CU-05).
+  - **Corrective migration (d10b):** the first draft of d10 mistakenly created UNIQUE indexes `uq_customer_phone` and `uq_customer_email`. Migration `20261004130000` drops them with `DROP INDEX IF EXISTS` so environments that applied the wrong version are corrected.
+  - **Application** (`server/src/modules/customers/customers.ts`): `POST /customers` (create, with duplicate-contact check via `checkDuplicate` and `force: true` override — CU-04, CU-05); `GET /customers` (prefix search on name/phone/email, walk-in excluded — CU-06); `GET /customers/:id` (full detail with phone/email masking by permission level — CU-07, CU-37); `PATCH /customers/:id` (edit, walk-in is immutable — CU-01); `GET /customers/:id/sales` (sales history, walk-in sales excluded — CU-08). CustomerAccount machine bound to the transition endpoint (SM-45, CU-09, CU-10).
+  - **d7-employee contract** updated with all CustomerAccount edges.
+  - **Bugs fixed during testing:**
+    (1) `auditContext(req)` returns `AuditContext` (no `organizationId`/`employeeId`); routes used it instead of `req.principal!`. All four handlers corrected.
+    (2) `employee_holds_permission` called with 5 arguments; its signature is `(uuid, uuid, text)`. Fixed to 3 args.
+    (3) `employeeWithAccess` test helper requires a 4th `options` argument; tests supplied only 3.
+    (4) Sales history query referenced `s.created_at`; the `sale` table uses `completed_at`.
+    (5) Re-close (already Closed) expected `SS004`; SM-04 idempotency returns `{ changed: false }`. Test corrected.
+    (6) OpenDecision error code expected `'forbidden'`; `transitions.ts` returns `'not_permitted'`. Test corrected.
+    (7) Unique indexes on phone/email in the migrated template blocked CU-05's `force:true` path. The corrective migration (d10b) drops them; the template is rebuilt on each `vitest run` from `server/`, picking up the new file.
+  - Checked: 538/538 server tests.
