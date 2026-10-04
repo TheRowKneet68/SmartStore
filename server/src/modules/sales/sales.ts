@@ -22,6 +22,8 @@ const NewSale = z
     cash: z.object({ tendered: z.number().int().min(0) }).optional(),
     // The provider's token for the card, never the card (PY-43). `amount` is needed only when cash pays the rest (PY-16).
     card: z.object({ token: z.string().min(1).max(200), amount: z.number().int().min(1).optional() }).optional(),
+    // CU-01: every sale names a customer; omit to sell to the walk-in (the default). CU-09/CU-10: Closed is refused.
+    customerId: z.uuid().optional(),
   })
   .refine((sale) => sale.cash !== undefined || sale.card !== undefined, { message: 'A sale needs a cash or a card tender.', path: ['cash'] });
 const SaleRef = z.object({ storeId: z.uuid(), saleId: z.uuid() });
@@ -90,6 +92,10 @@ export interface SaleSummary {
   receiptStatus: string;
   /** `Completed`, then `PartiallyReturned` and `Returned` as returns post: a cache of the line counters (`SP-66`). */
   status: string;
+  /** CU-01: the customer this sale is for; the walk-in customer when no named customer was chosen. */
+  customerId: string;
+  /** CU-09: true when the customer is OnHold at the time of the sale (warns; does not refuse). */
+  customerOnHold: boolean;
   /** The captured payments, so a refund can name the tender it goes back to (`PY-25`). */
   payments: { paymentId: string; methodType: string; amount: number; simulated: boolean }[];
   /** Each line carries what has come back and gone back, so a return or refund screen knows what is left (`RR-14`, `RR-03`). */
@@ -125,8 +131,9 @@ async function summary(db: Queryable, saleId: string): Promise<SaleSummary> {
     `SELECT s.id AS "saleId", s.document_number AS "documentNumber", s.business_date::text AS "businessDate",
             s.completed_at AS "completedAt", s.currency_code AS "currencyCode", s.subtotal, s.tax_total AS "taxTotal",
             s.total_due AS "totalDue", s.total_due + s.change_given AS tendered, s.change_given AS change,
-            s.receipt_status AS "receiptStatus", s.status
-     FROM sale s WHERE s.id = $1`,
+            s.receipt_status AS "receiptStatus", s.status,
+            s.customer_id AS "customerId", (c.status = 'OnHold') AS "customerOnHold"
+     FROM sale s JOIN customer c ON c.id = s.customer_id WHERE s.id = $1`,
     [saleId],
   );
   const lines = await db.query<SaleSummary['lines'][number]>(
@@ -158,7 +165,8 @@ interface Plan {
   shiftId: string;
   cashMethodId: string | null;
   cardMethodId: string | null;
-  walkInId: string;
+  /** CU-01: resolved customer id — named customer or walk-in fallback. */
+  customerId: string;
   currency: string;
   lines: PlannedLine[];
   totals: number[];
@@ -204,6 +212,18 @@ async function planSale(
   if (body.card !== undefined && cardMethodId === null) throw new AppError(409, 'card_not_accepted', 'This store does not take cards.');
   const walkIn = await one<{ id: string }>(c, 'SELECT id FROM customer WHERE organization_id = $1 AND is_walk_in', [principal.organizationId]);
   if (walkIn === undefined) throw new AppError(409, 'no_walk_in', 'This organization has no walk-in customer record.');
+  // CU-01: resolve the named customer if given, else default to the walk-in. CU-09/CU-10 govern status.
+  let customerId = walkIn.id;
+  if (body.customerId !== undefined) {
+    const c2 = await one<{ id: string; status: string }>(
+      c,
+      'SELECT id, status FROM customer WHERE id = $1 AND organization_id = $2 AND NOT is_walk_in',
+      [body.customerId, principal.organizationId],
+    );
+    if (c2 === undefined) throw new AppError(404, 'not_found', 'There is no such customer in this organization.');
+    if (c2.status === 'Closed') throw new AppError(409, 'customer_closed', 'A closed customer cannot make a purchase (CU-10).');
+    customerId = c2.id;
+  }
   const currency = (await one<{ code: string }>(c, 'SELECT currency_code AS code FROM store WHERE id = $1', [store]))!.code;
 
   const planned = await c.query<PlannedLine>(
@@ -244,7 +264,7 @@ async function planSale(
     shiftId: shift.id,
     cashMethodId,
     cardMethodId,
-    walkInId: walkIn.id,
+    customerId,
     currency,
     lines,
     totals,
@@ -350,7 +370,7 @@ async function completeSale(
                          subtotal, tax_total, total_due, total_tendered, change_given, correlation_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $15, $16, $17) RETURNING id`,
       [store, principal.organizationId, checkout, till.terminalId, till.drawerId, plan.shiftId, body.clientOperationId,
-        principal.employeeId, plan.walkInId, plan.settings.id, plan.settings.tax_mode, currency, plan.subtotal, plan.taxTotal, totalDue,
+        principal.employeeId, plan.customerId, plan.settings.id, plan.settings.tax_mode, currency, plan.subtotal, plan.taxTotal, totalDue,
         paid.change, request.id],
     ))!.id;
 

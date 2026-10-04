@@ -560,3 +560,88 @@ describe("the till's other edges (s22.12 disable, retire; HD-08, HD-31, HD-32; O
     expect((await device(s.owner, 'retire', registered, reason)).json().state, 'a till never activated can be retired too').toBe('Retired');
   });
 });
+
+describe('CU-01, CU-09, CU-10: named customer on a sale', () => {
+  async function createCustomer(owner: Record<string, string>, orgId: string, displayName: string) {
+    const res = await call('POST', '/customers', owner, { displayName });
+    expect(res.statusCode, res.body).toBe(201);
+    return (res.json() as { id: string }).id;
+  }
+
+  it('CU-01: a sale defaults to the walk-in customer when no customerId is given', async () => {
+    const s = await shop();
+    await openShift(s);
+    const result = await sell(s, [{ quote: await quote(s, '4006381333931'), quantity: 1 }], 500);
+    expect(result.statusCode).toBe(201);
+    const sale = result.json() as { customerId: string; customerOnHold: boolean };
+    const { rows: [walkIn] } = await db.app.query<{ id: string }>('SELECT id FROM customer WHERE organization_id = $1 AND is_walk_in', [s.organizationId]);
+    expect(sale.customerId).toBe(walkIn!.id);
+    expect(sale.customerOnHold).toBe(false);
+  });
+
+  it('CU-01: a named Active customer can be linked to a sale', async () => {
+    const s = await shop();
+    await openShift(s);
+    const custId = await createCustomer(s.owner, s.organizationId, 'Alice');
+    const result = await call('POST', `/stores/${s.storeId}/sales`, s.at, {
+      clientOperationId: randomUUID(),
+      lines: [{ quote: await quote(s, '4006381333931'), quantity: 1 }],
+      cash: { tendered: 500 },
+      customerId: custId,
+    });
+    expect(result.statusCode).toBe(201);
+    const sale = result.json() as { customerId: string; customerOnHold: boolean };
+    expect(sale.customerId).toBe(custId);
+    expect(sale.customerOnHold).toBe(false);
+    // Verify persisted in DB
+    const { rows: [row] } = await db.app.query<{ customer_id: string }>('SELECT customer_id FROM sale WHERE id = $1', [sale.saleId]);
+    expect(row!.customer_id).toBe(custId);
+  });
+
+  it('CU-09: a sale to an OnHold customer succeeds with customerOnHold:true (warns; does not refuse)', async () => {
+    const s = await shop();
+    await openShift(s);
+    const custId = await createCustomer(s.owner, s.organizationId, 'Bob');
+    const reason = (await call('POST', '/reason-codes', s.owner, { code: 'HOLD1', name: 'Under review' })).json().id as string;
+    await call('POST', '/transitions', s.owner, { machine: 'CustomerAccount', event: 'hold', subject: custId, reasonCodeId: reason });
+    const result = await call('POST', `/stores/${s.storeId}/sales`, s.at, {
+      clientOperationId: randomUUID(),
+      lines: [{ quote: await quote(s, '4006381333931'), quantity: 1 }],
+      cash: { tendered: 500 },
+      customerId: custId,
+    });
+    expect(result.statusCode).toBe(201);
+    expect((result.json() as { customerOnHold: boolean }).customerOnHold).toBe(true);
+  });
+
+  it('CU-10: a sale to a Closed customer is refused', async () => {
+    const s = await shop();
+    await openShift(s);
+    const custId = await createCustomer(s.owner, s.organizationId, 'Carol');
+    const reason = (await call('POST', '/reason-codes', s.owner, { code: 'CLOSE1', name: 'Moved away' })).json().id as string;
+    await call('POST', '/transitions', s.owner, { machine: 'CustomerAccount', event: 'close', subject: custId, reasonCodeId: reason });
+    const result = await call('POST', `/stores/${s.storeId}/sales`, s.at, {
+      clientOperationId: randomUUID(),
+      lines: [{ quote: await quote(s, '4006381333931'), quantity: 1 }],
+      cash: { tendered: 500 },
+      customerId: custId,
+    });
+    expect(result.statusCode).toBe(409);
+    expect((result.json() as { error: { code: string } }).error.code).toBe('customer_closed');
+  });
+
+  it('CU-01, MS-04: a customerId from another organization is refused as not found', async () => {
+    const s = await shop();
+    await openShift(s);
+    // Create a customer in a different org
+    const other = await onboard(db.app, onboardingAnswers());
+    const otherCustId = await createCustomer(signedInAs(other.ownerEmployeeId, other.organizationId), other.organizationId, 'Eve');
+    const result = await call('POST', `/stores/${s.storeId}/sales`, s.at, {
+      clientOperationId: randomUUID(),
+      lines: [{ quote: await quote(s, '4006381333931'), quantity: 1 }],
+      cash: { tendered: 500 },
+      customerId: otherCustId,
+    });
+    expect(result.statusCode).toBe(404);
+  });
+});

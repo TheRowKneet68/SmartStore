@@ -1,6 +1,6 @@
 # Build Status
 
-**Last updated:** 2026-10-02
+**Last updated:** 2026-10-04
 
 ## Phase
 
@@ -70,7 +70,7 @@ schema; details in the domain documents:
 | NoSale, pay-in/out, safe drops, cash adjustments | `RT-143`, `CD-15`..`CD-17` | D4 — v1 cash types are opening float, change, closing float |
 | Denomination counts | `CD-27`..`CD-29`, `UX-32` | D4 — counts are totals in v1 |
 | Shift reopen | `CD-26`, `SM-56` | D4 — permission `OPEN DECISION` (OQ-014) |
-| Customer management | `CU-02`..`CU-38` | D4 — basic lifecycle built (CU-01, CU-04..CU-10, CU-34, CU-37); linking a customer to a new sale (`POST /sales`) not yet wired |
+| Customer management | `CU-02`..`CU-38` | D4 — basic lifecycle built (CU-01, CU-04..CU-10, CU-34, CU-37, SM-45); linking a named customer to a sale is wired (`POST /sales customerId`); `CU-02`, `CU-03`, `CU-11`..`CU-33`, `CU-35`..`CU-36`, `CU-38` deferred |
 | Device telemetry | `SM-60a`, `PT-04`, `HD-16` | D4 — terminal status is the lifecycle only |
 | Goodwill return with no sale | `RR-09`, `RT-476` | D5 — every v1 return names its sale's lines; a goodwill refund (with a reason) covers money without goods |
 | Store credit and gift-card refunds | `RR-07`, `RR-26`..`RR-29`, `PY-28`, `RT-158`, `RT-162`, `RT-522` | D5 — deferred with credit; v1 refunds to the original tender or in cash |
@@ -1737,3 +1737,8 @@ Append-only. One dated line per step, including failed and abandoned attempts.
     (6) OpenDecision error code expected `'forbidden'`; `transitions.ts` returns `'not_permitted'`. Test corrected.
     (7) Unique indexes on phone/email in the migrated template blocked CU-05's `force:true` path. The corrective migration (d10b) drops them; the template is rebuilt on each `vitest run` from `server/`, picking up the new file.
   - Checked: 538/538 server tests.
+- 2026-10-04 — **Named customer linked to a sale (CU-01, CU-09, CU-10; 543 tests passing, 5 new).** `sales.ts` and `sales.test.ts`. No migration needed (`sale.customer_id` FK existed).
+  - `POST /stores/:storeId/sales` accepts `customerId` (UUID, optional). Omit → walk-in default (CU-01). Named customer from another org → 404. Closed customer → 409 `customer_closed` (CU-10). OnHold customer → 201 with `customerOnHold: true` in the response (warns; does not refuse — CU-09).
+  - `SaleSummary` extended with `customerId` and `customerOnHold`; `summary()` JOINs the `customer` table.
+  - 5 new tests: walk-in regression, Active named customer (DB verified), OnHold warns, Closed refuses, cross-org isolation.
+  - Checked: 543/543 server tests.
